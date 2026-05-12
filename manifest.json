@@ -1,9 +1,9 @@
 {
 	"id": "askmate",
 	"name": "AskMate",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"minAppVersion": "1.11.4",
-	"description": "Ask AI questions about your current Obsidian note or selected text.",
+	"description": "Ask AI questions about your current note or selected text.",
 	"author": "Behnam Ebrahimi",
 	"authorUrl": "https://github.com/CodeWithBehnam",
 	"fundingUrl": "",
