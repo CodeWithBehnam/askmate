@@ -62,7 +62,7 @@ jobs:
           body: |
             ## Fix
 
-            - Removed bundled d3 timer code that triggered the community review background activity warning.
+            - Fixed the remaining Obsidian Community review source checks for settings headings, promise handling, and quote cleanup.
             - Published release assets from GitHub Actions with artifact attestations.
             - Bumped plugin version to ${{ github.ref_name }}.
 

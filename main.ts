@@ -2104,7 +2104,7 @@ export default class AskMatePlugin extends Plugin {
 		const existing = this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE)[0];
 
 		if (existing) {
-			this.app.workspace.revealLeaf(existing);
+			await this.app.workspace.revealLeaf(existing);
 			return;
 		}
 
@@ -2119,7 +2119,7 @@ export default class AskMatePlugin extends Plugin {
 			type: ASKMATE_VIEW_TYPE,
 			active: true
 		});
-		this.app.workspace.revealLeaf(leaf);
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	rememberActiveMarkdownContext(): void {
@@ -6319,7 +6319,7 @@ class AskMateView extends ItemView {
 	private cleanImageReference(reference: string): string {
 		let cleanReference = reference.trim();
 		cleanReference = cleanReference.replace(/^<(.+)>$/, "$1");
-		cleanReference = cleanReference.replace(/^['\"](.+)['\"]$/, "$1");
+		cleanReference = cleanReference.replace(/^['"](.+)['"]$/, "$1");
 		cleanReference = cleanReference.split("|")[0]?.split("#")[0]?.trim() ?? "";
 
 		try {
@@ -6704,7 +6704,7 @@ class AskMateSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName("AskMate settings").setHeading();
+		new Setting(containerEl).setName("Providers").setHeading();
 
 		const selectedProviderId = this.plugin.getSelectedTextProviderId();
 		const selectedProvider = this.plugin.getProviderSettings(selectedProviderId);
