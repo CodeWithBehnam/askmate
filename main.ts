@@ -14,7 +14,6 @@ import {
 	WorkspaceLeaf,
 	normalizePath
 } from "obsidian";
-import * as d3 from "d3";
 
 const ASKMATE_VIEW_TYPE = "askmate-sidebar-view";
 
@@ -7489,60 +7488,50 @@ class AskMateSettingTab extends PluginSettingTab {
 		const height = 300;
 		const margin = { top: 24, right: 20, bottom: 70, left: 62 };
 		const bottom = height - margin.bottom;
-		const yMax = Math.max(1, d3.max(records, (record) => Math.max(record.totalTokens, record.inputTokens + record.outputTokens)) ?? 1);
-		const x = d3
-			.scaleBand<number>()
-			.domain(records.map((_record, index) => index))
-			.range([margin.left, width - margin.right])
-			.padding(0.28);
-		const y = d3.scaleLinear().domain([0, yMax]).nice().range([bottom, margin.top]);
+		const plotWidth = width - margin.left - margin.right;
+		const yMax = this.getNiceChartMax(records.reduce((max, record) => Math.max(max, record.totalTokens, record.inputTokens + record.outputTokens), 1));
+		const yScale = (value: number) => bottom - (Math.max(0, value) / yMax) * (bottom - margin.top);
 		const svg = this.createChartSvg(card, width, height, "Recent token mix bar chart");
 
-		svg.append("g")
-			.attr("class", "askmate-chart-axis askmate-chart-y-axis")
-			.attr("transform", `translate(${margin.left},0)`)
-			.call(d3.axisLeft(y).ticks(5).tickFormat((value) => formatTokenCount(Number(value))));
+		this.renderChartYAxis(svg, margin.left, margin.top, bottom, width - margin.right, yMax, yScale);
 
-		svg.append("g")
-			.attr("class", "askmate-chart-axis askmate-chart-x-axis")
-			.attr("transform", `translate(0,${bottom})`)
-			.call(d3.axisBottom(x).tickFormat((index) => formatUsageTimestamp(records[Number(index)]?.timestamp ?? "")))
-			.selectAll("text")
-			.attr("transform", "rotate(-30)")
-			.attr("text-anchor", "end")
-			.attr("dx", "-0.45em")
-			.attr("dy", "0.35em");
+		const count = Math.max(1, records.length);
+		const step = plotWidth / count;
+		const barWidth = Math.max(6, Math.min(34, step * 0.72));
+		const labelEvery = Math.max(1, Math.ceil(records.length / 8));
+		this.appendSvgLine(svg, margin.left, bottom, width - margin.right, bottom, "askmate-chart-axis-line");
 
-		const groups = svg.append("g")
-			.selectAll<SVGGElement, TokenUsageRecord>("g")
-			.data(records)
-			.join("g")
-			.attr("class", "askmate-chart-bar-group");
+		records.forEach((record, index) => {
+			const x = margin.left + index * step + (step - barWidth) / 2;
+			const inputY = yScale(record.inputTokens);
+			const totalY = yScale(record.inputTokens + record.outputTokens);
+			const inputHeight = Math.max(0, bottom - inputY);
+			const outputHeight = Math.max(0, inputY - totalY);
 
-		groups.append("rect")
-			.attr("class", "askmate-chart-bar-input")
-			.attr("x", (_record, index) => x(index) ?? margin.left)
-			.attr("y", (record) => y(record.inputTokens))
-			.attr("width", x.bandwidth())
-			.attr("height", (record) => Math.max(0, y(0) - y(record.inputTokens)));
+			const inputBar = this.appendSvgElement(svg, "rect", {
+				class: "askmate-chart-bar-input",
+				x,
+				y: inputY,
+				width: barWidth,
+				height: inputHeight
+			});
+			this.appendSvgTitle(inputBar, this.formatBarTooltip(record));
 
-		groups.append("rect")
-			.attr("class", "askmate-chart-bar-output")
-			.attr("x", (_record, index) => x(index) ?? margin.left)
-			.attr("y", (record) => y(record.inputTokens + record.outputTokens))
-			.attr("width", x.bandwidth())
-			.attr("height", (record) => Math.max(0, y(record.inputTokens) - y(record.inputTokens + record.outputTokens)));
+			const outputBar = this.appendSvgElement(svg, "rect", {
+				class: "askmate-chart-bar-output",
+				x,
+				y: totalY,
+				width: barWidth,
+				height: outputHeight
+			});
+			this.appendSvgTitle(outputBar, this.formatBarTooltip(record));
 
-		groups.append("title")
-			.text((record) => [
-				`${record.title} (${formatUsageTimestamp(record.timestamp)})`,
-				`Operation: ${formatOperationKind(record.operationKind)}`,
-				`Status: ${formatOperationStatus(record.status)}`,
-				`Sent: ${formatTokenCount(record.inputTokens)}`,
-				`Received: ${formatTokenCount(record.outputTokens)}`,
-				`Total: ${formatTokenCount(record.totalTokens)}`,
-				record.estimated ? "Usage is estimated or unavailable" : "Usage is from the API"
-			].join("\n"));
+			if (index % labelEvery === 0 || index === records.length - 1) {
+				const label = this.appendSvgText(svg, x + barWidth / 2, bottom + 18, formatUsageTimestamp(record.timestamp), "askmate-chart-axis-label");
+				label.setAttribute("transform", `rotate(-30 ${x + barWidth / 2} ${bottom + 18})`);
+				label.setAttribute("text-anchor", "end");
+			}
+		});
 	}
 
 	private renderTokenRunChart(parent: HTMLElement, records: TokenUsageRecord[]): void {
@@ -7569,64 +7558,50 @@ class AskMateSettingTab extends PluginSettingTab {
 		const height = 300;
 		const margin = { top: 24, right: 22, bottom: 58, left: 62 };
 		const bottom = height - margin.bottom;
-		const [minDate, maxDate] = d3.extent(data, (datum) => datum.date);
-		const firstDate = minDate ?? new Date();
-		const lastDate = maxDate ?? firstDate;
+		const firstDate = data[0]?.date ?? new Date();
+		const lastDate = data[data.length - 1]?.date ?? firstDate;
 		const domainStart = firstDate.getTime() === lastDate.getTime()
 			? new Date(firstDate.getTime() - 60 * 60 * 1000)
 			: firstDate;
 		const domainEnd = firstDate.getTime() === lastDate.getTime()
 			? new Date(lastDate.getTime() + 60 * 60 * 1000)
 			: lastDate;
-		const yMax = Math.max(1, d3.max(data, (datum) => datum.totalTokens) ?? 1);
-		const x = d3.scaleTime().domain([domainStart, domainEnd]).range([margin.left, width - margin.right]);
-		const y = d3.scaleLinear().domain([0, yMax]).nice().range([bottom, margin.top]);
+		const timeSpan = Math.max(1, domainEnd.getTime() - domainStart.getTime());
+		const yMax = this.getNiceChartMax(data.reduce((max, datum) => Math.max(max, datum.totalTokens), 1));
+		const xScale = (date: Date) => margin.left + ((date.getTime() - domainStart.getTime()) / timeSpan) * (width - margin.left - margin.right);
+		const yScale = (value: number) => bottom - (Math.max(0, value) / yMax) * (bottom - margin.top);
 		const svg = this.createChartSvg(card, width, height, "Token run chart");
-		const average = d3.mean(data, (datum) => datum.totalTokens) ?? 0;
+		const average = data.length > 0
+			? data.reduce((sum, datum) => sum + datum.totalTokens, 0) / data.length
+			: 0;
 
-		svg.append("g")
-			.attr("class", "askmate-chart-axis askmate-chart-y-axis")
-			.attr("transform", `translate(${margin.left},0)`)
-			.call(d3.axisLeft(y).ticks(5).tickFormat((value) => formatTokenCount(Number(value))));
+		this.renderChartYAxis(svg, margin.left, margin.top, bottom, width - margin.right, yMax, yScale);
+		this.appendSvgLine(svg, margin.left, bottom, width - margin.right, bottom, "askmate-chart-axis-line");
+		this.renderTimeAxisLabels(svg, domainStart, domainEnd, margin.left, width - margin.right, bottom);
+		this.appendSvgLine(svg, margin.left, yScale(average), width - margin.right, yScale(average), "askmate-chart-average");
 
-		svg.append("g")
-			.attr("class", "askmate-chart-axis askmate-chart-x-axis")
-			.attr("transform", `translate(0,${bottom})`)
-			.call(d3.axisBottom(x).ticks(Math.min(5, Math.max(2, data.length))).tickFormat((date) => formatUsageTimestamp((date as Date).toISOString())));
+		if (data.length > 0) {
+			this.appendSvgElement(svg, "path", {
+				class: "askmate-chart-line",
+				d: data.map((datum, index) => `${index === 0 ? "M" : "L"}${xScale(datum.date).toFixed(2)},${yScale(datum.totalTokens).toFixed(2)}`).join(" ")
+			});
+		}
 
-		svg.append("line")
-			.attr("class", "askmate-chart-average")
-			.attr("x1", margin.left)
-			.attr("x2", width - margin.right)
-			.attr("y1", y(average))
-			.attr("y2", y(average));
-
-		const line = d3.line<RunChartDatum>()
-			.x((datum) => x(datum.date))
-			.y((datum) => y(datum.totalTokens))
-			.curve(d3.curveMonotoneX);
-
-		svg.append("path")
-			.datum(data)
-			.attr("class", "askmate-chart-line")
-			.attr("d", line);
-
-		svg.append("g")
-			.selectAll<SVGCircleElement, RunChartDatum>("circle")
-			.data(data)
-			.join("circle")
-			.attr("class", "askmate-chart-dot")
-			.attr("cx", (datum) => x(datum.date))
-			.attr("cy", (datum) => y(datum.totalTokens))
-			.attr("r", 4)
-			.append("title")
-			.text((datum) => [
+		for (const datum of data) {
+			const dot = this.appendSvgElement(svg, "circle", {
+				class: "askmate-chart-dot",
+				cx: xScale(datum.date),
+				cy: yScale(datum.totalTokens),
+				r: 4
+			});
+			this.appendSvgTitle(dot, [
 				`${datum.record.title} (${formatUsageTimestamp(datum.record.timestamp)})`,
 				`Operation: ${formatOperationKind(datum.record.operationKind)}`,
 				`Status: ${formatOperationStatus(datum.record.status)}`,
 				`Total: ${formatTokenCount(datum.record.totalTokens)}`,
 				`Duration: ${formatDuration(datum.record.durationMs)}`
 			].join("\n"));
+		}
 	}
 
 	private renderRecentUsageTable(parent: HTMLElement, records: TokenUsageRecord[]): void {
@@ -7676,18 +7651,106 @@ class AskMateSettingTab extends PluginSettingTab {
 		return card;
 	}
 
-	private createChartSvg(
-		parent: HTMLElement,
-		width: number,
-		height: number,
-		label: string
-	): d3.Selection<SVGSVGElement, unknown, null, undefined> {
-		return d3.select(parent)
-			.append("svg")
-			.attr("class", "askmate-chart-svg")
-			.attr("viewBox", `0 0 ${width} ${height}`)
-			.attr("role", "img")
-			.attr("aria-label", label);
+	private createChartSvg(parent: HTMLElement, width: number, height: number, label: string): SVGSVGElement {
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("class", "askmate-chart-svg");
+		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+		svg.setAttribute("role", "img");
+		svg.setAttribute("aria-label", label);
+		parent.appendChild(svg);
+		return svg;
+	}
+
+	private appendSvgElement<K extends keyof SVGElementTagNameMap>(
+		parent: SVGElement,
+		tagName: K,
+		attributes: Record<string, string | number>
+	): SVGElementTagNameMap[K] {
+		const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+		for (const [key, value] of Object.entries(attributes)) {
+			element.setAttribute(key, String(value));
+		}
+		parent.appendChild(element);
+		return element;
+	}
+
+	private appendSvgLine(parent: SVGElement, x1: number, y1: number, x2: number, y2: number, className: string): SVGLineElement {
+		return this.appendSvgElement(parent, "line", {
+			class: className,
+			x1,
+			y1,
+			x2,
+			y2
+		});
+	}
+
+	private appendSvgText(parent: SVGElement, x: number, y: number, text: string, className: string): SVGTextElement {
+		const element = this.appendSvgElement(parent, "text", {
+			class: className,
+			x,
+			y
+		});
+		element.textContent = text;
+		return element;
+	}
+
+	private appendSvgTitle(parent: SVGElement, text: string): void {
+		const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+		title.textContent = text;
+		parent.appendChild(title);
+	}
+
+	private renderChartYAxis(
+		svg: SVGSVGElement,
+		x: number,
+		top: number,
+		bottom: number,
+		right: number,
+		yMax: number,
+		yScale: (value: number) => number
+	): void {
+		this.appendSvgLine(svg, x, top, x, bottom, "askmate-chart-axis-line");
+		for (let index = 0; index <= 4; index += 1) {
+			const value = Math.round((yMax / 4) * index);
+			const y = yScale(value);
+			this.appendSvgLine(svg, x - 4, y, right, y, index === 0 ? "askmate-chart-grid-line askmate-chart-grid-line-base" : "askmate-chart-grid-line");
+			const label = this.appendSvgText(svg, x - 8, y + 4, formatTokenCount(value), "askmate-chart-axis-label");
+			label.setAttribute("text-anchor", "end");
+		}
+	}
+
+	private renderTimeAxisLabels(svg: SVGSVGElement, start: Date, end: Date, left: number, right: number, bottom: number): void {
+		for (let index = 0; index <= 4; index += 1) {
+			const ratio = index / 4;
+			const x = left + (right - left) * ratio;
+			const date = new Date(start.getTime() + (end.getTime() - start.getTime()) * ratio);
+			const label = this.appendSvgText(svg, x, bottom + 22, formatUsageTimestamp(date.toISOString()), "askmate-chart-axis-label");
+			label.setAttribute("text-anchor", index === 0 ? "start" : index === 4 ? "end" : "middle");
+		}
+	}
+
+	private getNiceChartMax(value: number): number {
+		if (!Number.isFinite(value) || value <= 0) {
+			return 1;
+		}
+
+		const exponent = Math.floor(Math.log10(value));
+		const base = 10 ** exponent;
+		const normalized = value / base;
+		const niceNormalized = normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+		return niceNormalized * base;
+	}
+
+	private formatBarTooltip(record: TokenUsageRecord): string {
+		return [
+			`${record.title} (${formatUsageTimestamp(record.timestamp)})`,
+			`Operation: ${formatOperationKind(record.operationKind)}`,
+			`Status: ${formatOperationStatus(record.status)}`,
+			`Sent: ${formatTokenCount(record.inputTokens)}`,
+			`Received: ${formatTokenCount(record.outputTokens)}`,
+			`Total: ${formatTokenCount(record.totalTokens)}`,
+			record.estimated ? "Usage is estimated or unavailable" : "Usage is from the API"
+		].join("\n");
 	}
 
 	private renderChartLegend(parent: HTMLElement, items: Array<[string, string]>): void {

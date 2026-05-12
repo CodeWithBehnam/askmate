@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Build, attest, and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          MANIFEST_VERSION="$(bun -e "console.log(require('./manifest.json').version)")"
+          if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "Tag $VERSION does not match manifest version $MANIFEST_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Build plugin
+        run: bun run build
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: AskMate ${{ github.ref_name }}
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          body: |
+            ## Fix
+
+            - Removed bundled d3 timer code that triggered the community review background activity warning.
+            - Published release assets from GitHub Actions with artifact attestations.
+            - Bumped plugin version to ${{ github.ref_name }}.
+
+            ## Validation
+
+            - bun run test
+            - bun run build
