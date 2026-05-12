@@ -34,8 +34,21 @@ type TextProviderId = "openai" | "openrouter" | "anthropic" | "google-gemini" | 
 type ContextBudgetMode = "expanded" | "balanced" | "concise";
 type ImagePromptPlanningProviderId = TextProviderId | "same-as-chat";
 type ComposerLayout = "compact" | "expanded";
-type ContextAttachmentKind = "thread_history" | "additional_note" | "folder_note" | "excalidraw_summary" | "image_manifest";
+type ContextAttachmentKind =
+	| "thread_history"
+	| "note_history"
+	| "additional_note"
+	| "folder_note"
+	| "style_guide"
+	| "glossary"
+	| "excalidraw_summary"
+	| "image_manifest";
 type ApplyScope = "auto" | "selected-block" | "heading-section" | "full-note";
+type FrontmatterApplyPolicy = "preserve" | "confirm" | "replace";
+type BatchWorkflowOutputMode = "note" | "review-queue";
+type BudgetEnforcementMode = "warn" | "block";
+type ReviewQueueStatus = "pending" | "applied" | "dismissed";
+type MarkdownDiffLineKind = "context" | "added" | "removed";
 
 interface ProviderSettings {
 	apiKeySecretName: string;
@@ -110,6 +123,33 @@ interface AskMateSettings {
 	excalidrawSummaryMaxCharacters: number;
 	includeImageManifests: boolean;
 	partialApplyDefaultScope: ApplyScope;
+	evidenceLinkedAnswersEnabled: boolean;
+	evidenceMaxSources: number;
+	frontmatterApplyPolicy: FrontmatterApplyPolicy;
+	batchWorkflowFolderPath: string;
+	batchWorkflowId: string;
+	batchWorkflowMaxFiles: number;
+	batchWorkflowOutputMode: BatchWorkflowOutputMode;
+	noteHistoryEnabled: boolean;
+	noteHistoryIncludeInContext: boolean;
+	noteHistoryMaxTurnsPerNote: number;
+	noteHistoryStore: NoteHistoryStore;
+	includeStyleGuideContext: boolean;
+	styleGuideContextPath: string;
+	styleGuideMaxCharacters: number;
+	includeGlossaryContext: boolean;
+	glossaryContextPath: string;
+	glossaryMaxCharacters: number;
+	reviewQueue: ReviewQueueItem[];
+	reviewQueueMaxItems: number;
+	smartResultPlacementEnabled: boolean;
+	appendResultBacklinkToSource: boolean;
+	usageGuardrailsEnabled: boolean;
+	usageDailyTokenBudget: number;
+	usageMonthlyTokenBudget: number;
+	usagePerRequestWarningTokens: number;
+	usagePerRequestHardLimitTokens: number;
+	usageBudgetEnforcement: BudgetEnforcementMode;
 	tokenUsageStats: TokenUsageStats;
 }
 
@@ -134,6 +174,8 @@ interface NoteContext {
 	file: TFile | null;
 	source: ContextSource;
 	activeHeadingPath?: string | null;
+	selectionStartLine?: number | null;
+	selectionEndLine?: number | null;
 	attachments?: ContextAttachment[];
 }
 
@@ -158,6 +200,8 @@ interface AskRequestMetadata {
 	threadHistoryIncluded: boolean;
 	folderContextPath: string | null;
 	folderContextFilesIncluded: number;
+	evidenceEnabled: boolean;
+	evidenceSourceCount: number;
 	forceImage: boolean;
 	autoImage: boolean;
 	workflowId: string | null;
@@ -170,6 +214,7 @@ interface AskRequest {
 	question: string;
 	title: string;
 	metadata: AskRequestMetadata;
+	evidenceSources: EvidenceSource[];
 }
 
 interface BuildRequestOptions {
@@ -187,6 +232,7 @@ interface BuildRequestOptions {
 	includeThreadHistory?: boolean;
 	additionalContextPaths?: string[];
 	folderContext?: FolderContextOptions;
+	forceFileContext?: boolean;
 }
 
 interface RunRequestOptions {
@@ -463,6 +509,121 @@ interface MarkdownHeadingSection {
 	endLineExclusive: number;
 }
 
+interface EvidenceSource {
+	id: string;
+	kind: ContextAttachmentKind | "primary_note";
+	sourcePath: string;
+	title: string;
+	lineStart: number;
+	lineEnd: number;
+	excerpt: string;
+}
+
+interface EvidenceCitation {
+	sourceId: string;
+	source: EvidenceSource;
+}
+
+interface MarkdownDiffLine {
+	kind: MarkdownDiffLineKind;
+	oldLineNumber: number | null;
+	newLineNumber: number | null;
+	text: string;
+}
+
+interface FrontmatterBlock {
+	exists: boolean;
+	malformed: boolean;
+	frontmatter: string;
+	body: string;
+	endLineExclusive: number;
+}
+
+interface FrontmatterApplyResult {
+	text: string;
+	warning: string;
+	cancelled: boolean;
+}
+
+interface PromptInspection {
+	request: AskRequest;
+	providerName: string;
+	model: string;
+	capability: ModelCapability;
+	instructions: string;
+	input: string;
+	secondaryInput: string;
+	estimatedInputTokens: number;
+	warnings: string[];
+}
+
+interface NoteHistoryTurn {
+	id: string;
+	sourcePath: string;
+	createdAt: string;
+	title: string;
+	question: string;
+	answer: string;
+	providerName: string;
+	model: string;
+	outputMode: OutputMode;
+	intentKind: RequestIntentKind;
+}
+
+interface NoteHistoryStore {
+	turns: NoteHistoryTurn[];
+}
+
+interface ReviewQueueItem {
+	id: string;
+	createdAt: string;
+	updatedAt: string;
+	status: ReviewQueueStatus;
+	sourcePath: string;
+	title: string;
+	question: string;
+	proposedText: string;
+	beforeText: string;
+	scope: ApplyScope;
+	headingPath: string;
+	providerName: string;
+	model: string;
+	workflowId: string | null;
+	workflowName: string | null;
+}
+
+interface BatchWorkflowRunOptions {
+	folderPath: string;
+	workflowId: string;
+	maxFiles: number;
+	outputMode: BatchWorkflowOutputMode;
+	contextBudgetMode: ContextBudgetMode;
+}
+
+interface BatchWorkflowProgress {
+	total: number;
+	completed: number;
+	failed: number;
+	currentPath: string;
+	message: string;
+}
+
+interface BatchWorkflowSummary {
+	total: number;
+	completed: number;
+	failed: number;
+	createdNotes: string[];
+	queuedReviews: number;
+}
+
+interface UsageGuardrailResult {
+	estimatedInputTokens: number;
+	dayUsedTokens: number;
+	monthUsedTokens: number;
+	warnings: string[];
+	blockers: string[];
+}
+
 const GPT_IMAGE_2_MODEL_ID = "gpt-image-2";
 const IMAGE_MIME_TYPE = "image/png";
 const IMAGE_FILE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
@@ -604,6 +765,16 @@ const DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS = 20000;
 const DEFAULT_FOLDER_CONTEXT_MAX_FILES = 12;
 const DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS = 24000;
 const DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS = 12000;
+const DEFAULT_EVIDENCE_MAX_SOURCES = 80;
+const DEFAULT_BATCH_WORKFLOW_MAX_FILES = 10;
+const DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE = 12;
+const DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS = 8000;
+const DEFAULT_REVIEW_QUEUE_MAX_ITEMS = 50;
+const MAX_NOTE_HISTORY_TURNS = 200;
+const MAX_NOTE_HISTORY_QUESTION_CHARACTERS = 2000;
+const MAX_NOTE_HISTORY_ANSWER_CHARACTERS = 6000;
+const MAX_REVIEW_QUEUE_TEXT_CHARACTERS = 60000;
+const DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS = 12000;
 const MAX_CONTEXT_PATHS = 40;
 const MAX_CONTEXT_PATH_LENGTH = 240;
 const CONTEXT_BUDGET_OPTIONS: Array<{
@@ -711,6 +882,93 @@ function normalizeApplyScope(value: unknown): ApplyScope {
 	}
 
 	return "auto";
+}
+
+function normalizeFrontmatterApplyPolicy(value: unknown): FrontmatterApplyPolicy {
+	return value === "confirm" || value === "replace" || value === "preserve" ? value : "preserve";
+}
+
+function normalizeBatchWorkflowOutputMode(value: unknown): BatchWorkflowOutputMode {
+	return value === "review-queue" ? "review-queue" : "note";
+}
+
+function normalizeBudgetEnforcementMode(value: unknown): BudgetEnforcementMode {
+	return value === "block" ? "block" : "warn";
+}
+
+function normalizeNoteHistoryStore(value: unknown): NoteHistoryStore {
+	const turnsValue = value && typeof value === "object" ? (value as { turns?: unknown }).turns : [];
+	const turns = Array.isArray(turnsValue) ? turnsValue : [];
+	return {
+		turns: turns
+			.map((turnValue): NoteHistoryTurn | null => {
+				if (!turnValue || typeof turnValue !== "object") {
+					return null;
+				}
+				const turn = turnValue as Partial<NoteHistoryTurn>;
+				const sourcePath = typeof turn.sourcePath === "string" ? turn.sourcePath.trim().slice(0, 240) : "";
+				const createdAtMs = typeof turn.createdAt === "string" ? Date.parse(turn.createdAt) : NaN;
+				if (!sourcePath || !Number.isFinite(createdAtMs)) {
+					return null;
+				}
+				return {
+					id: typeof turn.id === "string" && turn.id.trim() ? turn.id.trim().slice(0, 120) : `${createdAtMs}`,
+					sourcePath,
+					createdAt: new Date(createdAtMs).toISOString(),
+					title: typeof turn.title === "string" ? turn.title.trim().slice(0, 120) : "AskMate request",
+					question: typeof turn.question === "string" ? stripNullCharacters(turn.question).slice(0, MAX_NOTE_HISTORY_QUESTION_CHARACTERS).trim() : "",
+					answer: typeof turn.answer === "string" ? stripNullCharacters(turn.answer).slice(0, MAX_NOTE_HISTORY_ANSWER_CHARACTERS).trim() : "",
+					providerName: typeof turn.providerName === "string" ? turn.providerName.trim().slice(0, 80) : "AskMate",
+					model: typeof turn.model === "string" ? turn.model.trim().slice(0, 120) : "",
+					outputMode: normalizeOutputMode(turn.outputMode),
+					intentKind: turn.intentKind === "workflow" || turn.intentKind === "explicit_image" || turn.intentKind === "auto_image" ? turn.intentKind : "freeform_text"
+				};
+			})
+			.filter((turn): turn is NoteHistoryTurn => Boolean(turn))
+			.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+			.slice(-MAX_NOTE_HISTORY_TURNS)
+	};
+}
+
+function normalizeReviewQueueItems(value: unknown, maxItems = DEFAULT_REVIEW_QUEUE_MAX_ITEMS): ReviewQueueItem[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	return value
+		.map((itemValue): ReviewQueueItem | null => {
+			if (!itemValue || typeof itemValue !== "object") {
+				return null;
+			}
+			const item = itemValue as Partial<ReviewQueueItem>;
+			const sourcePath = typeof item.sourcePath === "string" ? item.sourcePath.trim().slice(0, 240) : "";
+			const createdAtMs = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
+			if (!sourcePath || !Number.isFinite(createdAtMs)) {
+				return null;
+			}
+			const updatedAtMs = typeof item.updatedAt === "string" && Number.isFinite(Date.parse(item.updatedAt)) ? Date.parse(item.updatedAt) : createdAtMs;
+			const status: ReviewQueueStatus = item.status === "applied" || item.status === "dismissed" ? item.status : "pending";
+			return {
+				id: typeof item.id === "string" && item.id.trim() ? item.id.trim().slice(0, 120) : `${createdAtMs}`,
+				createdAt: new Date(createdAtMs).toISOString(),
+				updatedAt: new Date(updatedAtMs).toISOString(),
+				status,
+				sourcePath,
+				title: typeof item.title === "string" ? item.title.trim().slice(0, 120) : "AskMate review",
+				question: typeof item.question === "string" ? stripNullCharacters(item.question).slice(0, 2000).trim() : "",
+				proposedText: typeof item.proposedText === "string" ? stripNullCharacters(item.proposedText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS).trim() : "",
+				beforeText: typeof item.beforeText === "string" ? stripNullCharacters(item.beforeText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS) : "",
+				scope: normalizeApplyScope(item.scope),
+				headingPath: typeof item.headingPath === "string" ? item.headingPath.trim().slice(0, 240) : "",
+				providerName: typeof item.providerName === "string" ? item.providerName.trim().slice(0, 80) : "AskMate",
+				model: typeof item.model === "string" ? item.model.trim().slice(0, 120) : "",
+				workflowId: typeof item.workflowId === "string" ? item.workflowId.trim().slice(0, 120) : null,
+				workflowName: typeof item.workflowName === "string" ? item.workflowName.trim().slice(0, 120) : null
+			};
+		})
+		.filter((item): item is ReviewQueueItem => Boolean(item))
+		.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+		.slice(-Math.max(1, maxItems));
 }
 
 function normalizeProviderRoleSettings(value: unknown, legacyProviderId: unknown): ProviderRoleSettings {
@@ -1373,6 +1631,33 @@ const DEFAULT_SETTINGS: AskMateSettings = {
 	excalidrawSummaryMaxCharacters: DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS,
 	includeImageManifests: false,
 	partialApplyDefaultScope: "auto",
+	evidenceLinkedAnswersEnabled: true,
+	evidenceMaxSources: DEFAULT_EVIDENCE_MAX_SOURCES,
+	frontmatterApplyPolicy: "preserve",
+	batchWorkflowFolderPath: "",
+	batchWorkflowId: "study-summary",
+	batchWorkflowMaxFiles: DEFAULT_BATCH_WORKFLOW_MAX_FILES,
+	batchWorkflowOutputMode: "note",
+	noteHistoryEnabled: true,
+	noteHistoryIncludeInContext: false,
+	noteHistoryMaxTurnsPerNote: DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE,
+	noteHistoryStore: { turns: [] },
+	includeStyleGuideContext: false,
+	styleGuideContextPath: "",
+	styleGuideMaxCharacters: DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS,
+	includeGlossaryContext: false,
+	glossaryContextPath: "",
+	glossaryMaxCharacters: DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS,
+	reviewQueue: [],
+	reviewQueueMaxItems: DEFAULT_REVIEW_QUEUE_MAX_ITEMS,
+	smartResultPlacementEnabled: false,
+	appendResultBacklinkToSource: false,
+	usageGuardrailsEnabled: false,
+	usageDailyTokenBudget: 0,
+	usageMonthlyTokenBudget: 0,
+	usagePerRequestWarningTokens: DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS,
+	usagePerRequestHardLimitTokens: 0,
+	usageBudgetEnforcement: "warn",
 	tokenUsageStats: {
 		records: []
 	}
@@ -1918,6 +2203,236 @@ class AskMatePromptModal extends Modal {
 	}
 }
 
+
+function buildMarkdownLineDiff(before: string, after: string): MarkdownDiffLine[] {
+	const oldLines = before.split(/\r?\n/);
+	const newLines = after.split(/\r?\n/);
+	const maxPreciseLines = 400;
+
+	if (oldLines.length > maxPreciseLines || newLines.length > maxPreciseLines) {
+		let prefix = 0;
+		while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) {
+			prefix += 1;
+		}
+		let suffix = 0;
+		while (
+			suffix + prefix < oldLines.length
+			&& suffix + prefix < newLines.length
+			&& oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+		) {
+			suffix += 1;
+		}
+		const rows: MarkdownDiffLine[] = [];
+		for (let index = Math.max(0, prefix - 8); index < prefix; index += 1) {
+			rows.push({ kind: "context", oldLineNumber: index + 1, newLineNumber: index + 1, text: oldLines[index] ?? "" });
+		}
+		rows.push({ kind: "context", oldLineNumber: null, newLineNumber: null, text: "[Large diff truncated to changed region]" });
+		oldLines.slice(prefix, oldLines.length - suffix).slice(0, 200).forEach((line, index) => {
+			rows.push({ kind: "removed", oldLineNumber: prefix + index + 1, newLineNumber: null, text: line });
+		});
+		newLines.slice(prefix, newLines.length - suffix).slice(0, 200).forEach((line, index) => {
+			rows.push({ kind: "added", oldLineNumber: null, newLineNumber: prefix + index + 1, text: line });
+		});
+		for (let index = Math.max(prefix, oldLines.length - suffix); index < oldLines.length; index += 1) {
+			const newIndex = newLines.length - (oldLines.length - index);
+			rows.push({ kind: "context", oldLineNumber: index + 1, newLineNumber: newIndex + 1, text: oldLines[index] ?? "" });
+		}
+		return rows;
+	}
+
+	const lengths = Array.from({ length: oldLines.length + 1 }, () => Array<number>(newLines.length + 1).fill(0));
+	for (let i = oldLines.length - 1; i >= 0; i -= 1) {
+		for (let j = newLines.length - 1; j >= 0; j -= 1) {
+			lengths[i][j] = oldLines[i] === newLines[j]
+				? lengths[i + 1][j + 1] + 1
+				: Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+		}
+	}
+
+	const diff: MarkdownDiffLine[] = [];
+	let oldIndex = 0;
+	let newIndex = 0;
+	while (oldIndex < oldLines.length || newIndex < newLines.length) {
+		if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
+			diff.push({ kind: "context", oldLineNumber: oldIndex + 1, newLineNumber: newIndex + 1, text: oldLines[oldIndex] });
+			oldIndex += 1;
+			newIndex += 1;
+		} else if (newIndex < newLines.length && (oldIndex >= oldLines.length || lengths[oldIndex][newIndex + 1] >= lengths[oldIndex + 1][newIndex])) {
+			diff.push({ kind: "added", oldLineNumber: null, newLineNumber: newIndex + 1, text: newLines[newIndex] });
+			newIndex += 1;
+		} else if (oldIndex < oldLines.length) {
+			diff.push({ kind: "removed", oldLineNumber: oldIndex + 1, newLineNumber: null, text: oldLines[oldIndex] });
+			oldIndex += 1;
+		}
+	}
+	return diff;
+}
+
+interface DiffConfirmOptions {
+	scope: "selected-text" | "full-note";
+	targetLabel: string;
+	before: string;
+	after: string;
+	warning?: string;
+	resolve: (value: boolean) => void;
+}
+
+class AskMateDiffConfirmModal extends Modal {
+	private readonly options: DiffConfirmOptions;
+	private resolved = false;
+
+	constructor(app: App, options: DiffConfirmOptions) {
+		super(app);
+		this.options = options;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("askmate-diff-modal");
+		const scopeLabel = this.options.scope === "selected-text" ? "selected text" : "full note";
+		contentEl.createDiv({ cls: "askmate-modal-title", text: `Apply AskMate output to ${scopeLabel}?` });
+		contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
+		contentEl.createDiv({
+			cls: "askmate-diff-summary",
+			text: `Before: ${this.options.before.split(/\r?\n/).length} lines, ${this.options.before.length.toLocaleString()} chars. After: ${this.options.after.split(/\r?\n/).length} lines, ${this.options.after.length.toLocaleString()} chars.`
+		});
+		if (this.options.warning) {
+			contentEl.createDiv({ cls: "askmate-diff-warning", text: this.options.warning });
+		}
+		const diffEl = contentEl.createDiv({ cls: "askmate-diff-view" });
+		for (const line of buildMarkdownLineDiff(this.options.before, this.options.after)) {
+			const row = diffEl.createDiv({ cls: `askmate-diff-line askmate-diff-line-${line.kind}` });
+			row.createSpan({ cls: "askmate-diff-line-number", text: line.oldLineNumber === null ? "" : String(line.oldLineNumber) });
+			row.createSpan({ cls: "askmate-diff-line-number", text: line.newLineNumber === null ? "" : String(line.newLineNumber) });
+			row.createSpan({ text: `${line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "} ${line.text}` });
+		}
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const cancelButton = actions.createEl("button", { text: "Cancel" });
+		cancelButton.type = "button";
+		cancelButton.addEventListener("click", () => this.finish(false));
+		const applyButton = actions.createEl("button", { cls: "mod-cta", text: "Apply" });
+		applyButton.type = "button";
+		applyButton.addEventListener("click", () => this.finish(true));
+	}
+
+	onClose(): void {
+		this.finish(false);
+	}
+
+	private finish(value: boolean): void {
+		if (this.resolved) {
+			return;
+		}
+		this.resolved = true;
+		this.options.resolve(value);
+		this.close();
+	}
+}
+
+class AskMatePromptInspectorModal extends Modal {
+	private readonly inspection: PromptInspection;
+
+	constructor(app: App, inspection: PromptInspection) {
+		super(app);
+		this.inspection = inspection;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("askmate-prompt-inspector");
+		contentEl.createDiv({ cls: "askmate-modal-title", text: "Final prompt inspector" });
+		contentEl.createDiv({
+			cls: "askmate-prompt-inspector-meta",
+			text: `${this.inspection.providerName}: ${this.inspection.model} · about ${formatTokenCount(this.inspection.estimatedInputTokens)} input tokens · ${formatRequestIntent(this.inspection.request.metadata.intentKind)}`
+		});
+		if (this.inspection.warnings.length > 0) {
+			contentEl.createDiv({ cls: "askmate-budget-warning", text: this.inspection.warnings.join(" ") });
+		}
+		this.renderTextarea(contentEl, "Instructions", this.inspection.instructions);
+		this.renderTextarea(contentEl, "Final prompt", this.inspection.input);
+		if (this.inspection.secondaryInput.trim()) {
+			this.renderTextarea(contentEl, "Secondary image prompt", this.inspection.secondaryInput);
+		}
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const copyButton = actions.createEl("button", { text: "Copy final prompt" });
+		copyButton.type = "button";
+		copyButton.addEventListener("click", () => {
+			void navigator.clipboard.writeText(this.inspection.input).then(() => new Notice("Final prompt copied."));
+		});
+		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
+		closeButton.type = "button";
+		closeButton.addEventListener("click", () => this.close());
+	}
+
+	private renderTextarea(parent: HTMLElement, label: string, value: string): void {
+		parent.createDiv({ cls: "askmate-prompt-inspector-label", text: label });
+		const textarea = parent.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
+		textarea.value = value;
+		textarea.readOnly = true;
+		textarea.rows = 10;
+	}
+}
+
+class AskMateNoteHistoryModal extends Modal {
+	private readonly plugin: AskMatePlugin;
+	private readonly sourcePath: string;
+
+	constructor(app: App, plugin: AskMatePlugin, sourcePath: string) {
+		super(app);
+		this.plugin = plugin;
+		this.sourcePath = sourcePath;
+	}
+
+	onOpen(): void {
+		this.render();
+	}
+
+	private render(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("askmate-note-history");
+		contentEl.createDiv({ cls: "askmate-modal-title", text: "AskMate note history" });
+		contentEl.createDiv({ cls: "askmate-note-history-meta", text: this.sourcePath || "No active note" });
+		const turns = this.plugin.getNoteHistoryForPath(this.sourcePath).slice().reverse();
+		if (turns.length === 0) {
+			contentEl.createDiv({ cls: "askmate-usage-empty", text: "No AskMate history for this note yet." });
+		} else {
+			for (const turn of turns) {
+				const card = contentEl.createDiv({ cls: "askmate-note-history-turn" });
+				card.createDiv({ cls: "askmate-note-history-meta", text: `${formatUsageTimestamp(turn.createdAt)} · ${turn.providerName}: ${turn.model} · ${formatOutputMode(turn.outputMode)}` });
+				card.createEl("strong", { text: turn.title });
+				card.createEl("p", { text: truncateLabel(turn.question, 220) });
+				card.createEl("p", { text: truncateLabel(turn.answer, 300) });
+				const actions = card.createDiv({ cls: "askmate-note-history-actions" });
+				const copyQuestion = actions.createEl("button", { text: "Copy question" });
+				copyQuestion.type = "button";
+				copyQuestion.addEventListener("click", () => void navigator.clipboard.writeText(turn.question));
+				const copyAnswer = actions.createEl("button", { text: "Copy answer" });
+				copyAnswer.type = "button";
+				copyAnswer.addEventListener("click", () => void navigator.clipboard.writeText(turn.answer));
+			}
+		}
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const clearButton = actions.createEl("button", { cls: "mod-warning", text: "Clear note history" });
+		clearButton.type = "button";
+		clearButton.disabled = turns.length === 0;
+		clearButton.addEventListener("click", () => {
+			void this.plugin.clearNoteHistoryForPath(this.sourcePath).then(() => this.render());
+		});
+		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
+		closeButton.type = "button";
+		closeButton.addEventListener("click", () => this.close());
+	}
+}
+
+function askMateDiffConfirm(app: App, options: Omit<DiffConfirmOptions, "resolve">): Promise<boolean> {
+	return new Promise((resolve) => {
+		new AskMateDiffConfirmModal(app, { ...options, resolve }).open();
+	});
+}
+
 function askMateConfirm(app: App, message: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		new AskMateConfirmModal(app, message, resolve).open();
@@ -2062,6 +2577,33 @@ export default class AskMatePlugin extends Plugin {
 		this.settings.excalidrawSummaryMaxCharacters = normalizeBoundedInteger(this.settings.excalidrawSummaryMaxCharacters, DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS, 1000, 100000);
 		this.settings.includeImageManifests = normalizeBoolean(this.settings.includeImageManifests, false);
 		this.settings.partialApplyDefaultScope = normalizeApplyScope(this.settings.partialApplyDefaultScope);
+		this.settings.evidenceLinkedAnswersEnabled = normalizeBoolean(this.settings.evidenceLinkedAnswersEnabled, true);
+		this.settings.evidenceMaxSources = normalizeBoundedInteger(this.settings.evidenceMaxSources, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
+		this.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(this.settings.frontmatterApplyPolicy);
+		this.settings.batchWorkflowFolderPath = normalizeOptionalString(this.settings.batchWorkflowFolderPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.batchWorkflowId = normalizeOptionalString(this.settings.batchWorkflowId, 120) || "study-summary";
+		this.settings.batchWorkflowMaxFiles = normalizeBoundedInteger(this.settings.batchWorkflowMaxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
+		this.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(this.settings.batchWorkflowOutputMode);
+		this.settings.noteHistoryEnabled = normalizeBoolean(this.settings.noteHistoryEnabled, true);
+		this.settings.noteHistoryIncludeInContext = normalizeBoolean(this.settings.noteHistoryIncludeInContext, false);
+		this.settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(this.settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
+		this.settings.noteHistoryStore = normalizeNoteHistoryStore(this.settings.noteHistoryStore);
+		this.settings.includeStyleGuideContext = normalizeBoolean(this.settings.includeStyleGuideContext, false);
+		this.settings.styleGuideContextPath = normalizeOptionalString(this.settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.styleGuideMaxCharacters = normalizeBoundedInteger(this.settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+		this.settings.includeGlossaryContext = normalizeBoolean(this.settings.includeGlossaryContext, false);
+		this.settings.glossaryContextPath = normalizeOptionalString(this.settings.glossaryContextPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.glossaryMaxCharacters = normalizeBoundedInteger(this.settings.glossaryMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+		this.settings.reviewQueueMaxItems = normalizeBoundedInteger(this.settings.reviewQueueMaxItems, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
+		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
+		this.settings.smartResultPlacementEnabled = normalizeBoolean(this.settings.smartResultPlacementEnabled, false);
+		this.settings.appendResultBacklinkToSource = normalizeBoolean(this.settings.appendResultBacklinkToSource, false);
+		this.settings.usageGuardrailsEnabled = normalizeBoolean(this.settings.usageGuardrailsEnabled, false);
+		this.settings.usageDailyTokenBudget = normalizeBoundedInteger(this.settings.usageDailyTokenBudget, 0, 0, 10000000);
+		this.settings.usageMonthlyTokenBudget = normalizeBoundedInteger(this.settings.usageMonthlyTokenBudget, 0, 0, 100000000);
+		this.settings.usagePerRequestWarningTokens = normalizeBoundedInteger(this.settings.usagePerRequestWarningTokens, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
+		this.settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(this.settings.usagePerRequestHardLimitTokens, 0, 0, 10000000);
+		this.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(this.settings.usageBudgetEnforcement);
 		this.settings.tokenUsageStats = normalizeTokenUsageStats(this.settings.tokenUsageStats);
 	}
 
@@ -2095,6 +2637,34 @@ export default class AskMatePlugin extends Plugin {
 		this.settings.excalidrawSummaryMaxCharacters = normalizeBoundedInteger(this.settings.excalidrawSummaryMaxCharacters, DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS, 1000, 100000);
 		this.settings.includeImageManifests = normalizeBoolean(this.settings.includeImageManifests, false);
 		this.settings.partialApplyDefaultScope = normalizeApplyScope(this.settings.partialApplyDefaultScope);
+		this.settings.evidenceLinkedAnswersEnabled = normalizeBoolean(this.settings.evidenceLinkedAnswersEnabled, true);
+		this.settings.evidenceMaxSources = normalizeBoundedInteger(this.settings.evidenceMaxSources, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
+		this.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(this.settings.frontmatterApplyPolicy);
+		this.settings.batchWorkflowFolderPath = normalizeOptionalString(this.settings.batchWorkflowFolderPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.batchWorkflowId = normalizeOptionalString(this.settings.batchWorkflowId, 120) || "study-summary";
+		this.settings.batchWorkflowMaxFiles = normalizeBoundedInteger(this.settings.batchWorkflowMaxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
+		this.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(this.settings.batchWorkflowOutputMode);
+		this.settings.noteHistoryEnabled = normalizeBoolean(this.settings.noteHistoryEnabled, true);
+		this.settings.noteHistoryIncludeInContext = normalizeBoolean(this.settings.noteHistoryIncludeInContext, false);
+		this.settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(this.settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
+		this.settings.noteHistoryStore = normalizeNoteHistoryStore(this.settings.noteHistoryStore);
+		this.settings.includeStyleGuideContext = normalizeBoolean(this.settings.includeStyleGuideContext, false);
+		this.settings.styleGuideContextPath = normalizeOptionalString(this.settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.styleGuideMaxCharacters = normalizeBoundedInteger(this.settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+		this.settings.includeGlossaryContext = normalizeBoolean(this.settings.includeGlossaryContext, false);
+		this.settings.glossaryContextPath = normalizeOptionalString(this.settings.glossaryContextPath, MAX_CONTEXT_PATH_LENGTH);
+		this.settings.glossaryMaxCharacters = normalizeBoundedInteger(this.settings.glossaryMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+		this.settings.reviewQueueMaxItems = normalizeBoundedInteger(this.settings.reviewQueueMaxItems, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
+		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
+		this.settings.smartResultPlacementEnabled = normalizeBoolean(this.settings.smartResultPlacementEnabled, false);
+		this.settings.appendResultBacklinkToSource = normalizeBoolean(this.settings.appendResultBacklinkToSource, false);
+		this.settings.usageGuardrailsEnabled = normalizeBoolean(this.settings.usageGuardrailsEnabled, false);
+		this.settings.usageDailyTokenBudget = normalizeBoundedInteger(this.settings.usageDailyTokenBudget, 0, 0, 10000000);
+		this.settings.usageMonthlyTokenBudget = normalizeBoundedInteger(this.settings.usageMonthlyTokenBudget, 0, 0, 100000000);
+		this.settings.usagePerRequestWarningTokens = normalizeBoundedInteger(this.settings.usagePerRequestWarningTokens, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
+		this.settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(this.settings.usagePerRequestHardLimitTokens, 0, 0, 10000000);
+		this.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(this.settings.usageBudgetEnforcement);
+		this.settings.tokenUsageStats = normalizeTokenUsageStats(this.settings.tokenUsageStats);
 		await this.saveData(this.settings);
 	}
 
@@ -2209,11 +2779,15 @@ export default class AskMatePlugin extends Plugin {
 
 		if (selectedText.length > 0) {
 			const fullValue = editor?.getValue() ?? "";
+			const from = editor?.getCursor("from");
+			const to = editor?.getCursor("to");
 			return {
 				content: selectedText,
 				file,
 				source: "Selected text",
-				activeHeadingPath: editor ? this.getActiveHeadingPath(fullValue, editor.getCursor().line) : null
+				activeHeadingPath: editor ? this.getActiveHeadingPath(fullValue, editor.getCursor().line) : null,
+				selectionStartLine: from ? from.line + 1 : null,
+				selectionEndLine: to ? to.line + 1 : null
 			};
 		}
 
@@ -2228,7 +2802,9 @@ export default class AskMatePlugin extends Plugin {
 				content: fullNote,
 				file,
 				source: "Current note",
-				activeHeadingPath: this.getActiveHeadingPath(editor.getValue(), editor.getCursor().line)
+				activeHeadingPath: this.getActiveHeadingPath(editor.getValue(), editor.getCursor().line),
+				selectionStartLine: null,
+				selectionEndLine: null
 			};
 		}
 
@@ -2240,12 +2816,17 @@ export default class AskMatePlugin extends Plugin {
 			return null;
 		}
 
-		const content = (await this.app.vault.cachedRead(file)).trim();
+		return await this.getFileNoteContext(file);
+	}
 
+	private async getFileNoteContext(file: TFile): Promise<NoteContext> {
+		const content = (await this.app.vault.cachedRead(file)).trim();
 		return {
 			content,
 			file,
-			source: "Current note"
+			source: "Current note",
+			selectionStartLine: null,
+			selectionEndLine: null
 		};
 	}
 
@@ -3132,17 +3713,7 @@ export default class AskMatePlugin extends Plugin {
 
 	async prepareImagePrompt(request: AskRequest, abortSignal?: AbortSignal): Promise<ImagePromptPlan> {
 		const providerRef = this.getImagePlanningProviderRef();
-		const instructions = [
-			"Role: You prepare high-quality prompts for an image generation model inside Obsidian.",
-			"",
-			"Goal: Analyze the user request and note context, then produce one concise image prompt suitable for gpt-image-2.",
-			"",
-			"Success criteria: Preserve source-backed details, infer a clear visual composition, specify style only when helpful, and avoid unsupported exact claims, logos, private details, dates, numbers, or identities.",
-			"",
-			"Constraints: Treat the note context and user request as source material. Do not answer the user in prose. Do not include Markdown. If the request is sparse, create a useful visual direction from the note context.",
-			"",
-			"Output: Return JSON only with this shape: {\"prompt\":\"...\"}. Stop after the JSON object."
-		].join("\n");
+		const instructions = this.buildImagePromptPlanningInstructions();
 		const input = this.buildImagePromptPlanningInput(request);
 		const startedAt = new Date();
 		const endpoint: ApiEndpoint = providerRef.providerId === "openai"
@@ -3522,7 +4093,7 @@ export default class AskMatePlugin extends Plugin {
 	}
 
 	async createResultNote(request: AskRequest, responseText: string, options: { model?: string } = {}): Promise<TFile> {
-		const folder = this.cleanFolderPath(this.settings.resultFolder);
+		const folder = this.getResultNoteFolder(request);
 		await this.ensureFolder(folder);
 
 		const baseName = this.sanitizeFileName(request.title);
@@ -3530,14 +4101,16 @@ export default class AskMatePlugin extends Plugin {
 		const model = options.model ?? request.metadata.selectedModel;
 		const content = this.renderTextResultNoteContent(request, responseText, model);
 
-		return await this.app.vault.create(path, content);
+		const file = await this.app.vault.create(path, content);
+		await this.maybeAppendResultBacklinkToSource(request, file);
+		return file;
 	}
 
 	async createImageResultNote(
 		request: AskRequest,
 		result: ImageAskMateResult
 	): Promise<{ noteFile: TFile; imageFile: TFile }> {
-		const folder = this.cleanFolderPath(this.settings.resultFolder);
+		const folder = this.getResultNoteFolder(request);
 		await this.ensureFolder(folder);
 
 		const imageFile = await this.saveGeneratedImage(request, result);
@@ -3546,6 +4119,7 @@ export default class AskMatePlugin extends Plugin {
 		const content = this.renderImageResultNoteContent(request, result, imageFile);
 
 		const noteFile = await this.app.vault.create(path, content);
+		await this.maybeAppendResultBacklinkToSource(request, noteFile);
 		return { noteFile, imageFile };
 	}
 
@@ -3830,16 +4404,23 @@ export default class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
+			const before = editor.getValue();
+			const prepared = await this.prepareFrontmatterAwareApply(before, output);
+			if (prepared.cancelled) {
+				return "Apply cancelled. No note was changed.";
+			}
+
 			if (!(await this.confirmTextApplyPreview({
 				scope: "full-note",
 				targetLabel,
-				before: editor.getValue(),
-				after: output
+				before,
+				after: prepared.text,
+				warning: prepared.warning
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			editor.setValue(output);
+			editor.setValue(prepared.text);
 			this.rememberEditorContext(editor, file);
 			return `Applied to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
 		}
@@ -3850,16 +4431,22 @@ export default class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
+			const prepared = await this.prepareFrontmatterAwareApply(content, output);
+			if (prepared.cancelled) {
+				return "Apply cancelled. No note was changed.";
+			}
+
 			if (!(await this.confirmTextApplyPreview({
 				scope: "full-note",
 				targetLabel: file.path,
 				before: content,
-				after: output
+				after: prepared.text,
+				warning: prepared.warning
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			await this.app.vault.modify(file, output);
+			await this.app.vault.modify(file, prepared.text);
 			this.rememberMarkdownFile(file);
 			return `Applied to ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 		}
@@ -3887,12 +4474,14 @@ export default class AskMatePlugin extends Plugin {
 		scope,
 		targetLabel,
 		before,
-		after
+		after,
+		warning
 	}: {
 		scope: "selected-text" | "full-note";
 		targetLabel: string;
 		before: string;
 		after: string;
+		warning?: string;
 	}): Promise<boolean> {
 		const beforeLines = before ? before.split(/\r?\n/).length : 0;
 		const afterLines = after ? after.split(/\r?\n/).length : 0;
@@ -3904,20 +4493,405 @@ export default class AskMatePlugin extends Plugin {
 				: await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`);
 		}
 
-		return await askMateConfirm(this.app, [
-			`Apply AskMate output to ${scopeLabel} in "${targetLabel}"?`,
+		return await askMateDiffConfirm(this.app, {
+			scope,
+			targetLabel,
+			before,
+			after,
+			warning
+		});
+	}
+
+
+	private splitMarkdownFrontmatter(markdown: string): FrontmatterBlock {
+		const lines = markdown.split(/\r?\n/);
+		if (lines[0]?.trim() !== "---") {
+			return { exists: false, malformed: false, frontmatter: "", body: markdown, endLineExclusive: 0 };
+		}
+		for (let index = 1; index < lines.length; index += 1) {
+			if (lines[index].trim() === "---") {
+				return {
+					exists: true,
+					malformed: false,
+					frontmatter: lines.slice(0, index + 1).join("\n"),
+					body: lines.slice(index + 1).join("\n").replace(/^\n+/, ""),
+					endLineExclusive: index + 1
+				};
+			}
+		}
+		return { exists: true, malformed: true, frontmatter: markdown, body: "", endLineExclusive: lines.length };
+	}
+
+	private async prepareFrontmatterAwareApply(before: string, proposed: string): Promise<FrontmatterApplyResult> {
+		const beforeBlock = this.splitMarkdownFrontmatter(before);
+		const proposedBlock = this.splitMarkdownFrontmatter(proposed);
+		if (!beforeBlock.exists && !proposedBlock.exists) {
+			return { text: proposed, warning: "", cancelled: false };
+		}
+		if (beforeBlock.malformed) {
+			const confirmed = await askMateConfirm(this.app, "The existing YAML frontmatter appears malformed. Continue with the AI replacement?");
+			return { text: proposed, warning: "Existing YAML frontmatter looked malformed.", cancelled: !confirmed };
+		}
+		if (this.settings.frontmatterApplyPolicy === "replace") {
+			return { text: proposed, warning: proposedBlock.exists ? "AskMate will replace YAML frontmatter from the AI output." : "", cancelled: false };
+		}
+		if (this.settings.frontmatterApplyPolicy === "confirm" && beforeBlock.frontmatter !== proposedBlock.frontmatter) {
+			const confirmed = await askMateConfirm(this.app, "AskMate output changes YAML frontmatter. Continue with the replacement?");
+			return { text: proposed, warning: "YAML frontmatter differs from the original note.", cancelled: !confirmed };
+		}
+		if (this.settings.frontmatterApplyPolicy === "preserve" && beforeBlock.exists) {
+			const body = proposedBlock.exists ? proposedBlock.body : proposed;
+			return {
+				text: `${beforeBlock.frontmatter}\n\n${body.trimStart()}`,
+				warning: proposedBlock.exists ? "AskMate preserved the original YAML frontmatter and removed AI-proposed frontmatter." : "AskMate preserved the original YAML frontmatter.",
+				cancelled: false
+			};
+		}
+		if (this.settings.frontmatterApplyPolicy === "preserve" && proposedBlock.exists) {
+			return {
+				text: proposedBlock.body.trimStart(),
+				warning: "AskMate preserved the original no-frontmatter state and removed AI-proposed frontmatter.",
+				cancelled: false
+			};
+		}
+		return { text: proposed, warning: "", cancelled: false };
+	}
+
+	buildPromptInspectionForRequest(request: AskRequest): PromptInspection {
+		const shouldGenerateImage = request.metadata.forceImage || request.metadata.autoImage || request.metadata.modelCapability === "image";
+		const instructions = shouldGenerateImage ? this.buildImagePromptPlanningInstructions() : this.buildTextInstructions();
+		const input = shouldGenerateImage ? this.buildImagePromptPlanningInput(request) : this.buildPrompt(request);
+		const secondaryInput = shouldGenerateImage ? this.buildImagePrompt(request) : "";
+		const estimatedInputTokens = estimateTokenCount([instructions, input, secondaryInput].filter(Boolean).join("\n\n"));
+		return {
+			request,
+			providerName: shouldGenerateImage ? this.getImagePlanningProviderRef().providerName : request.metadata.providerName,
+			model: shouldGenerateImage ? this.getImagePlanningProviderRef().model : request.metadata.selectedModel,
+			capability: request.metadata.modelCapability,
+			instructions,
+			input,
+			secondaryInput,
+			estimatedInputTokens,
+			warnings: this.evaluateUsageGuardrails(request, estimatedInputTokens).warnings
+		};
+	}
+
+	async inspectFinalPrompt(question: string, title: string, options: BuildRequestOptions = {}): Promise<PromptInspection> {
+		const request = await this.buildRequest(question, title, options);
+		return this.buildPromptInspectionForRequest(request);
+	}
+
+	private buildImagePromptPlanningInstructions(): string {
+		return [
+			"Role: You prepare high-quality prompts for an image generation model inside Obsidian.",
 			"",
-			`Before: ${beforeLines} lines, ${before.length.toLocaleString()} characters`,
-			`After: ${afterLines} lines, ${after.length.toLocaleString()} characters`,
+			"Goal: Analyze the user request and note context, then produce one concise image prompt suitable for gpt-image-2.",
 			"",
-			"Before excerpt:",
-			before.trim().slice(0, 500) || "[empty]",
+			"Success criteria: Preserve source-backed details, infer a clear visual composition, specify style only when helpful, and avoid unsupported exact claims, logos, private details, dates, numbers, or identities.",
 			"",
-			"After excerpt:",
-			after.trim().slice(0, 500) || "[empty]",
+			"Constraints: Treat the note context and user request as source material. Do not answer the user in prose. Do not include Markdown. If the request is sparse, create a useful visual direction from the note context.",
 			"",
-			"Use Obsidian undo immediately if needed."
-		].join("\n"));
+			"Output: Return JSON only with this shape: {\"prompt\":\"...\"}. Stop after the JSON object."
+		].join("\n");
+	}
+
+	evaluateUsageGuardrails(request: AskRequest, estimatedInputTokens?: number): UsageGuardrailResult {
+		const estimate = estimatedInputTokens ?? this.buildPromptInspectionForRequest(request).estimatedInputTokens;
+		const now = new Date();
+		const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+		const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+		const dayUsedTokens = this.getUsageTokensSince(dayStart);
+		const monthUsedTokens = this.getUsageTokensSince(monthStart);
+		const warnings: string[] = [];
+		const blockers: string[] = [];
+		if (!this.settings.usageGuardrailsEnabled) {
+			return { estimatedInputTokens: estimate, dayUsedTokens, monthUsedTokens, warnings, blockers };
+		}
+		if (this.settings.usagePerRequestWarningTokens > 0 && estimate >= this.settings.usagePerRequestWarningTokens) {
+			warnings.push(`This request is estimated at ${formatTokenCount(estimate)} input tokens.`);
+		}
+		if (this.settings.usagePerRequestHardLimitTokens > 0 && estimate >= this.settings.usagePerRequestHardLimitTokens) {
+			blockers.push(`Request estimate exceeds the hard limit of ${formatTokenCount(this.settings.usagePerRequestHardLimitTokens)} tokens.`);
+		}
+		const addBudgetMessage = (label: string, used: number, budget: number): void => {
+			if (budget <= 0 || used + estimate <= budget) {
+				return;
+			}
+			const message = `${label} budget would exceed ${formatTokenCount(budget)} tokens. Used: ${formatTokenCount(used)}, estimate: ${formatTokenCount(estimate)}.`;
+			if (this.settings.usageBudgetEnforcement === "block") {
+				blockers.push(message);
+			} else {
+				warnings.push(message);
+			}
+		};
+		addBudgetMessage("Daily", dayUsedTokens, this.settings.usageDailyTokenBudget);
+		addBudgetMessage("Monthly", monthUsedTokens, this.settings.usageMonthlyTokenBudget);
+		return { estimatedInputTokens: estimate, dayUsedTokens, monthUsedTokens, warnings, blockers };
+	}
+
+	async confirmUsageGuardrails(request: AskRequest): Promise<void> {
+		const inspection = this.buildPromptInspectionForRequest(request);
+		const guardrails = this.evaluateUsageGuardrails(request, inspection.estimatedInputTokens);
+		if (guardrails.blockers.length > 0) {
+			throw new Error(guardrails.blockers.join(" "));
+		}
+		if (guardrails.warnings.length > 0 && !(await askMateConfirm(this.app, `${guardrails.warnings.join("\n\n")}\n\nContinue with this AskMate request?`))) {
+			throw new Error("AskMate request cancelled by usage guardrails.");
+		}
+	}
+
+	private getUsageTokensSince(startIso: string): number {
+		const startMs = Date.parse(startIso);
+		return this.getTokenUsageRecords()
+			.filter((record) => Date.parse(record.timestamp) >= startMs)
+			.reduce((sum, record) => sum + record.totalTokens, 0);
+	}
+
+	extractEvidenceCitations(responseText: string, sources: EvidenceSource[]): EvidenceCitation[] {
+		const byId = new Map(sources.map((source) => [source.id, source]));
+		const citations: EvidenceCitation[] = [];
+		const seen = new Set<string>();
+		for (const match of responseText.matchAll(/\[(S\d+)]/g)) {
+			const sourceId = match[1];
+			const source = byId.get(sourceId);
+			if (!source || seen.has(sourceId)) {
+				continue;
+			}
+			seen.add(sourceId);
+			citations.push({ sourceId, source });
+		}
+		return citations;
+	}
+
+	async openEvidenceSource(source: EvidenceSource): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(source.sourcePath);
+		if (!(file instanceof TFile) || file.extension !== "md") {
+			new Notice(`AskMate could not open evidence source ${source.sourcePath}.`);
+			return;
+		}
+		let leaf = this.app.workspace.getLeavesOfType("markdown").find((item) => item.view instanceof MarkdownView && item.view.file?.path === file.path);
+		if (!leaf) {
+			leaf = this.app.workspace.getLeaf(false);
+			await leaf.openFile(file);
+		}
+		await this.app.workspace.revealLeaf(leaf);
+		if (leaf.view instanceof MarkdownView) {
+			const editor = leaf.view.editor;
+			const start = { line: Math.max(0, source.lineStart - 1), ch: 0 };
+			const end = { line: Math.max(0, source.lineEnd - 1), ch: Math.max(0, editor.getLine(Math.max(0, source.lineEnd - 1)).length) };
+			editor.setSelection(start, end);
+			editor.scrollIntoView({ from: start, to: end }, true);
+		}
+	}
+
+	async recordNoteHistoryTurn(request: AskRequest, answer: string, model: string): Promise<void> {
+		if (!this.settings.noteHistoryEnabled || !request.context.file?.path) {
+			return;
+		}
+		const turn: NoteHistoryTurn = {
+			id: `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			sourcePath: request.context.file.path,
+			createdAt: new Date().toISOString(),
+			title: request.title,
+			question: request.question.slice(0, MAX_NOTE_HISTORY_QUESTION_CHARACTERS),
+			answer: answer.slice(0, MAX_NOTE_HISTORY_ANSWER_CHARACTERS),
+			providerName: request.metadata.providerName,
+			model,
+			outputMode: request.metadata.outputMode,
+			intentKind: request.metadata.intentKind
+		};
+		const existing = normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((item) => item.sourcePath !== turn.sourcePath);
+		const forNote = this.getNoteHistoryForPath(turn.sourcePath).concat(turn).slice(-this.settings.noteHistoryMaxTurnsPerNote);
+		this.settings.noteHistoryStore = { turns: [...existing, ...forNote].slice(-MAX_NOTE_HISTORY_TURNS) };
+		await this.saveSettings();
+	}
+
+	getNoteHistoryForPath(sourcePath: string): NoteHistoryTurn[] {
+		if (!sourcePath) {
+			return [];
+		}
+		return normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((turn) => turn.sourcePath === sourcePath);
+	}
+
+	async clearNoteHistoryForPath(sourcePath: string): Promise<void> {
+		this.settings.noteHistoryStore = {
+			turns: normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((turn) => turn.sourcePath !== sourcePath)
+		};
+		await this.saveSettings();
+	}
+
+	async queueReviewItemFromRequest(request: AskRequest, proposedText: string, model: string, scope: ApplyScope = "auto"): Promise<ReviewQueueItem> {
+		const file = request.context.file;
+		if (!file || file.extension !== "md") {
+			throw new Error("Review queue requires a source Markdown note.");
+		}
+		const normalizedScope = scope === "auto" ? request.context.source === "Selected text" ? "selected-block" : "full-note" : normalizeApplyScope(scope);
+		const currentContent = await this.app.vault.cachedRead(file);
+		const beforeText = normalizedScope === "selected-block" ? request.context.content : currentContent;
+		if (proposedText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS || beforeText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS) {
+			throw new Error("Review queue item is too large. Apply it directly or reduce the output size.");
+		}
+		const now = new Date().toISOString();
+		const item: ReviewQueueItem = {
+			id: `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			createdAt: now,
+			updatedAt: now,
+			status: "pending",
+			sourcePath: file.path,
+			title: request.title,
+			question: request.question.slice(0, 2000),
+			proposedText: proposedText.trim(),
+			beforeText,
+			scope: normalizedScope,
+			headingPath: normalizedScope === "heading-section" ? request.context.activeHeadingPath ?? "" : "",
+			providerName: request.metadata.providerName,
+			model,
+			workflowId: request.metadata.workflowId,
+			workflowName: request.metadata.workflowName
+		};
+		this.settings.reviewQueue = normalizeReviewQueueItems([...this.settings.reviewQueue, item], this.settings.reviewQueueMaxItems);
+		await this.saveSettings();
+		return item;
+	}
+
+	getPendingReviewQueueItems(): ReviewQueueItem[] {
+		return normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).filter((item) => item.status === "pending");
+	}
+
+	async applyReviewQueueItem(id: string): Promise<string> {
+		const items = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
+		const item = items.find((candidate) => candidate.id === id);
+		if (!item) {
+			throw new Error("Review queue item was not found.");
+		}
+		const file = this.app.vault.getAbstractFileByPath(item.sourcePath);
+		if (!(file instanceof TFile) || file.extension !== "md") {
+			throw new Error("Review queue source note was not found.");
+		}
+		const content = await this.app.vault.cachedRead(file);
+		let nextContent = content;
+		if (item.scope === "selected-block") {
+			const occurrences = findExactOccurrences(content, item.beforeText);
+			if (occurrences.length !== 1) {
+				throw new Error("AskMate could not safely find the original queued text in the current note.");
+			}
+			const start = occurrences[0];
+			nextContent = `${content.slice(0, start)}${item.proposedText}${content.slice(start + item.beforeText.length)}`;
+		} else {
+			if (content !== item.beforeText) {
+				throw new Error("The source note changed since this review item was queued. Re-run or requeue the suggestion before applying it.");
+			}
+			const prepared = await this.prepareFrontmatterAwareApply(content, item.proposedText);
+			if (prepared.cancelled) {
+				return "Review item apply cancelled. No note was changed.";
+			}
+			nextContent = prepared.text;
+		}
+		if (!(await this.confirmTextApplyPreview({ scope: item.scope === "selected-block" ? "selected-text" : "full-note", targetLabel: file.path, before: content, after: nextContent }))) {
+			return "Review item apply cancelled. No note was changed.";
+		}
+		await this.app.vault.modify(file, nextContent);
+		item.status = "applied";
+		item.updatedAt = new Date().toISOString();
+		this.settings.reviewQueue = items;
+		await this.saveSettings();
+		return `Applied queued AskMate change to ${file.path}.`;
+	}
+
+	async dismissReviewQueueItem(id: string): Promise<void> {
+		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).map((item) => item.id === id ? { ...item, status: "dismissed", updatedAt: new Date().toISOString() } : item);
+		await this.saveSettings();
+	}
+
+	private getResultNoteFolder(request: AskRequest): string {
+		if (this.settings.smartResultPlacementEnabled && request.context.file?.parent?.path) {
+			const parentPath = request.context.file.parent.path === "/" ? "" : request.context.file.parent.path;
+			return this.cleanFolderPath(parentPath ? `${parentPath}/AskMate` : "AskMate");
+		}
+		return this.cleanFolderPath(this.settings.resultFolder);
+	}
+
+	private async maybeAppendResultBacklinkToSource(request: AskRequest, resultFile: TFile): Promise<void> {
+		if (!this.settings.appendResultBacklinkToSource || !request.context.file || request.context.file.path === resultFile.path) {
+			return;
+		}
+		const sourceFile = request.context.file;
+		const content = await this.app.vault.cachedRead(sourceFile);
+		const bullet = `- [[${resultFile.path}|${resultFile.basename}]] created ${this.formatDate(new Date())}`;
+		if (content.includes(bullet)) {
+			return;
+		}
+		const heading = "## AskMate results";
+		const next = content.includes(heading)
+			? content.replace(heading, `${heading}\n\n${bullet}`)
+			: `${content.trimEnd()}\n\n${heading}\n\n${bullet}\n`;
+		await this.app.vault.modify(sourceFile, next);
+	}
+
+	getBatchWorkflowTargetFiles(folderPath: string, maxFiles: number): TFile[] {
+		const folder = this.cleanFolderPath(folderPath);
+		if (!folder) {
+			return [];
+		}
+		return this.app.vault.getMarkdownFiles()
+			.filter((file) => file.path.startsWith(`${folder}/`) || file.parent?.path === folder)
+			.filter((file) => !file.path.startsWith(`${this.app.vault.configDir}/`) && !file.path.startsWith(".trash/") && !file.path.includes("/."))
+			.sort((a, b) => a.path.localeCompare(b.path))
+			.slice(0, normalizeBoundedInteger(maxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100));
+	}
+
+	async runBatchWorkflow(
+		options: BatchWorkflowRunOptions,
+		onProgress?: (progress: BatchWorkflowProgress) => void,
+		abortSignal?: AbortSignal
+	): Promise<BatchWorkflowSummary> {
+		if (this.getSelectedProviderModelRef().capability !== "text") {
+			throw new Error(IMAGE_WORKFLOW_MESSAGE);
+		}
+		const workflow = this.getAllWorkflows().find((item) => item.id === options.workflowId) ?? this.getAllWorkflows()[0];
+		if (!workflow) {
+			throw new Error("No AskMate workflow is available for batch processing.");
+		}
+		const files = this.getBatchWorkflowTargetFiles(options.folderPath, options.maxFiles);
+		const summary: BatchWorkflowSummary = { total: files.length, completed: 0, failed: 0, createdNotes: [], queuedReviews: 0 };
+		for (const file of files) {
+			this.throwIfAborted(abortSignal);
+			onProgress?.({ total: files.length, completed: summary.completed, failed: summary.failed, currentPath: file.path, message: `Running ${workflow.name} on ${file.path}` });
+			try {
+				const request = await this.buildRequest(this.getWorkflowPrompt(workflow), workflow.name, {
+					file,
+					forceFileContext: true,
+					workflow,
+					outputMode: "note",
+					contextBudgetMode: options.contextBudgetMode,
+					commandSource: "command_palette"
+				});
+				const guardrails = this.evaluateUsageGuardrails(request);
+				if (guardrails.blockers.length > 0) {
+					throw new Error(guardrails.blockers.join(" "));
+				}
+				const result = await this.runOpenAIRequest(request, { abortSignal, forceImage: false });
+				if (result.kind !== "text") {
+					throw new Error("Batch workflows support text responses only.");
+				}
+				if (options.outputMode === "review-queue") {
+					await this.queueReviewItemFromRequest(request, result.text, result.model, "full-note");
+					summary.queuedReviews += 1;
+				} else {
+					const note = await this.createResultNote(request, result.text, { model: result.model });
+					summary.createdNotes.push(note.path);
+				}
+				summary.completed += 1;
+			} catch (error) {
+				if (isAbortError(error)) {
+					throw error;
+				}
+				summary.failed += 1;
+				onProgress?.({ total: files.length, completed: summary.completed, failed: summary.failed, currentPath: file.path, message: this.getErrorMessage(error) });
+			}
+		}
+		onProgress?.({ total: files.length, completed: summary.completed, failed: summary.failed, currentPath: "", message: "Batch workflow complete." });
+		return summary;
 	}
 
 	async getOpenAiApiKey(): Promise<string> {
@@ -4319,6 +5293,11 @@ export default class AskMatePlugin extends Plugin {
 			}
 		}
 
+		const noteHistory = this.buildNoteHistoryAttachment(context.file?.path ?? "");
+		if (noteHistory) {
+			attachments.push(noteHistory);
+		}
+
 		const additionalPaths = options.additionalContextPaths ?? this.settings.additionalContextPaths;
 		attachments.push(...await this.buildAdditionalNoteAttachments(
 			additionalPaths,
@@ -4333,6 +5312,19 @@ export default class AskMatePlugin extends Plugin {
 			maxCharacters: this.settings.folderContextMaxCharacters
 		};
 		attachments.push(...await this.buildFolderContextAttachments(folderContext, context.file?.path ?? ""));
+
+		const styleGuide = this.settings.includeStyleGuideContext
+			? await this.buildRoleContextAttachment("style_guide", this.settings.styleGuideContextPath, context.file?.path ?? "", this.settings.styleGuideMaxCharacters)
+			: null;
+		if (styleGuide) {
+			attachments.push(styleGuide);
+		}
+		const glossary = this.settings.includeGlossaryContext
+			? await this.buildRoleContextAttachment("glossary", this.settings.glossaryContextPath, context.file?.path ?? "", this.settings.glossaryMaxCharacters)
+			: null;
+		if (glossary) {
+			attachments.push(glossary);
+		}
 
 		if (this.settings.includeExcalidrawSummaries) {
 			attachments.push(...await this.buildExcalidrawSummaryAttachments(context));
@@ -4362,6 +5354,45 @@ export default class AskMatePlugin extends Plugin {
 			...history.map((message) => `${message.role === "user" ? "User" : "AskMate"}: ${message.text.trim()}`)
 		].join("\n");
 		return this.createContextAttachment("thread_history", "Threaded chat history", "AskMate chat", content, content.length);
+	}
+
+	private buildNoteHistoryAttachment(sourcePath: string): ContextAttachment | null {
+		if (!this.settings.noteHistoryEnabled || !this.settings.noteHistoryIncludeInContext || !sourcePath) {
+			return null;
+		}
+		const turns = this.getNoteHistoryForPath(sourcePath).slice(-this.settings.noteHistoryMaxTurnsPerNote);
+		if (turns.length === 0) {
+			return null;
+		}
+		const content = [
+			"Prior AskMate history for this same note. Use it as conversation memory, not as primary factual evidence.",
+			"",
+			...turns.map((turn) => [`User: ${turn.question}`, `AskMate: ${turn.answer}`].join("\n"))
+		].join("\n\n");
+		return this.createContextAttachment("note_history", "AskMate note history", sourcePath, content, content.length);
+	}
+
+	private async buildRoleContextAttachment(
+		kind: "style_guide" | "glossary",
+		path: string,
+		sourcePath: string,
+		maxCharacters: number
+	): Promise<ContextAttachment | null> {
+		const file = this.resolveMarkdownPath(path, sourcePath);
+		if (!file) {
+			return null;
+		}
+		const raw = (await this.app.vault.cachedRead(file)).trim();
+		if (!raw) {
+			return null;
+		}
+		const limit = normalizeBoundedInteger(maxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+		const role = kind === "style_guide" ? "Style guide" : "Glossary";
+		const guidance = kind === "style_guide"
+			? "Use this attachment for tone, formatting, naming, and writing conventions."
+			: "Use this attachment for domain terms, aliases, acronyms, and definitions.";
+		const content = [`${role} role context. ${guidance}`, "", raw.slice(0, limit)].join("\n");
+		return this.createContextAttachment(kind, `${role}: ${file.path}`, file.path, content, raw.length);
 	}
 
 	private createContextAttachment(
@@ -4641,7 +5672,9 @@ export default class AskMatePlugin extends Plugin {
 		const selectedModel = providerRef.model;
 		const forceImage = options.forceImage === true || intentKind === "explicit_image";
 		const autoImage = options.autoImage === true || intentKind === "auto_image";
-		const context = await this.getNoteContext(options.editor, options.file);
+		const context = options.forceFileContext && options.file instanceof TFile && options.file.extension === "md"
+			? await this.getFileNoteContext(options.file)
+			: await this.getNoteContext(options.editor, options.file);
 		const privacy = normalizeRequestPrivacyOptions({ ...this.settings.requestPrivacyDefaults, ...options.privacy });
 		const contextBudgetMode = normalizeContextBudgetMode(options.contextBudgetMode ?? this.settings.contextBudgetMode);
 		const attachments = await this.buildContextAttachments(context, options, privacy);
@@ -4654,11 +5687,15 @@ export default class AskMatePlugin extends Plugin {
 		const workflowVariableContext = privacy.includeNoteContext ? primaryPromptContext.text : "";
 		const requestQuestion = options.workflow ? this.expandWorkflowPrompt(options.workflow, contextWithAttachments, workflowVariableContext) : question;
 		const folderAttachments = attachments.filter((attachment) => attachment.kind === "folder_note");
+		const evidenceSources = privacy.includeNoteContext && providerRef.capability === "text" && !forceImage && !autoImage
+			? this.buildEvidenceSources(contextWithAttachments)
+			: [];
 
 		return {
 			context: contextWithAttachments,
 			question: requestQuestion,
 			title,
+			evidenceSources,
 			metadata: {
 				intentKind,
 				commandSource: options.commandSource ?? "sidebar",
@@ -4680,6 +5717,8 @@ export default class AskMatePlugin extends Plugin {
 				threadHistoryIncluded: attachments.some((attachment) => attachment.kind === "thread_history"),
 				folderContextPath: folderAttachments.length > 0 ? (options.folderContext?.path ?? this.settings.folderContextPath) : null,
 				folderContextFilesIncluded: folderAttachments.length,
+				evidenceEnabled: evidenceSources.length > 0,
+				evidenceSourceCount: evidenceSources.length,
 				forceImage,
 				autoImage,
 				workflowId: options.workflow?.id ?? null,
@@ -4687,6 +5726,94 @@ export default class AskMatePlugin extends Plugin {
 				createdAt: new Date().toISOString()
 			}
 		};
+	}
+
+	private buildEvidenceSources(context: NoteContext): EvidenceSource[] {
+		if (!this.settings.evidenceLinkedAnswersEnabled) {
+			return [];
+		}
+		const sources: EvidenceSource[] = [];
+		const addSources = (kind: EvidenceSource["kind"], title: string, sourcePath: string, markdown: string, startLine = 1): void => {
+			for (const source of this.buildEvidenceSourcesFromMarkdown(kind, title, sourcePath, markdown, startLine, sources.length)) {
+				sources.push(source);
+				if (sources.length >= this.settings.evidenceMaxSources) {
+					return;
+				}
+			}
+		};
+		addSources(
+			"primary_note",
+			context.source,
+			context.file?.path ?? "Untitled or unsaved note",
+			context.content,
+			context.source === "Selected text" ? context.selectionStartLine ?? 1 : 1
+		);
+		for (const attachment of context.attachments ?? []) {
+			if (!["additional_note", "folder_note", "excalidraw_summary"].includes(attachment.kind)) {
+				continue;
+			}
+			addSources(attachment.kind, attachment.title, attachment.sourcePath, attachment.content, 1);
+			if (sources.length >= this.settings.evidenceMaxSources) {
+				break;
+			}
+		}
+		return sources.slice(0, this.settings.evidenceMaxSources).map((source, index) => ({ ...source, id: `S${index + 1}` }));
+	}
+
+	private buildEvidenceSourcesFromMarkdown(
+		kind: EvidenceSource["kind"],
+		title: string,
+		sourcePath: string,
+		markdown: string,
+		startLine: number,
+		offset: number
+	): EvidenceSource[] {
+		const sources: EvidenceSource[] = [];
+		const lines = markdown.split(/\r?\n/);
+		let blockStart = 0;
+		let blockLines: string[] = [];
+		const flush = (): void => {
+			const excerpt = blockLines.join("\n").replace(/\s+/g, " ").trim().slice(0, 240);
+			if (excerpt) {
+				sources.push({
+					id: `S${offset + sources.length + 1}`,
+					kind,
+					sourcePath,
+					title,
+					lineStart: startLine + blockStart,
+					lineEnd: startLine + blockStart + Math.max(0, blockLines.length - 1),
+					excerpt
+				});
+			}
+			blockLines = [];
+		};
+		for (let index = 0; index < lines.length; index += 1) {
+			const line = lines[index];
+			if (!line.trim()) {
+				flush();
+				blockStart = index + 1;
+				continue;
+			}
+			if (/^#{1,6}\s+/.test(line) && blockLines.length > 0) {
+				flush();
+				blockStart = index;
+			}
+			if (blockLines.length === 0) {
+				blockStart = index;
+			}
+			blockLines.push(line);
+		}
+		flush();
+		return sources;
+	}
+
+	private formatEvidenceSources(request: AskRequest): string {
+		if (request.evidenceSources.length === 0) {
+			return "";
+		}
+		return request.evidenceSources
+			.map((source) => `[${source.id}] ${source.sourcePath}#L${source.lineStart}-L${source.lineEnd}: ${source.excerpt}`)
+			.join("\n");
 	}
 
 	private getPromptContextContent(request: AskRequest): string {
@@ -4763,6 +5890,7 @@ export default class AskMatePlugin extends Plugin {
 	private buildPrompt(request: AskRequest): string {
 		const sourcePath = request.context.file?.path ?? "Untitled or unsaved note";
 		const promptContext = this.getPromptContextContent(request);
+		const evidenceSourceText = request.metadata.privacy.includeNoteContext ? this.formatEvidenceSources(request) : "";
 
 		return [
 			"Goal: Complete the user request using the note context below.",
@@ -4784,6 +5912,10 @@ export default class AskMatePlugin extends Plugin {
 			"<note_context>",
 			promptContext,
 			"</note_context>",
+			evidenceSourceText ? "" : "",
+			evidenceSourceText ? "<evidence_sources>" : "",
+			evidenceSourceText,
+			evidenceSourceText ? "</evidence_sources>" : "",
 			"",
 			"<user_request>",
 			request.question,
@@ -4799,7 +5931,7 @@ export default class AskMatePlugin extends Plugin {
 			"",
 			"Success criteria: Address the exact request, preserve important source details, make factual claims traceable to the note context, and produce clear Markdown that can be pasted into an Obsidian note.",
 			"",
-			"Constraints: Do not invent details. If the context is insufficient, say what is missing. Thread history can clarify follow-up intent, but factual claims must still be grounded in the note context or explicit context attachments. Image manifests are metadata only, not pixel-level vision. For translation, preserve meaning, tone, structure, names, numbers, terminology, and formatting unless asked to adapt. For summaries, include quotes or timestamps only when present. For analysis, separate observations from recommendations when useful and label uncertainty.",
+			"Constraints: Do not invent details. If the context is insufficient, say what is missing. Thread history and note history can clarify follow-up intent, but factual claims must still be grounded in the note context or explicit context attachments. Style guide and glossary attachments are guidance roles for tone, terminology, and formatting, not primary evidence. Image manifests are metadata only, not pixel-level vision. When evidence sources are provided, cite factual claims with source IDs like [S1] or [S2] when useful. For translation, preserve meaning, tone, structure, names, numbers, terminology, and formatting unless asked to adapt. For summaries, include quotes or timestamps only when present. For analysis, separate observations from recommendations when useful and label uncertainty.",
 			"",
 			"Output: Stay concise and direct. Use headings, bullets, or numbered lists only when they improve readability. Stop when the user's request is answered."
 		].join("\n");
@@ -4987,6 +6119,7 @@ export default class AskMatePlugin extends Plugin {
 				commandSource: "command_palette",
 				outputMode: "note"
 			});
+			await this.confirmUsageGuardrails(request);
 			new Notice(`AskMate is running "${workflow.name}"...`);
 			const result = await this.runOpenAIRequest(request);
 
@@ -5010,6 +6143,7 @@ export default class AskMatePlugin extends Plugin {
 				outputMode: "note",
 				forceImage: true
 			});
+			await this.confirmUsageGuardrails(request);
 			new Notice("AskMate is generating an image...");
 			const result = await this.runOpenAIRequest(request, { forceImage: true });
 
@@ -5417,6 +6551,10 @@ class AskMateView extends ItemView {
 		this.contextEl.addEventListener("click", () => {
 			void this.showContextNotice();
 		});
+		const historyButton = this.createActionButton(headerLeft, "history", "Show note AskMate history", "askmate-history-button");
+		historyButton.addEventListener("click", () => {
+			void this.showNoteHistory();
+		});
 		void this.updateContextLabel();
 		this.modelEl = header.createDiv({ cls: "askmate-model-chip askmate-composer-model" });
 		this.updateModelLabel();
@@ -5495,6 +6633,12 @@ class AskMateView extends ItemView {
 		this.createPrivacyToggle(controls, "includeNoteContext", "Send note context");
 		this.createPrivacyToggle(controls, "includeImageReferences", "Send image references");
 		this.createContextBudgetSelector(controls);
+		const inspectButton = controls.createEl("button", { cls: "askmate-request-preview-button", text: "Inspect prompt" });
+		inspectButton.type = "button";
+		inspectButton.setAttribute("data-askmate-preview-control", "true");
+		inspectButton.addEventListener("click", () => {
+			void this.openPromptInspector();
+		});
 		this.createExtraContextControls(preview);
 		void this.refreshRequestPreview();
 	}
@@ -5634,19 +6778,26 @@ class AskMateView extends ItemView {
 			const tokenEstimate = estimateTokenCount(this.privacyOptions.includeNoteContext ? context.content.slice(0, promptCharacters) : "");
 			const extras = [
 				this.plugin.settings.threadedChatEnabled ? `thread ${this.plugin.settings.threadedChatMaxTurns} turns` : "",
+				this.plugin.settings.noteHistoryIncludeInContext ? "note history" : "",
 				this.additionalContextPaths.length > 0 ? `${this.additionalContextPaths.length} extra notes` : "",
 				this.folderContextEnabled && this.folderContextPath ? `folder ${this.folderContextMaxFiles} files` : "",
+				this.plugin.settings.includeStyleGuideContext ? "style guide" : "",
+				this.plugin.settings.includeGlossaryContext ? "glossary" : "",
 				this.plugin.settings.includeExcalidrawSummaries ? "Excalidraw summaries" : "",
 				this.plugin.settings.includeImageManifests && this.privacyOptions.includeImageReferences ? "image manifest" : ""
 			].filter(Boolean).join(", ");
-			summary.setText([
+			const previewParts = [
 				`${context.source}: ${source}`,
 				`Primary: ${promptCharacters.toLocaleString()} chars, about ${tokenEstimate.toLocaleString()} tokens`,
 				`Context: ${budgetLabel}`,
 				extras ? `Extra: ${extras}` : "",
 				`${provider.providerName}: ${provider.model}`,
 				formatOutputMode(this.plugin.settings.outputMode)
-			].filter(Boolean).join(" · "));
+			];
+			if (this.plugin.settings.usageGuardrailsEnabled && this.plugin.settings.usagePerRequestWarningTokens > 0 && tokenEstimate >= this.plugin.settings.usagePerRequestWarningTokens) {
+				previewParts.push(`Budget warning: about ${tokenEstimate.toLocaleString()} tokens`);
+			}
+			summary.setText(previewParts.filter(Boolean).join(" · "));
 		} catch {
 			if (refreshId === this.requestPreviewRefreshId) {
 				summary.setText("Open a Markdown note or select text before sending.");
@@ -6047,6 +7198,12 @@ class AskMateView extends ItemView {
 				return;
 			}
 
+			await this.plugin.confirmUsageGuardrails(request);
+
+			if (!this.isRunActive(run)) {
+				return;
+			}
+
 			const shouldGenerateImage = request.metadata.forceImage
 				|| request.metadata.autoImage
 				|| request.metadata.modelCapability === "image";
@@ -6083,6 +7240,7 @@ class AskMateView extends ItemView {
 				this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
 				this.renderAssistantMessageActions(activeAssistantMessage.actions, request, () => responseText, result.model);
 				this.messages.push({ role: "assistant", text: responseText });
+				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 
 				if (request.metadata.outputMode === "note") {
 					outputSideEffectStarted = true;
@@ -6111,6 +7269,7 @@ class AskMateView extends ItemView {
 			this.renderGeneratedImage(activeAssistantMessage.body, result);
 			this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
 			this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
+			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
 
 			if (request.metadata.outputMode === "note") {
 				outputSideEffectStarted = true;
@@ -6345,6 +7504,21 @@ class AskMateView extends ItemView {
 		this.createMessageAction(parent, "corner-down-left", "Use reply", () => {
 			this.useTextInComposer(getText());
 		});
+		const citations = this.plugin.extractEvidenceCitations(getText(), request.evidenceSources).slice(0, 6);
+		if (citations.length > 0) {
+			const evidence = parent.createDiv({ cls: "askmate-evidence-actions" });
+			for (const citation of citations) {
+				const button = evidence.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
+				button.type = "button";
+				button.addEventListener("click", () => {
+					void this.plugin.openEvidenceSource(citation.source);
+				});
+			}
+		}
+		this.createMessageAction(parent, "inbox", "Queue for review", async () => {
+			const item = await this.plugin.queueReviewItemFromRequest(request, getText(), model);
+			new Notice(`Queued AskMate review for ${item.sourcePath}.`);
+		}, { requiresIdle: true });
 		this.createMessageAction(parent, "file-plus", "New note", async () => {
 			const file = await this.plugin.createResultNote(request, getText(), { model });
 			this.addMessage("system", `Created note: ${file.path}`);
@@ -6602,6 +7776,34 @@ class AskMateView extends ItemView {
 		this.modelEl.setAttribute("title", capability === "image"
 			? "Image generation model"
 			: "Text provider and model for the next request");
+	}
+
+	private async openPromptInspector(): Promise<void> {
+		try {
+			const raw = this.questionEl.value.trim() || "Preview request";
+			const command = this.parseComposerCommand(raw);
+			const inspection = await this.plugin.inspectFinalPrompt(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", {
+				forceImage: command.forceImage,
+				privacy: this.privacyOptions,
+				contextBudgetMode: this.contextBudgetMode,
+				additionalContextPaths: this.additionalContextPaths,
+				folderContext: this.getFolderContextOptions(),
+				threadMessages: this.getThreadMessagesForNextRequest(),
+				includeThreadHistory: this.plugin.settings.threadedChatEnabled
+			});
+			new AskMatePromptInspectorModal(this.app, inspection).open();
+		} catch (error) {
+			new Notice(this.plugin.getErrorMessage(error));
+		}
+	}
+
+	private async showNoteHistory(): Promise<void> {
+		try {
+			const context = await this.plugin.getNoteContext();
+			new AskMateNoteHistoryModal(this.app, this.plugin, context.file?.path ?? "").open();
+		} catch (error) {
+			new Notice(this.plugin.getErrorMessage(error));
+		}
 	}
 
 	private async showContextNotice(): Promise<void> {
@@ -7211,7 +8413,7 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Show Apply preview")
-			.setDesc("Shows a before and after confirmation before AskMate writes generated text into a note.")
+			.setDesc("Shows a Markdown diff confirmation before AskMate writes generated text into a note.")
 			.addToggle((toggle) => {
 				toggle
 					.setValue(this.plugin.settings.showApplyPreview)
@@ -7220,6 +8422,8 @@ class AskMateSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		this.renderAskMateMvpSettings(containerEl);
 
 		this.renderWorkflowDisplaySettings(containerEl);
 		this.renderCustomWorkflows(containerEl);
@@ -7230,6 +8434,203 @@ class AskMateSettingTab extends PluginSettingTab {
 			cls: "askmate-settings-note",
 			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
 		});
+	}
+
+
+	private renderAskMateMvpSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Advanced AskMate features").setHeading();
+
+		new Setting(containerEl)
+			.setName("Evidence-linked answers")
+			.setDesc("Ask text models to cite evidence sources like [S1], then show jump-to-source actions on cited replies.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.evidenceLinkedAnswersEnabled).onChange(async (value) => {
+				this.plugin.settings.evidenceLinkedAnswersEnabled = value;
+				await this.plugin.saveSettings();
+			}))
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setValue(String(this.plugin.settings.evidenceMaxSources)).onChange(async (value) => {
+					this.plugin.settings.evidenceMaxSources = normalizeBoundedInteger(value, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Frontmatter Apply handling")
+			.setDesc("Controls how full-note Apply handles YAML frontmatter.")
+			.addDropdown((dropdown) => dropdown
+				.addOption("preserve", "Preserve original frontmatter")
+				.addOption("confirm", "Confirm frontmatter changes")
+				.addOption("replace", "Replace from AI output")
+				.setValue(this.plugin.settings.frontmatterApplyPolicy)
+				.onChange(async (value) => {
+					this.plugin.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(value);
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Note-specific AskMate history")
+			.setDesc("Stores successful AskMate turns per source note. Optionally include that history as context for future requests.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.noteHistoryEnabled).onChange(async (value) => {
+				this.plugin.settings.noteHistoryEnabled = value;
+				await this.plugin.saveSettings();
+			}))
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.noteHistoryIncludeInContext).onChange(async (value) => {
+				this.plugin.settings.noteHistoryIncludeInContext = value;
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+			.setName("Style guide context role")
+			.setDesc("Pin a Markdown note as a persistent style guide context attachment.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.includeStyleGuideContext).onChange(async (value) => {
+				this.plugin.settings.includeStyleGuideContext = value;
+				await this.plugin.saveSettings();
+			}))
+			.addText((text) => text.setPlaceholder("Path or wikilink").setValue(this.plugin.settings.styleGuideContextPath).onChange(async (value) => {
+				this.plugin.settings.styleGuideContextPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+			.setName("Glossary context role")
+			.setDesc("Pin a Markdown note as a persistent glossary or terminology context attachment.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.includeGlossaryContext).onChange(async (value) => {
+				this.plugin.settings.includeGlossaryContext = value;
+				await this.plugin.saveSettings();
+			}))
+			.addText((text) => text.setPlaceholder("Path or wikilink").setValue(this.plugin.settings.glossaryContextPath).onChange(async (value) => {
+				this.plugin.settings.glossaryContextPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+			.setName("Smart result-note placement")
+			.setDesc("Create result notes under an AskMate subfolder beside the source note, and optionally append backlinks to the source.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.smartResultPlacementEnabled).onChange(async (value) => {
+				this.plugin.settings.smartResultPlacementEnabled = value;
+				await this.plugin.saveSettings();
+			}))
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.appendResultBacklinkToSource).onChange(async (value) => {
+				this.plugin.settings.appendResultBacklinkToSource = value;
+				await this.plugin.saveSettings();
+			}));
+
+		this.renderBatchWorkflowRunner(containerEl);
+		this.renderReviewQueue(containerEl);
+	}
+
+	private renderBatchWorkflowRunner(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Batch workflow runner").setHeading();
+		let controller: AbortController | null = null;
+		const box = containerEl.createDiv({ cls: "askmate-batch-runner" });
+		const progress = box.createDiv({ cls: "askmate-batch-progress", text: "Idle." });
+		const bar = box.createDiv({ cls: "askmate-batch-progress-bar" });
+		const fill = bar.createDiv({ cls: "askmate-batch-progress-fill" });
+
+		new Setting(box)
+			.setName("Batch folder")
+			.setDesc("Run one workflow separately for each Markdown note in this folder.")
+			.addText((text) => text.setPlaceholder("Folder path").setValue(this.plugin.settings.batchWorkflowFolderPath).onChange(async (value) => {
+				this.plugin.settings.batchWorkflowFolderPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(box)
+			.setName("Batch workflow")
+			.addDropdown((dropdown) => {
+				for (const workflow of this.plugin.getAllWorkflows()) {
+					dropdown.addOption(workflow.id, workflow.name);
+				}
+				dropdown.setValue(this.plugin.settings.batchWorkflowId).onChange(async (value) => {
+					this.plugin.settings.batchWorkflowId = value;
+					await this.plugin.saveSettings();
+				});
+			})
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setValue(String(this.plugin.settings.batchWorkflowMaxFiles)).onChange(async (value) => {
+					this.plugin.settings.batchWorkflowMaxFiles = normalizeBoundedInteger(value, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(box)
+			.setName("Batch output")
+			.addDropdown((dropdown) => dropdown
+				.addOption("note", "Create result notes")
+				.addOption("review-queue", "Queue proposed note changes")
+				.setValue(this.plugin.settings.batchWorkflowOutputMode)
+				.onChange(async (value) => {
+					this.plugin.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(value);
+					await this.plugin.saveSettings();
+				}))
+			.addButton((button) => button.setButtonText("Run batch").onClick(async () => {
+				controller = new AbortController();
+				button.setDisabled(true);
+				try {
+					const summary = await this.plugin.runBatchWorkflow({
+						folderPath: this.plugin.settings.batchWorkflowFolderPath,
+						workflowId: this.plugin.settings.batchWorkflowId,
+						maxFiles: this.plugin.settings.batchWorkflowMaxFiles,
+						outputMode: this.plugin.settings.batchWorkflowOutputMode,
+						contextBudgetMode: this.plugin.settings.contextBudgetMode
+					}, (item) => {
+						progress.setText(item.message);
+						fill.style.width = item.total > 0 ? `${Math.round(((item.completed + item.failed) / item.total) * 100)}%` : "0%";
+					}, controller?.signal);
+					new Notice(`AskMate batch complete: ${summary.completed} completed, ${summary.failed} failed.`);
+					this.display();
+				} catch (error) {
+					new Notice(this.plugin.getErrorMessage(error));
+				} finally {
+					button.setDisabled(false);
+					controller = null;
+				}
+			}))
+			.addButton((button) => button.setButtonText("Cancel").onClick(() => controller?.abort()));
+	}
+
+	private renderReviewQueue(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Review queue").setHeading();
+		const queue = containerEl.createDiv({ cls: "askmate-review-queue" });
+		const pending = this.plugin.getPendingReviewQueueItems();
+		new Setting(queue)
+			.setName("Review queue max items")
+			.setDesc(`${pending.length} pending AI-suggested note change${pending.length === 1 ? "" : "s"}.`)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setValue(String(this.plugin.settings.reviewQueueMaxItems)).onChange(async (value) => {
+					this.plugin.settings.reviewQueueMaxItems = normalizeBoundedInteger(value, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
+					await this.plugin.saveSettings();
+				});
+			});
+		if (pending.length === 0) {
+			queue.createDiv({ cls: "askmate-usage-empty", text: "No queued reviews yet." });
+			return;
+		}
+		for (const item of pending.slice().reverse()) {
+			const card = queue.createDiv({ cls: "askmate-review-item" });
+			card.createDiv({ cls: "askmate-review-item-meta", text: `${formatUsageTimestamp(item.createdAt)} · ${item.sourcePath} · ${item.workflowName ?? item.title}` });
+			card.createDiv({ cls: "askmate-review-excerpt", text: truncateLabel(item.proposedText, 360) });
+			const actions = card.createDiv({ cls: "askmate-review-item-actions" });
+			const apply = actions.createEl("button", { cls: "mod-cta", text: "Apply" });
+			apply.type = "button";
+			apply.addEventListener("click", () => {
+				void this.plugin.applyReviewQueueItem(item.id).then((message) => {
+					new Notice(message);
+					this.display();
+				}).catch((error) => new Notice(this.plugin.getErrorMessage(error)));
+			});
+			const dismiss = actions.createEl("button", { text: "Dismiss" });
+			dismiss.type = "button";
+			dismiss.addEventListener("click", () => {
+				void this.plugin.dismissReviewQueueItem(item.id).then(() => this.display());
+			});
+			const copy = actions.createEl("button", { text: "Copy proposal" });
+			copy.type = "button";
+			copy.addEventListener("click", () => void navigator.clipboard.writeText(item.proposedText));
+		}
 	}
 
 	private renderWorkflowDisplaySettings(containerEl: HTMLElement): void {
@@ -7470,6 +8871,8 @@ class AskMateSettingTab extends PluginSettingTab {
 			text: "Tracks AskMate API operations by provider, including text responses, image prompt planning, and image generation. Images API rows may show zero tokens."
 		});
 
+		this.renderUsageGuardrailSettings(statsEl);
+
 		const actions = header.createDiv({ cls: "askmate-usage-actions" });
 		const resetButton = actions.createEl("button", {
 			cls: "mod-warning",
@@ -7495,6 +8898,55 @@ class AskMateSettingTab extends PluginSettingTab {
 		this.renderRecentTokenBarChart(chartGrid, records.slice(-RECENT_TOKEN_BAR_RECORD_LIMIT));
 		this.renderTokenRunChart(chartGrid, records.slice(-TOKEN_RUN_CHART_RECORD_LIMIT));
 		this.renderRecentUsageTable(statsEl, records.slice(-RECENT_TOKEN_TABLE_RECORD_LIMIT).reverse());
+	}
+
+	private renderUsageGuardrailSettings(parent: HTMLElement): void {
+		const card = parent.createDiv({ cls: "askmate-usage-guardrails" });
+		new Setting(card)
+			.setName("Usage budgets and guardrails")
+			.setDesc("Warn or block requests before they use a large context or exceed daily or monthly token budgets.")
+			.addToggle((toggle) => toggle.setValue(this.plugin.settings.usageGuardrailsEnabled).onChange(async (value) => {
+				this.plugin.settings.usageGuardrailsEnabled = value;
+				await this.plugin.saveSettings();
+			}))
+			.addDropdown((dropdown) => dropdown.addOption("warn", "Warn").addOption("block", "Block budgets").setValue(this.plugin.settings.usageBudgetEnforcement).onChange(async (value) => {
+				this.plugin.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(value);
+				await this.plugin.saveSettings();
+			}));
+		new Setting(card)
+			.setName("Token budgets")
+			.setDesc("Use 0 to disable a limit. Values are estimated before sending and recorded after completion.")
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setPlaceholder("Daily").setValue(String(this.plugin.settings.usageDailyTokenBudget)).onChange(async (value) => {
+					this.plugin.settings.usageDailyTokenBudget = normalizeBoundedInteger(value, 0, 0, 10000000);
+					await this.plugin.saveSettings();
+				});
+			})
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setPlaceholder("Monthly").setValue(String(this.plugin.settings.usageMonthlyTokenBudget)).onChange(async (value) => {
+					this.plugin.settings.usageMonthlyTokenBudget = normalizeBoundedInteger(value, 0, 0, 100000000);
+					await this.plugin.saveSettings();
+				});
+			});
+		new Setting(card)
+			.setName("Per-request thresholds")
+			.setDesc("Warn above the warning threshold. Hard limit always blocks. Use 0 to disable.")
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setPlaceholder("Warning").setValue(String(this.plugin.settings.usagePerRequestWarningTokens)).onChange(async (value) => {
+					this.plugin.settings.usagePerRequestWarningTokens = normalizeBoundedInteger(value, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
+					await this.plugin.saveSettings();
+				});
+			})
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.setPlaceholder("Hard limit").setValue(String(this.plugin.settings.usagePerRequestHardLimitTokens)).onChange(async (value) => {
+					this.plugin.settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(value, 0, 0, 10000000);
+					await this.plugin.saveSettings();
+				});
+			});
 	}
 
 	private async resetUsageStatistics(): Promise<void> {

@@ -35,6 +35,15 @@ It is designed for note-focused Q&A, summarization, rewriting, translation, work
 - Supports compact and expanded composer layouts plus first-use onboarding tips.
 - Shows referenced note images in chat only when the user asks to show or preview visual context.
 - Tracks local usage statistics for AskMate operations.
+- Adds evidence-linked answer citations such as `[S1]` with jump-to-source actions when the model cites a source.
+- Shows a Markdown diff Apply preview and can preserve, confirm, or replace YAML frontmatter during full-note Apply.
+- Includes a final prompt inspector that previews the exact instructions and prompt locally before a request is sent.
+- Stores optional note-specific AskMate history and can include it as bounded context for the same note.
+- Supports persistent vault style guide and glossary context roles.
+- Lets you queue AI-suggested note changes for later review before applying them.
+- Can place result notes beside the source note and optionally append backlinks to generated results.
+- Includes a batch workflow runner for running one workflow across a folder of Markdown notes.
+- Adds usage budgets and per-request guardrails before large requests run.
 - Includes workflow buttons for summary, planning, explanation, critique, translation, quotes, rewriting, and more.
 
 ## Requirements
@@ -55,6 +64,10 @@ AskMate sends data to the selected provider only when you run a request. Image g
 - The full current or remembered Markdown note when no text is selected.
 - Workflow instructions selected in AskMate.
 - Image generation prompts and prompt-planning requests.
+- Optional note-specific AskMate history when that setting is enabled for context.
+- Optional style guide and glossary notes when those context roles are enabled.
+
+The final prompt inspector is local. It shows what AskMate would send but does not contact a provider by itself.
 
 AskMate stores plugin settings in Obsidian plugin data. Provider API keys are stored through Obsidian `SecretStorage`; AskMate stores the selected secret names, not the raw keys.
 
@@ -134,7 +147,9 @@ AskMate is note-first by default. Previous sidebar turns are displayed for conve
 
 Only one request can run at a time. Send, Image, workflow cards, output controls, reasoning controls, Clear, and vault-mutating assistant actions are guarded while a request is active. Stop cancels the active request.
 
-The request preview shows the captured source, estimated primary context size, context budget, provider, model, output mode, and enabled extra context before sending. You can disable note context or image references for the next request from the preview controls. You can also add extra note paths or folder context per request from the Extra context panel.
+The request preview shows the captured source, estimated primary context size, context budget, provider, model, output mode, enabled extra context, and large-request budget warnings before sending. You can disable note context or image references for the next request from the preview controls. You can also add extra note paths or folder context per request from the Extra context panel. Use Inspect prompt to preview the final instructions and prompt locally before sending.
+
+When evidence-linked answers are enabled, AskMate provides numbered source excerpts to text models and asks them to cite factual claims with source IDs such as `[S1]`. Cited assistant replies show source chips that jump back to the referenced note lines when the file is still available.
 
 ## Image Generation Workflow
 
@@ -161,6 +176,9 @@ AskMate can include more than the active note when you opt in:
 - Multi-note context, enter explicit Markdown paths or wikilinks in settings or the sidebar Extra context panel.
 - Folder context, enable a specific folder path with max file and character limits. AskMate reads Markdown files in deterministic path order and skips hidden/plugin folders.
 - Excalidraw summaries, extract readable text, labels, and embedded references from `.excalidraw` or `.excalidraw.md` files. This is text extraction, not pixel-level drawing analysis.
+- Style guide context, pin a Markdown note whose tone, formatting, naming, and writing conventions should guide AskMate.
+- Glossary context, pin a Markdown note with terms, aliases, acronyms, and definitions.
+- Note history context, optionally include prior AskMate turns for the same source note.
 - Image manifests, include image paths, labels, extensions, file sizes, and reference metadata. This does not send image pixels to text providers.
 
 All extra context is still subject to request privacy controls and the selected context budget.
@@ -185,7 +203,9 @@ AskMate has three output modes:
 
 In Apply mode, AskMate targets the note captured when the request was built. If full-note replacement is needed, AskMate asks for confirmation first.
 
-When Apply preview is enabled, AskMate shows before and after size details and excerpts before writing generated text. Successful Apply and image insert operations include undo guidance.
+When Apply preview is enabled, AskMate shows a Markdown line diff before writing generated text. Full-note Apply can preserve original YAML frontmatter, confirm frontmatter changes, or replace frontmatter from the AI output depending on the selected setting. Successful Apply and image insert operations include undo guidance.
+
+Assistant replies also include Queue for review, which saves a proposed note change in settings so you can apply, dismiss, or copy it later from the review queue.
 
 Partial Apply actions are available on assistant replies:
 
@@ -193,7 +213,7 @@ Partial Apply actions are available on assistant replies:
 - Apply selected block, requires the original request to use selected text.
 - Apply to heading, asks for a Markdown heading title or full heading path such as `Project Plan > Risks`, refuses ambiguous headings, and replaces only that section body.
 
-New note output uses configurable Markdown templates for text and image results. Custom workflows can override the global text result template with a per-workflow result note template. Generated PNGs use configurable folder and file-name templates, then AskMate adds a timestamp and resolves duplicate paths safely.
+New note output uses configurable Markdown templates for text and image results. Custom workflows can override the global text result template with a per-workflow result note template. Generated PNGs use configurable folder and file-name templates, then AskMate adds a timestamp and resolves duplicate paths safely. Smart result-note placement can create result notes in an `AskMate` subfolder beside the source note, and optional backlinking appends generated result links to the source note.
 
 ## Workflows
 
@@ -222,6 +242,8 @@ Rewrite Polish
 
 Workflow requests use the current note or selected text as context. Workflows require a text-capable provider model.
 
+The batch workflow runner in settings can run one selected workflow across a folder of Markdown notes. It processes each note as its own request and can create separate result notes or queue proposed changes for review.
+
 Custom workflows can be created from AskMate settings. They appear in the sidebar workflow panel. You can favorite, hide, and reorder sidebar workflows. Built-in workflows remain available from Obsidian's command palette.
 
 Custom workflow presets can be exported to JSON and imported from JSON in settings. Imports append workflows and do not overwrite existing ones.
@@ -249,6 +271,8 @@ The settings tab tracks local operation usage records for:
 - Image generation through the Images API.
 
 Token totals use provider-reported usage when available and local estimates otherwise. Images API rows may show zero tokens because image generation responses do not expose token usage in the same way.
+
+Usage budgets and guardrails can warn or block before a request when the estimated input tokens exceed per-request thresholds or daily/monthly budgets. Hard per-request limits always block.
 
 ## Troubleshooting
 
@@ -290,6 +314,10 @@ AskMate is already useful today, but the goal is to keep making it more flexible
 - [x] Add better Excalidraw context extraction and preview support.
 - [x] Add smarter image understanding when a note includes images through image metadata manifests.
 - [x] Add context budget controls so users can choose concise, balanced, or expanded context.
+- [x] Add evidence-linked answers with source IDs and jump-to-source actions.
+- [x] Add a final prompt inspector for local prompt review before sending.
+- [x] Add note-specific AskMate history.
+- [x] Add style guide and glossary context roles.
 
 ### Workflows
 
@@ -298,10 +326,15 @@ AskMate is already useful today, but the goal is to keep making it more flexible
 - [x] Add import and export for workflow presets.
 - [x] Add workflow variables for note title, selected text, current date, and custom instructions.
 - [x] Add per-workflow result templates.
+- [x] Add a batch workflow runner for folders.
 
 ### Output and editing
 
 - [x] Add safer Apply preview before applying generated text to a note.
+- [x] Add Markdown diff Apply preview.
+- [x] Add frontmatter-aware editing controls for full-note Apply.
+- [x] Add a review queue for AI-suggested note changes.
+- [x] Add smart result-note placement and optional backlinks.
 - [x] Add partial apply options for headings, sections, and selected blocks.
 - [x] Add undo guidance after Apply operations.
 - [x] Add configurable result note templates.
@@ -314,6 +347,7 @@ AskMate is already useful today, but the goal is to keep making it more flexible
 - [x] Add retry controls for failed API requests.
 - [x] Add clearer error messages for provider authentication and quota issues.
 - [x] Add smoke test coverage for prompt building seams, context capture seams, Apply safety guards, and usage tracking seams.
+- [x] Add usage budgets and request guardrails.
 
 ### User experience
 

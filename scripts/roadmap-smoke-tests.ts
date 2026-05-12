@@ -48,12 +48,42 @@ assertIncludes("main.ts", main, "resultNoteTemplate", "per-workflow result templ
 assertPattern("main.ts", main, /imagePromptPlanningProviderId:\s*"same-as-chat"/, "default planning provider role");
 assertPattern("main.ts", main, /{{\s*response\s*}}/, "result template response variable");
 assertPattern("main.ts", main, /{{\s*imageEmbed\s*}}/, "image result template embed variable");
+assertIncludes("main.ts", main, "EvidenceSource", "evidence source model");
+assertIncludes("main.ts", main, "openEvidenceSource", "evidence jump action");
+assertIncludes("main.ts", main, "AskMateDiffConfirmModal", "Markdown diff Apply preview modal");
+assertIncludes("main.ts", main, "frontmatterApplyPolicy", "frontmatter-aware Apply setting");
+assertIncludes("main.ts", main, "runBatchWorkflow", "batch workflow runner");
+assertIncludes("main.ts", main, "PromptInspection", "final prompt inspector model");
+assertIncludes("main.ts", main, "noteHistoryStore", "note-specific AskMate history store");
+assertIncludes("main.ts", main, "styleGuideContextPath", "style guide context role");
+assertIncludes("main.ts", main, "glossaryContextPath", "glossary context role");
+assertIncludes("main.ts", main, "ReviewQueueItem", "review queue model");
+assertIncludes("main.ts", main, "smartResultPlacementEnabled", "smart result placement setting");
+assertIncludes("main.ts", main, "usageGuardrailsEnabled", "usage guardrails setting");
 
 assertIncludes("styles.css", styles, "askmate-composer-layout-expanded", "expanded composer layout styles");
 assertIncludes("styles.css", styles, "askmate-onboarding-card", "onboarding styles");
 assertIncludes("styles.css", styles, "askmate-focus-ring", "theme focus polish");
+assertIncludes("styles.css", styles, "askmate-diff-line-added", "diff preview styles");
+assertIncludes("styles.css", styles, "askmate-evidence-chip", "evidence chip styles");
+assertIncludes("styles.css", styles, "askmate-prompt-inspector", "prompt inspector styles");
+assertIncludes("styles.css", styles, "askmate-batch-progress", "batch progress styles");
+assertIncludes("styles.css", styles, "askmate-review-item", "review queue styles");
+assertIncludes("styles.css", styles, "askmate-budget-warning", "budget warning styles");
+assertIncludes("styles.css", styles, "min-height: 0;\n\tmin-width: 0;\n\toverflow: hidden;", "sidebar scroll containment");
+assertIncludes("styles.css", styles, "flex: 1 1 0;\n\tflex-direction: column;\n\tgap: 8px;\n\tmin-height: 0;\n\toverflow-y: auto;\n\toverscroll-behavior: contain;", "message pane scroll containment");
 
 assertIncludes("README.md", readme, "Roadmap", "roadmap documentation");
+assertIncludes("README.md", readme, "evidence-linked", "evidence-linked answers documentation");
+assertIncludes("README.md", readme, "Markdown diff Apply preview", "diff Apply documentation");
+assertIncludes("README.md", readme, "frontmatter", "frontmatter controls documentation");
+assertIncludes("README.md", readme, "batch workflow runner", "batch workflow documentation");
+assertIncludes("README.md", readme, "final prompt inspector", "prompt inspector documentation");
+assertIncludes("README.md", readme, "note-specific AskMate history", "note history documentation");
+assertIncludes("README.md", readme, "style guide and glossary", "role context documentation");
+assertIncludes("README.md", readme, "Queue for review", "review queue documentation");
+assertIncludes("README.md", readme, "smart result-note placement", "smart placement documentation");
+assertIncludes("README.md", readme, "Usage budgets", "usage guardrails documentation");
 assertNotPattern("README.md", readme, /^- \[ \]/m, "unchecked roadmap boxes should be absent");
 
 console.log("AskMate roadmap smoke tests passed.");

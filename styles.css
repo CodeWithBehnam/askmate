@@ -11,7 +11,9 @@
 	flex-direction: column;
 	gap: 8px;
 	height: 100%;
+	min-height: 0;
 	min-width: 0;
+	overflow: hidden;
 	padding: 8px;
 }
 
@@ -84,11 +86,12 @@
 
 .askmate-messages {
 	display: flex;
-	flex: 1 1 auto;
+	flex: 1 1 0;
 	flex-direction: column;
 	gap: 8px;
-	min-height: 220px;
+	min-height: 0;
 	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: 2px 2px 4px;
 	scrollbar-width: thin;
 }
@@ -1489,4 +1492,159 @@
 	font-family: var(--font-monospace);
 	min-height: 120px;
 	width: 100%;
+}
+
+/* AskMate advanced MVP surfaces */
+.askmate-evidence-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 4px 0;
+}
+
+.askmate-evidence-chip {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: 11px;
+	padding: 3px 8px;
+	cursor: pointer;
+}
+
+.askmate-evidence-chip:hover,
+.askmate-evidence-chip:focus-visible {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+
+.askmate-diff-modal,
+.askmate-prompt-inspector,
+.askmate-note-history {
+	max-width: min(920px, 92vw);
+}
+
+.askmate-diff-summary,
+.askmate-prompt-inspector-meta,
+.askmate-note-history-meta,
+.askmate-review-item-meta {
+	color: var(--text-muted);
+	font-size: 12px;
+	margin: 4px 0 8px;
+}
+
+.askmate-diff-warning,
+.askmate-budget-warning {
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--text-warning);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	padding: 8px 10px;
+	margin: 8px 0;
+}
+
+.askmate-budget-blocker {
+	border-left-color: var(--text-error);
+}
+
+.askmate-diff-view {
+	max-height: 52vh;
+	overflow: auto;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+}
+
+.askmate-diff-line {
+	display: grid;
+	grid-template-columns: 48px 48px 1fr;
+	gap: 8px;
+	padding: 2px 8px;
+	white-space: pre-wrap;
+}
+
+.askmate-diff-line-added {
+	background: color-mix(in srgb, var(--color-green) 12%, transparent);
+}
+
+.askmate-diff-line-removed {
+	background: color-mix(in srgb, var(--color-red) 12%, transparent);
+}
+
+.askmate-diff-line-context {
+	color: var(--text-muted);
+}
+
+.askmate-diff-line-number {
+	color: var(--text-faint);
+	text-align: right;
+	user-select: none;
+}
+
+.askmate-prompt-inspector-label {
+	font-weight: 600;
+	margin-top: 12px;
+}
+
+.askmate-prompt-inspector-textarea {
+	width: 100%;
+	min-height: 180px;
+	resize: vertical;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+
+.askmate-request-preview-button {
+	border-radius: 999px;
+	font-size: 11px;
+	padding: 3px 8px;
+}
+
+.askmate-note-history-turn,
+.askmate-review-item,
+.askmate-batch-runner,
+.askmate-usage-guardrails {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	padding: 10px;
+	margin: 8px 0;
+	background: var(--background-secondary);
+}
+
+.askmate-note-history-actions,
+.askmate-review-item-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.askmate-batch-progress {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+}
+
+.askmate-batch-progress-bar {
+	height: 8px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+	margin-bottom: 10px;
+}
+
+.askmate-batch-progress-fill {
+	height: 100%;
+	width: 0;
+	background: var(--interactive-accent);
+	transition: width 180ms ease;
+}
+
+.askmate-batch-log,
+.askmate-request-preview-budget,
+.askmate-review-excerpt {
+	font-size: 12px;
+	color: var(--text-muted);
 }
