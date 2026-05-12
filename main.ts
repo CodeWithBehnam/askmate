@@ -4,6 +4,7 @@ import {
 	ItemView,
 	MarkdownRenderer,
 	MarkdownView,
+	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
@@ -12,7 +13,8 @@ import {
 	Setting,
 	TFile,
 	WorkspaceLeaf,
-	normalizePath
+	normalizePath,
+	requestUrl
 } from "obsidian";
 
 const ASKMATE_VIEW_TYPE = "askmate-sidebar-view";
@@ -61,6 +63,13 @@ interface ProviderTextResult {
 	model: string;
 	endpoint: ApiEndpoint;
 	usage: OpenAITokenUsage | null;
+}
+
+interface AskMateHttpResponse<T> {
+	status: number;
+	ok: boolean;
+	body: T | null;
+	text: string;
 }
 
 interface AskMateSettings {
@@ -717,7 +726,7 @@ function normalizeTemplateString(value: unknown, fallback: string): string {
 		return fallback;
 	}
 
-	const trimmed = value.replace(/\u0000/g, "").slice(0, MAX_TEMPLATE_LENGTH).trim();
+	const trimmed = stripNullCharacters(value).slice(0, MAX_TEMPLATE_LENGTH).trim();
 	return trimmed || fallback;
 }
 
@@ -726,7 +735,7 @@ function normalizeOptionalString(value: unknown, maxLength: number): string {
 		return "";
 	}
 
-	return value.replace(/\u0000/g, "").slice(0, maxLength).trim();
+	return stripNullCharacters(value).slice(0, maxLength).trim();
 }
 
 function normalizeNullableIsoDate(value: unknown): string | null {
@@ -744,7 +753,7 @@ function normalizeTranslationTargetLanguage(value: unknown): string {
 	}
 
 	const normalized = value
-		.replace(/[\u0000-\u001F\u007F]/g, " ")
+		.split("\n").map((line) => stripControlCharacters(line, " ")).join("\n")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, MAX_TRANSLATION_TARGET_LANGUAGE_LENGTH)
@@ -838,7 +847,7 @@ function normalizeCustomWorkflow(value: unknown, fallbackIndex: number): CustomW
 		accent: normalizeWorkflowAccent(workflow.accent),
 		prompt: prompt || "Goal: Help with the current note.",
 		resultNoteTemplate: typeof workflow.resultNoteTemplate === "string"
-			? workflow.resultNoteTemplate.replace(/\u0000/g, "").slice(0, MAX_TEMPLATE_LENGTH).trim()
+			? stripNullCharacters(workflow.resultNoteTemplate).slice(0, MAX_TEMPLATE_LENGTH).trim()
 			: "",
 		hidden: Boolean(workflow.hidden),
 		createdAt: typeof workflow.createdAt === "string" && Number.isFinite(Date.parse(workflow.createdAt)) ? workflow.createdAt : now,
@@ -1108,9 +1117,23 @@ function isAbortError(error: unknown): boolean {
 	return error instanceof Error && error.name === "AbortError";
 }
 
+function stripControlCharacters(value: string, replacement = ""): string {
+	return Array.from(value, (character) => {
+		const code = character.charCodeAt(0);
+		if (code === 127 || (code < 32 && character !== "\n" && character !== "\t")) {
+			return replacement;
+		}
+		return character;
+	}).join("");
+}
+
+function stripNullCharacters(value: string): string {
+	return Array.from(value, (character) => character.charCodeAt(0) === 0 ? "" : character).join("");
+}
+
 function normalizePlannedPrompt(value: string): string {
 	return value
-		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+		.split("\n").map((line) => stripControlCharacters(line, " ")).join("\n")
 		.replace(/[ \t]+/g, " ")
 		.replace(/\n{4,}/g, "\n\n\n")
 		.trim()
@@ -1794,6 +1817,119 @@ function getModelCapability(model: string): ModelCapability {
 	return isGptImage2Model(model) ? "image" : "text";
 }
 
+class AskMateConfirmModal extends Modal {
+	private readonly message: string;
+	private readonly resolve: (value: boolean) => void;
+	private resolved = false;
+
+	constructor(app: App, message: string, resolve: (value: boolean) => void) {
+		super(app);
+		this.message = message;
+		this.resolve = resolve;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createDiv({ cls: "askmate-modal-title", text: "Confirm AskMate action" });
+		contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const cancelButton = actions.createEl("button", { text: "Cancel" });
+		cancelButton.type = "button";
+		cancelButton.addEventListener("click", () => {
+			this.finish(false);
+		});
+		const confirmButton = actions.createEl("button", { cls: "mod-cta", text: "Confirm" });
+		confirmButton.type = "button";
+		confirmButton.addEventListener("click", () => {
+			this.finish(true);
+		});
+	}
+
+	onClose(): void {
+		this.finish(false);
+	}
+
+	private finish(value: boolean): void {
+		if (this.resolved) {
+			return;
+		}
+		this.resolved = true;
+		this.resolve(value);
+		this.close();
+	}
+}
+
+class AskMatePromptModal extends Modal {
+	private readonly message: string;
+	private readonly initialValue: string;
+	private readonly resolve: (value: string | null) => void;
+	private resolved = false;
+	private inputEl: HTMLInputElement | null = null;
+
+	constructor(app: App, message: string, initialValue: string, resolve: (value: string | null) => void) {
+		super(app);
+		this.message = message;
+		this.initialValue = initialValue;
+		this.resolve = resolve;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createDiv({ cls: "askmate-modal-title", text: "AskMate input" });
+		contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
+		this.inputEl = contentEl.createEl("input", { type: "text", value: this.initialValue });
+		this.inputEl.addClass("askmate-modal-input");
+		this.inputEl.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				this.finish(this.inputEl?.value ?? "");
+			}
+			if (event.key === "Escape") {
+				this.finish(null);
+			}
+		});
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const cancelButton = actions.createEl("button", { text: "Cancel" });
+		cancelButton.type = "button";
+		cancelButton.addEventListener("click", () => {
+			this.finish(null);
+		});
+		const submitButton = actions.createEl("button", { cls: "mod-cta", text: "Continue" });
+		submitButton.type = "button";
+		submitButton.addEventListener("click", () => {
+			this.finish(this.inputEl?.value ?? "");
+		});
+		this.inputEl.focus();
+		this.inputEl.select();
+	}
+
+	onClose(): void {
+		this.finish(null);
+	}
+
+	private finish(value: string | null): void {
+		if (this.resolved) {
+			return;
+		}
+		this.resolved = true;
+		this.resolve(value);
+		this.close();
+	}
+}
+
+function askMateConfirm(app: App, message: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		new AskMateConfirmModal(app, message, resolve).open();
+	});
+}
+
+function askMatePrompt(app: App, message: string, initialValue = ""): Promise<string | null> {
+	return new Promise((resolve) => {
+		new AskMatePromptModal(app, message, initialValue, resolve).open();
+	});
+}
+
 export default class AskMatePlugin extends Plugin {
 	settings: AskMateSettings;
 	private lastMarkdownView: MarkdownView | null = null;
@@ -1829,8 +1965,8 @@ export default class AskMatePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "open-askmate-sidebar",
-			name: "Open AskMate sidebar",
+			id: "open-sidebar",
+			name: "Open sidebar",
 			callback: () => {
 				void this.activateView();
 			}
@@ -1857,7 +1993,7 @@ export default class AskMatePlugin extends Plugin {
 		for (const workflow of WORKFLOWS) {
 			this.addCommand({
 				id: workflow.commandId,
-				name: `Workflow: ${workflow.name}`,
+				name: workflow.name,
 				editorCallback: async (editor, ctx) => {
 					await this.runWorkflowFromCommand(workflow, editor, ctx.file ?? null);
 				}
@@ -1865,8 +2001,8 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		this.addCommand({
-			id: "test-askmate-api",
-			name: "Test AskMate provider connection",
+			id: "test-provider-connection",
+			name: "Test provider connection",
 			callback: async () => {
 				try {
 					const message = await this.testSelectedProviderConnection();
@@ -2177,23 +2313,67 @@ export default class AskMatePlugin extends Plugin {
 		return file ? `[[${file.path}|${file.basename}]]` : "No active note";
 	}
 
-	private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, timeoutMessage: string): Promise<Response> {
-		const controller = new AbortController();
-		const timer = window.setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs);
+	private throwIfAborted(abortSignal?: AbortSignal): void {
+		if (abortSignal?.aborted) {
+			throw new Error("Request was stopped.");
+		}
+	}
+
+	private async requestJson<T>(
+		url: string,
+		options: {
+			method?: string;
+			headers?: Record<string, string>;
+			body?: string;
+			timeoutMs?: number;
+			timeoutMessage?: string;
+			abortSignal?: AbortSignal;
+		} = {}
+	): Promise<AskMateHttpResponse<T>> {
+		this.throwIfAborted(options.abortSignal);
+		let timer: number | null = null;
+		const request = requestUrl({
+			url,
+			method: options.method ?? "GET",
+			headers: options.headers,
+			body: options.body,
+			throw: false
+		});
+		const timedRequest = options.timeoutMs
+			? Promise.race([
+				request,
+				new Promise<never>((_resolve, reject) => {
+					timer = window.setTimeout(() => reject(new Error(options.timeoutMessage ?? "Request timed out.")), options.timeoutMs);
+				})
+			])
+			: request;
 
 		try {
-			return await fetch(url, {
-				...init,
-				signal: controller.signal
-			});
-		} catch (error) {
-			if (isAbortError(error)) {
-				throw new Error(timeoutMessage);
+			const response = await timedRequest;
+			this.throwIfAborted(options.abortSignal);
+			const text = typeof response.text === "string" ? response.text : "";
+			let body: T | null = null;
+
+			if (response.json && typeof response.json === "object") {
+				body = response.json as T;
+			} else if (text.trim()) {
+				try {
+					body = JSON.parse(text) as T;
+				} catch {
+					body = null;
+				}
 			}
 
-			throw error;
+			return {
+				status: response.status,
+				ok: response.status >= 200 && response.status < 300,
+				body,
+				text
+			};
 		} finally {
-			window.clearTimeout(timer);
+			if (timer !== null) {
+				window.clearTimeout(timer);
+			}
 		}
 	}
 
@@ -2279,30 +2459,28 @@ export default class AskMatePlugin extends Plugin {
 		const input = this.buildPrompt(request);
 		const startedAt = new Date();
 		let answer = "";
-		let finalUsage: OpenAITokenUsage | null = null;
 		let usageRecorded = false;
 
 		try {
-			const response = await fetch("https://api.openai.com/v1/responses", {
+			const response = await this.requestJson<OpenAIResponseBody>("https://api.openai.com/v1/responses", {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": "application/json"
 				},
-				signal: abortSignal,
+				abortSignal,
 				body: JSON.stringify({
 					model,
 					instructions,
 					input,
 					reasoning: {
 						effort: reasoningEffort
-					},
-					stream: true
+					}
 				})
 			});
+			const body = response.body;
 
 			if (!response.ok) {
-				const body = (await response.json().catch(() => null)) as OpenAIResponseBody | null;
 				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
 				await this.recordOperationUsage({
 					request,
@@ -2321,115 +2499,13 @@ export default class AskMatePlugin extends Plugin {
 				throw new Error(message);
 			}
 
-			if (!response.body) {
-				const body = (await response.json().catch(() => null)) as OpenAIResponseBody | null;
-				const text = this.extractOpenAIText(body);
+			answer = this.extractOpenAIText(body);
 
-				if (!text) {
-					throw new Error("OpenAI returned a response, but no text output was found.");
-				}
-
-				answer = text;
-				onDelta(text);
-				await this.recordOperationUsage({
-					request,
-					operationKind: "text_response",
-					endpoint: "responses",
-					status: "completed",
-					model,
-					instructions,
-					input,
-					responseText: text,
-					usage: body?.usage ?? null,
-					startedAt
-				});
-				usageRecorded = true;
-				return text;
+			if (!answer) {
+				throw new Error("OpenAI returned a response, but no text output was found.");
 			}
 
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			let sawCompleted = false;
-
-			while (true) {
-				const { done, value } = await reader.read();
-
-				if (done) {
-					break;
-				}
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-
-				for (const line of lines) {
-					const event = this.parseStreamEvent(line);
-
-					if (!event) {
-						continue;
-					}
-
-					const streamError = this.getStreamTerminalError(event);
-
-					if (streamError) {
-						throw new Error(streamError);
-					}
-
-					if (this.isCompletedStreamEvent(event)) {
-						sawCompleted = true;
-					}
-
-					const delta = this.getStreamDelta(event);
-
-					if (delta) {
-						answer += delta;
-						onDelta(delta);
-					}
-
-					const usage = this.getStreamUsage(event);
-
-					if (usage) {
-						finalUsage = usage;
-					}
-				}
-			}
-
-			buffer += decoder.decode();
-
-			if (buffer.trim()) {
-				const event = this.parseStreamEvent(buffer);
-
-				if (event) {
-					const streamError = this.getStreamTerminalError(event);
-
-					if (streamError) {
-						throw new Error(streamError);
-					}
-
-					if (this.isCompletedStreamEvent(event)) {
-						sawCompleted = true;
-					}
-
-					const delta = this.getStreamDelta(event);
-
-					if (delta) {
-						answer += delta;
-						onDelta(delta);
-					}
-
-					const usage = this.getStreamUsage(event);
-
-					if (usage) {
-						finalUsage = usage;
-					}
-				}
-			}
-
-			if (!sawCompleted) {
-				throw new Error("OpenAI stream ended before the response completed.");
-			}
-
+			onDelta(answer);
 			await this.recordOperationUsage({
 				request,
 				operationKind: "text_response",
@@ -2439,7 +2515,7 @@ export default class AskMatePlugin extends Plugin {
 				instructions,
 				input,
 				responseText: answer,
-				usage: finalUsage,
+				usage: body?.usage ?? null,
 				startedAt
 			});
 			usageRecorded = true;
@@ -2456,7 +2532,7 @@ export default class AskMatePlugin extends Plugin {
 					instructions,
 					input,
 					responseText: answer,
-					usage: finalUsage,
+					usage: null,
 					startedAt,
 					errorMessage: this.getErrorMessage(error)
 				});
@@ -2550,13 +2626,13 @@ export default class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const response = await fetch("https://api.openai.com/v1/responses", {
+			const response = await this.requestJson<OpenAIResponseBody>("https://api.openai.com/v1/responses", {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": "application/json"
 				},
-				signal: abortSignal,
+				abortSignal,
 				body: JSON.stringify({
 					model: providerRef.model,
 					instructions,
@@ -2566,7 +2642,7 @@ export default class AskMatePlugin extends Plugin {
 					}
 				})
 			});
-			const body = (await response.json().catch(() => null)) as OpenAIResponseBody | null;
+			const body = response.body;
 
 			if (!response.ok) {
 				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
@@ -2652,10 +2728,10 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		const baseUrl = validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerRef.providerId].baseUrl, providerRef.providerName);
-		const response = await fetch(`${baseUrl}/chat/completions`, {
+		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
 			method: "POST",
 			headers,
-			signal: abortSignal,
+			abortSignal,
 			body: JSON.stringify({
 				model: providerRef.model,
 				messages: [
@@ -2664,7 +2740,7 @@ export default class AskMatePlugin extends Plugin {
 				]
 			})
 		});
-		const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+		const body = response.body;
 
 		if (!response.ok) {
 			throw new Error(this.formatProviderHttpError(providerRef.providerName, response.status, this.extractProviderError(body, "")));
@@ -2691,14 +2767,14 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("anthropic").baseUrl, DEFAULT_PROVIDER_SETTINGS.anthropic.baseUrl, getProviderLabel("anthropic"));
-		const response = await fetch(`${baseUrl}/messages`, {
+		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/messages`, {
 			method: "POST",
 			headers: {
 				"x-api-key": apiKey,
 				"anthropic-version": "2023-06-01",
 				"Content-Type": "application/json"
 			},
-			signal: abortSignal,
+			abortSignal,
 			body: JSON.stringify({
 				model: providerRef.model,
 				system: instructions,
@@ -2708,7 +2784,7 @@ export default class AskMatePlugin extends Plugin {
 				]
 			})
 		});
-		const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+		const body = response.body;
 
 		if (!response.ok) {
 			throw new Error(this.formatProviderHttpError("Anthropic", response.status, this.extractProviderError(body, "")));
@@ -2736,12 +2812,12 @@ export default class AskMatePlugin extends Plugin {
 
 		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("google-gemini").baseUrl, DEFAULT_PROVIDER_SETTINGS["google-gemini"].baseUrl, getProviderLabel("google-gemini"));
 		const model = encodeURIComponent(providerRef.model);
-		const response = await fetch(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json"
 			},
-			signal: abortSignal,
+			abortSignal,
 			body: JSON.stringify({
 				systemInstruction: {
 					parts: [{ text: instructions }]
@@ -2754,7 +2830,7 @@ export default class AskMatePlugin extends Plugin {
 				]
 			})
 		});
-		const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+		const body = response.body;
 
 		if (!response.ok) {
 			throw new Error(this.formatProviderHttpError("Google Gemini", response.status, this.extractProviderError(body, "")));
@@ -2959,19 +3035,19 @@ export default class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const response = await fetch("https://api.openai.com/v1/images/generations", {
+			const response = await this.requestJson<OpenAIImageGenerationBody>("https://api.openai.com/v1/images/generations", {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": "application/json"
 				},
-				signal: abortSignal,
+				abortSignal,
 				body: JSON.stringify({
 					model,
 					prompt
 				})
 			});
-			const body = (await response.json().catch(() => null)) as OpenAIImageGenerationBody | null;
+			const body = response.body;
 
 			if (!response.ok) {
 				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
@@ -3271,13 +3347,15 @@ export default class AskMatePlugin extends Plugin {
 			}
 		}
 
-		const response = await this.fetchWithTimeout(
+		const response = await this.requestJson<OpenAIModelListBody>(
 			`${validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl, getProviderLabel(providerId))}/models`,
-			{ headers },
-			OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-			`${getProviderLabel(providerId)} model refresh timed out after 10 seconds.`
+			{
+				headers,
+				timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
+				timeoutMessage: `${getProviderLabel(providerId)} model refresh timed out after 10 seconds.`
+			}
 		);
-		const body = (await response.json().catch(() => null)) as OpenAIModelListBody | null;
+		const body = response.body;
 
 		if (!response.ok) {
 			const message = this.formatProviderHttpError(getProviderLabel(providerId), response.status, body?.error?.message ?? "");
@@ -3296,13 +3374,14 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("google-gemini").baseUrl, DEFAULT_PROVIDER_SETTINGS["google-gemini"].baseUrl, getProviderLabel("google-gemini"));
-		const response = await this.fetchWithTimeout(
+		const response = await this.requestJson<GeminiModelListBody>(
 			`${baseUrl}/models?key=${encodeURIComponent(apiKey)}`,
-			{},
-			OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-			"Google Gemini model refresh timed out after 10 seconds."
+			{
+				timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
+				timeoutMessage: "Google Gemini model refresh timed out after 10 seconds."
+			}
 		);
-		const body = (await response.json().catch(() => null)) as GeminiModelListBody | null;
+		const body = response.body;
 
 		if (!response.ok) {
 			const message = this.formatProviderHttpError("Google Gemini", response.status, body?.error?.message ?? "");
@@ -3604,27 +3683,27 @@ export default class AskMatePlugin extends Plugin {
 		const matches = sections.filter((section) => section.path === target || section.title === target);
 
 		if (matches.length === 0) {
-			throw new Error(`AskMate could not find heading \"${target}\" in ${file.path}.`);
+			throw new Error(`AskMate could not find heading "${target}" in ${file.path}.`);
 		}
 
 		if (matches.length > 1) {
-			throw new Error(`Heading \"${target}\" is ambiguous. Use the full heading path, for example Parent > Child.`);
+			throw new Error(`Heading "${target}" is ambiguous. Use the full heading path, for example Parent > Child.`);
 		}
 
 		const section = matches[0];
 		const lines = content.split(/\r?\n/);
 		const before = lines.slice(section.bodyStartLine, section.endLineExclusive).join("\n").trim();
 
-		if (!this.confirmTruncatedContextFullApply(request, `${file.path} > ${section.path}`)) {
+		if (!(await this.confirmTruncatedContextFullApply(request, `${file.path} > ${section.path}`))) {
 			return "Apply cancelled. No note was changed.";
 		}
 
-		if (!this.confirmTextApplyPreview({
+		if (!(await this.confirmTextApplyPreview({
 			scope: "selected-text",
 			targetLabel: `${file.path} > ${section.path}`,
 			before,
 			after: output
-		})) {
+		}))) {
 			return "Apply cancelled. No note was changed.";
 		}
 
@@ -3644,7 +3723,7 @@ export default class AskMatePlugin extends Plugin {
 			this.rememberMarkdownFile(file);
 		}
 
-		return `Applied to heading \"${section.path}\" in ${file.path}. Use Obsidian undo or file history immediately if needed.`;
+		return `Applied to heading "${section.path}" in ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 	}
 
 	async applyResponseToContext(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<string> {
@@ -3682,12 +3761,12 @@ export default class AskMatePlugin extends Plugin {
 				const selectedText = editor.getSelection().trim();
 
 				if (selectedText === originalText) {
-					if (!this.confirmTextApplyPreview({
+					if (!(await this.confirmTextApplyPreview({
 						scope: "selected-text",
 						targetLabel: file?.path ?? "the current note",
 						before: originalText,
 						after: output
-					})) {
+					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
 					editor.replaceSelection(output);
@@ -3700,12 +3779,12 @@ export default class AskMatePlugin extends Plugin {
 
 				if (occurrences.length === 1) {
 					const start = occurrences[0];
-					if (!this.confirmTextApplyPreview({
+					if (!(await this.confirmTextApplyPreview({
 						scope: "selected-text",
 						targetLabel: file?.path ?? "the current note",
 						before: originalText,
 						after: output
-					})) {
+					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
 					editor.replaceRange(
@@ -3726,12 +3805,12 @@ export default class AskMatePlugin extends Plugin {
 
 				if (occurrences.length === 1) {
 					const start = occurrences[0];
-					if (!this.confirmTextApplyPreview({
+					if (!(await this.confirmTextApplyPreview({
 						scope: "selected-text",
 						targetLabel: file.path,
 						before: originalText,
 						after: output
-					})) {
+					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
 					await this.app.vault.modify(file, `${content.slice(0, start)}${output}${content.slice(start + originalText.length)}`);
@@ -3747,16 +3826,16 @@ export default class AskMatePlugin extends Plugin {
 			const editor = targetView.editor;
 			const targetLabel = file?.path ?? "the current note";
 
-			if (!this.confirmTruncatedContextFullApply(request, targetLabel)) {
+			if (!(await this.confirmTruncatedContextFullApply(request, targetLabel))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			if (!this.confirmTextApplyPreview({
+			if (!(await this.confirmTextApplyPreview({
 				scope: "full-note",
 				targetLabel,
 				before: editor.getValue(),
 				after: output
-			})) {
+			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
@@ -3767,16 +3846,16 @@ export default class AskMatePlugin extends Plugin {
 
 		if (file?.extension === "md") {
 			const content = await this.app.vault.cachedRead(file);
-			if (!this.confirmTruncatedContextFullApply(request, file.path)) {
+			if (!(await this.confirmTruncatedContextFullApply(request, file.path))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			if (!this.confirmTextApplyPreview({
+			if (!(await this.confirmTextApplyPreview({
 				scope: "full-note",
 				targetLabel: file.path,
 				before: content,
 				after: output
-			})) {
+			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
@@ -3788,12 +3867,12 @@ export default class AskMatePlugin extends Plugin {
 		throw new Error("Open the original Markdown note before applying changes.");
 	}
 
-	private confirmTruncatedContextFullApply(request: AskRequest, targetLabel: string): boolean {
+	private async confirmTruncatedContextFullApply(request: AskRequest, targetLabel: string): Promise<boolean> {
 		if (!request.metadata.contextTruncated) {
 			return true;
 		}
 
-		return window.confirm([
+		return await askMateConfirm(this.app, [
 			`Apply to the full note "${targetLabel}" even though AskMate only sent part of the note context?`,
 			"",
 			`Context budget: ${getContextBudgetOption(request.metadata.contextBudgetMode).label}`,
@@ -3804,7 +3883,7 @@ export default class AskMatePlugin extends Plugin {
 		].join("\n"));
 	}
 
-	private confirmTextApplyPreview({
+	private async confirmTextApplyPreview({
 		scope,
 		targetLabel,
 		before,
@@ -3814,7 +3893,7 @@ export default class AskMatePlugin extends Plugin {
 		targetLabel: string;
 		before: string;
 		after: string;
-	}): boolean {
+	}): Promise<boolean> {
 		const beforeLines = before ? before.split(/\r?\n/).length : 0;
 		const afterLines = after ? after.split(/\r?\n/).length : 0;
 		const scopeLabel = scope === "selected-text" ? "selected text" : "full note";
@@ -3822,10 +3901,10 @@ export default class AskMatePlugin extends Plugin {
 		if (!this.settings.showApplyPreview) {
 			return scope === "selected-text"
 				? true
-				: window.confirm(`Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`);
+				: await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`);
 		}
 
-		return window.confirm([
+		return await askMateConfirm(this.app, [
 			`Apply AskMate output to ${scopeLabel} in "${targetLabel}"?`,
 			"",
 			`Before: ${beforeLines} lines, ${before.length.toLocaleString()} characters`,
@@ -4349,7 +4428,7 @@ export default class AskMatePlugin extends Plugin {
 		const files = this.app.vault.getMarkdownFiles()
 			.filter((file) => file.path.startsWith(`${folder}/`))
 			.filter((file) => file.path !== excludePath)
-			.filter((file) => !file.path.startsWith(".obsidian/") && !file.path.startsWith(".trash/") && !file.path.includes("/."))
+			.filter((file) => !file.path.startsWith(`${this.app.vault.configDir}/`) && !file.path.startsWith(".trash/") && !file.path.includes("/."))
 			.sort((a, b) => a.path.localeCompare(b.path));
 
 		for (const file of files) {
@@ -5260,10 +5339,12 @@ class AskMateView extends ItemView {
 		});
 		const dismiss = card.createEl("button", { text: "Dismiss tips" });
 		dismiss.type = "button";
-		dismiss.addEventListener("click", async () => {
-			this.plugin.settings.onboardingTipsDismissedAt = new Date().toISOString();
-			await this.plugin.saveSettings();
-			message.wrapper.remove();
+		dismiss.addEventListener("click", () => {
+			void (async () => {
+				this.plugin.settings.onboardingTipsDismissedAt = new Date().toISOString();
+				await this.plugin.saveSettings();
+				message.wrapper.remove();
+			})().catch((error) => new Notice(this.plugin.getErrorMessage(error)));
 		});
 	}
 
@@ -6279,7 +6360,7 @@ class AskMateView extends ItemView {
 			}, { requiresIdle: true });
 		}
 		this.createMessageAction(parent, "heading-1", "Apply to heading", async () => {
-			const heading = window.prompt("Heading title or path to replace, for example Project Plan > Risks", request.context.activeHeadingPath ?? "");
+			const heading = await askMatePrompt(this.app, "Heading title or path to replace, for example Project Plan > Risks", request.context.activeHeadingPath ?? "");
 			if (heading === null) {
 				return;
 			}
@@ -6439,7 +6520,7 @@ class AskMateView extends ItemView {
 			return;
 		}
 
-		const host = document.createElement("div");
+		const host = activeDocument.createElement("div");
 		host.addClass("askmate-rendered-markdown");
 
 		void MarkdownRenderer.render(this.app, markdown, host, sourcePath, this)
@@ -6623,7 +6704,7 @@ class AskMateSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "AskMate settings" });
+		new Setting(containerEl).setName("AskMate settings").setHeading();
 
 		const selectedProviderId = this.plugin.getSelectedTextProviderId();
 		const selectedProvider = this.plugin.getProviderSettings(selectedProviderId);
@@ -7004,7 +7085,7 @@ class AskMateSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Context expansion" });
+		new Setting(containerEl).setName("Context expansion").setHeading();
 
 		new Setting(containerEl)
 			.setName("Threaded chat mode")
@@ -7146,7 +7227,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private renderWorkflowDisplaySettings(containerEl: HTMLElement): void {
-		containerEl.createEl("h3", { text: "Workflow sidebar" });
+		new Setting(containerEl).setName("Workflow sidebar").setHeading();
 		containerEl.createEl("p", {
 			cls: "askmate-settings-note",
 			text: "Favorite, hide, or reorder workflows in the sidebar. Built-in command palette workflows are not changed."
@@ -7201,7 +7282,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private renderCustomWorkflows(containerEl: HTMLElement): void {
-		containerEl.createEl("h3", { text: "Custom workflows" });
+		new Setting(containerEl).setName("Custom workflows").setHeading();
 		containerEl.createEl("p", {
 			cls: "askmate-settings-note",
 			text: "Custom workflows appear in the AskMate sidebar. Built-in workflows remain available from the command palette. Variables available in workflow prompts: {{noteTitle}}, {{sourcePath}}, {{contextSource}}, {{selectedText}}, {{currentDate}}, {{currentDateTime}}, and {{customInstructions}}."
@@ -7276,7 +7357,7 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		for (const workflow of this.plugin.settings.customWorkflows) {
 			const card = list.createDiv({ cls: "askmate-custom-workflow-card" });
-			card.createEl("h4", { text: workflow.name });
+			new Setting(card).setName(workflow.name).setHeading();
 
 			new Setting(card)
 				.setName("Name")
@@ -7359,7 +7440,7 @@ class AskMateSettingTab extends PluginSettingTab {
 				.addButton((button) => {
 					button.setWarning();
 					button.setButtonText("Delete").onClick(async () => {
-						if (!window.confirm(`Delete custom workflow "${workflow.name}"?`)) {
+						if (!(await askMateConfirm(this.app, `Delete custom workflow "${workflow.name}"?`))) {
 							return;
 						}
 
@@ -7373,12 +7454,12 @@ class AskMateSettingTab extends PluginSettingTab {
 	private renderUsageStatistics(containerEl: HTMLElement): void {
 		const records = this.plugin.getTokenUsageRecords();
 		const summary = this.plugin.getTokenUsageSummary();
-		containerEl.createEl("h3", { text: "Usage statistics" });
+		new Setting(containerEl).setName("Usage statistics").setHeading();
 
 		const statsEl = containerEl.createDiv({ cls: "askmate-usage-stats" });
 		const header = statsEl.createDiv({ cls: "askmate-usage-header" });
 		const copy = header.createDiv({ cls: "askmate-usage-copy" });
-		copy.createEl("h4", { text: "Operation usage" });
+		new Setting(copy).setName("Operation usage").setHeading();
 		copy.createEl("p", {
 			text: "Tracks AskMate API operations by provider, including text responses, image prompt planning, and image generation. Images API rows may show zero tokens."
 		});
@@ -7411,7 +7492,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private async resetUsageStatistics(): Promise<void> {
-		if (!window.confirm("Reset AskMate usage statistics? This cannot be undone.")) {
+		if (!(await askMateConfirm(this.app, "Reset AskMate usage statistics? This cannot be undone."))) {
 			return;
 		}
 
@@ -7606,7 +7687,7 @@ class AskMateSettingTab extends PluginSettingTab {
 
 	private renderRecentUsageTable(parent: HTMLElement, records: TokenUsageRecord[]): void {
 		const card = parent.createDiv({ cls: "askmate-usage-table-card" });
-		card.createEl("h4", { text: "Recent operations" });
+		new Setting(card).setName("Recent operations").setHeading();
 		const wrapper = card.createDiv({ cls: "askmate-usage-table-wrapper" });
 		const table = wrapper.createEl("table", { cls: "askmate-usage-table" });
 		const thead = table.createEl("thead");
@@ -7646,13 +7727,13 @@ class AskMateSettingTab extends PluginSettingTab {
 
 	private createChartCard(parent: HTMLElement, title: string, description: string): HTMLElement {
 		const card = parent.createDiv({ cls: "askmate-chart-card" });
-		card.createEl("h4", { text: title });
+		new Setting(card).setName(title).setHeading();
 		card.createEl("p", { text: description });
 		return card;
 	}
 
 	private createChartSvg(parent: HTMLElement, width: number, height: number, label: string): SVGSVGElement {
-		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		const svg = activeDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
 		svg.setAttribute("class", "askmate-chart-svg");
 		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 		svg.setAttribute("role", "img");
@@ -7666,7 +7747,7 @@ class AskMateSettingTab extends PluginSettingTab {
 		tagName: K,
 		attributes: Record<string, string | number>
 	): SVGElementTagNameMap[K] {
-		const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+		const element = activeDocument.createElementNS("http://www.w3.org/2000/svg", tagName);
 		for (const [key, value] of Object.entries(attributes)) {
 			element.setAttribute(key, String(value));
 		}
@@ -7695,7 +7776,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private appendSvgTitle(parent: SVGElement, text: string): void {
-		const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+		const title = activeDocument.createElementNS("http://www.w3.org/2000/svg", "title");
 		title.textContent = text;
 		parent.appendChild(title);
 	}

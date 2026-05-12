@@ -1,7 +1,7 @@
 {
 	"id": "askmate",
 	"name": "AskMate",
-	"version": "1.5.2",
+	"version": "1.5.3",
 	"minAppVersion": "1.11.4",
 	"description": "Ask AI questions about your current note or selected text.",
 	"author": "Behnam Ebrahimi",
