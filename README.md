@@ -89,6 +89,7 @@ Use it to ask questions, summarize, rewrite, translate, run reusable workflows, 
 | Provider | Text support | Image support | API key needed | Notes |
 | --- | --- | --- | --- | --- |
 | OpenAI | Yes | Yes, through `gpt-image-2` | Yes | Best fit when you want GPT-5.5 text plus image generation in one provider. |
+| Azure OpenAI | Yes | No | Yes | Use an Azure OpenAI `/openai/v1` base URL and enter your Azure deployment name as the model. |
 | OpenRouter | Yes | No | Yes | Use OpenRouter model IDs and route text requests through an OpenAI-compatible API. |
 | Anthropic Claude | Yes | No | Yes | Good for text workflows, critique, summarization, and long-form analysis. |
 | Google Gemini | Yes | No | Yes | Good for text workflows with Gemini models through Google's API. |
@@ -140,9 +141,9 @@ YourVault/.obsidian/plugins/askmate/
 ### Quick Setup
 
 1. Open AskMate settings in Obsidian.
-2. Choose a chat provider: OpenAI, OpenRouter, Anthropic Claude, Google Gemini, or Local/self-hosted.
+2. Choose a chat provider: OpenAI, Azure OpenAI, OpenRouter, Anthropic Claude, Google Gemini, or Local/self-hosted.
 3. Add or select the provider API key secret.
-4. For local endpoints, set the OpenAI-compatible base URL.
+4. For Azure OpenAI, set the v1 base URL, for example `https://<resource>.openai.azure.com/openai/v1`, and enter your Azure deployment name as the model. For local endpoints, set the OpenAI-compatible base URL.
 5. Click `Test API`.
 6. Click `Refresh models`, or enter a model ID manually.
 7. Choose your default text model.
@@ -256,9 +257,13 @@ No. AskMate sends only the context included for the request you run. By default,
 
 Yes. Choose the Local/self-hosted provider and set an OpenAI-compatible `/chat/completions` base URL. Local endpoints can be used for text chat and workflows. Image generation still uses OpenAI `gpt-image-2`.
 
+### Can I use Azure OpenAI?
+
+Yes. Choose Azure OpenAI, set the v1 base URL such as `https://<resource>.openai.azure.com/openai/v1`, add an API key secret, and enter your Azure deployment name as the model. Azure OpenAI is text-only in Phase 1. Image generation still uses OpenAI `gpt-image-2`.
+
 ### Does image generation require OpenAI?
 
-Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. You can still use other providers for text chat and image prompt planning.
+Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. Azure OpenAI, OpenRouter, Anthropic Claude, Gemini, and local providers can be used only for text chat and image prompt planning. Azure AI Foundry support is planned for a later phase.
 
 ### Can I apply changes safely?
 
@@ -280,7 +285,7 @@ AskMate's current roadmap and status surfaces focus on making note work safer, c
 - Queue for review mode for AI-suggested changes that should be checked before applying.
 - Smart result-note placement for keeping generated notes near their source notes.
 - Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
-- Broader provider support, including Azure OpenAI and Azure AI Foundry.
+- Broader provider support: Azure OpenAI for text chat in Phase 1, with Azure AI Foundry planned for a later phase.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -352,7 +357,7 @@ AskMate is built on the work of these tools, APIs, and communities:
 
 - [Obsidian](https://obsidian.md) and the Obsidian plugin API.
 - [OpenAI](https://openai.com) for GPT-5.5 text support and `gpt-image-2` image generation.
-- [OpenRouter](https://openrouter.ai), [Anthropic](https://www.anthropic.com), and [Google Gemini](https://ai.google.dev/gemini-api) for provider options.
+- [Azure OpenAI](https://azure.microsoft.com/products/ai-services/openai-service), [OpenRouter](https://openrouter.ai), [Anthropic](https://www.anthropic.com), and [Google Gemini](https://ai.google.dev/gemini-api) for provider options.
 - [Bun](https://bun.sh), [TypeScript](https://www.typescriptlang.org), and [esbuild](https://esbuild.github.io) for the development toolchain.
 - [Shields.io](https://shields.io) for README badges.
 

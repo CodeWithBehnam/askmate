@@ -74,16 +74,22 @@ assertIncludes("styles.css", styles, "min-height: 0;\n\tmin-width: 0;\n\toverflo
 assertIncludes("styles.css", styles, "flex: 1 1 0;\n\tflex-direction: column;\n\tgap: 8px;\n\tmin-height: 0;\n\toverflow-y: auto;\n\toverscroll-behavior: contain;", "message pane scroll containment");
 
 assertIncludes("README.md", readme, "Roadmap", "roadmap documentation");
-assertIncludes("README.md", readme, "evidence-linked", "evidence-linked answers documentation");
+assertIncludes("README.md", readme, "Evidence-linked", "evidence-linked answers documentation");
 assertIncludes("README.md", readme, "Markdown diff Apply preview", "diff Apply documentation");
 assertIncludes("README.md", readme, "frontmatter", "frontmatter controls documentation");
-assertIncludes("README.md", readme, "batch workflow runner", "batch workflow documentation");
-assertIncludes("README.md", readme, "final prompt inspector", "prompt inspector documentation");
-assertIncludes("README.md", readme, "note-specific AskMate history", "note history documentation");
-assertIncludes("README.md", readme, "style guide and glossary", "role context documentation");
+assertIncludes("README.md", readme, "Batch workflow runner", "batch workflow documentation");
+assertIncludes("README.md", readme, "Final prompt inspector", "prompt inspector documentation");
+assertIncludes("README.md", readme, "Note-specific AskMate history", "note history documentation");
+assertIncludes("README.md", readme, "Style guide and glossary", "role context documentation");
 assertIncludes("README.md", readme, "Queue for review", "review queue documentation");
-assertIncludes("README.md", readme, "smart result-note placement", "smart placement documentation");
+assertIncludes("README.md", readme, "Smart result-note placement", "smart placement documentation");
 assertIncludes("README.md", readme, "Usage budgets", "usage guardrails documentation");
+assertIncludes("README.md", readme, "Azure OpenAI", "Azure OpenAI documentation");
+assertIncludes("README.md", readme, "/openai/v1", "Azure OpenAI v1 endpoint documentation");
+assertIncludes("README.md", readme, "deployment name", "Azure OpenAI deployment name documentation");
+assertIncludes("README.md", readme, "Azure AI Foundry planned", "Azure AI Foundry roadmap documentation");
+assertIncludes("README.md", readme, "gpt-image-2", "OpenAI image model documentation");
+assertNotPattern("README.md", readme, /\| Azure OpenAI \| Yes \| Yes/i, "Azure OpenAI image support should stay absent");
 assertNotPattern("README.md", readme, /^- \[ \]/m, "unchecked roadmap boxes should be absent");
 
 console.log("AskMate roadmap smoke tests passed.");

@@ -30,7 +30,7 @@ type RequestCommandSource = "sidebar" | "command_palette";
 type OperationKind = "text_response" | "image_prompt_planning" | "image_generation";
 type OperationStatus = "completed" | "failed" | "aborted" | "fallback";
 type ApiEndpoint = "responses" | "images_generations" | "chat_completions" | "anthropic_messages" | "gemini_generate_content";
-type TextProviderId = "openai" | "openrouter" | "anthropic" | "google-gemini" | "openai-compatible";
+type TextProviderId = "openai" | "azure-openai" | "openrouter" | "anthropic" | "google-gemini" | "openai-compatible";
 type ContextBudgetMode = "expanded" | "balanced" | "concise";
 type ImagePromptPlanningProviderId = TextProviderId | "same-as-chat";
 type ComposerLayout = "compact" | "expanded";
@@ -642,6 +642,7 @@ const DEFAULT_OPENROUTER_MODEL_OPTIONS = [
 	"anthropic/claude-3.5-sonnet",
 	"google/gemini-2.5-pro"
 ];
+const DEFAULT_AZURE_OPENAI_MODEL_OPTIONS: string[] = [];
 const DEFAULT_ANTHROPIC_MODEL_OPTIONS = [
 	"claude-3-5-sonnet-latest",
 	"claude-3-5-haiku-latest"
@@ -656,9 +657,10 @@ const DEFAULT_LOCAL_MODEL_OPTIONS = [
 	"qwen2.5"
 ];
 const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
-const TEXT_PROVIDER_IDS: TextProviderId[] = ["openai", "openrouter", "anthropic", "google-gemini", "openai-compatible"];
+const TEXT_PROVIDER_IDS: TextProviderId[] = ["openai", "azure-openai", "openrouter", "anthropic", "google-gemini", "openai-compatible"];
 const TEXT_PROVIDER_LABELS: Record<TextProviderId, string> = {
 	openai: "OpenAI",
+	"azure-openai": "Azure OpenAI",
 	openrouter: "OpenRouter",
 	anthropic: "Anthropic Claude",
 	"google-gemini": "Google Gemini",
@@ -670,6 +672,12 @@ const DEFAULT_PROVIDER_SETTINGS: TextProviderSettings = {
 		model: "gpt-5.5",
 		modelOptions: DEFAULT_MODEL_OPTIONS,
 		baseUrl: "https://api.openai.com/v1"
+	},
+	"azure-openai": {
+		apiKeySecretName: "",
+		model: "",
+		modelOptions: DEFAULT_AZURE_OPENAI_MODEL_OPTIONS,
+		baseUrl: ""
 	},
 	openrouter: {
 		apiKeySecretName: "",
@@ -1237,6 +1245,14 @@ function validateProviderBaseUrl(value: unknown, fallback: string, providerName:
 	}
 
 	throw new Error(`${providerName} base URL must start with http:// or https://.`);
+}
+
+function validateAzureOpenAIBaseUrl(value: unknown, fallback: string): string {
+	const baseUrl = validateProviderBaseUrl(value, fallback, "Azure OpenAI");
+	if (!baseUrl.endsWith("/openai/v1")) {
+		throw new Error("Azure OpenAI base URL must end with /openai/v1, for example https://<resource>.openai.azure.com/openai/v1.");
+	}
+	return baseUrl;
 }
 
 function normalizeProviderModelOptions(models: unknown, fallback: string[], selectedModel: string): string[] {
@@ -3284,7 +3300,66 @@ export default class AskMatePlugin extends Plugin {
 			return await this.completeGeminiText(providerRef, instructions, input, abortSignal);
 		}
 
+		if (providerRef.providerId === "azure-openai") {
+			return await this.completeAzureOpenAIText(providerRef, instructions, input, abortSignal);
+		}
+
 		return await this.completeOpenAICompatibleText(providerRef, instructions, input, abortSignal);
+	}
+
+	private getAzureOpenAIHeaders(apiKey: string): Record<string, string> {
+		return {
+			"Content-Type": "application/json",
+			"api-key": apiKey
+		};
+	}
+
+	private getAzureOpenAIBaseUrl(provider: ProviderSettings): string {
+		return validateAzureOpenAIBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS["azure-openai"].baseUrl);
+	}
+
+	private async completeAzureOpenAIText(
+		providerRef: ProviderModelRef,
+		instructions: string,
+		input: string,
+		abortSignal?: AbortSignal
+	): Promise<ProviderTextResult> {
+		const provider = this.getProviderSettings("azure-openai");
+		const apiKey = await this.getProviderApiKey("azure-openai");
+
+		if (!apiKey) {
+			throw new Error("Add an Azure OpenAI API key in AskMate settings before asking a question.");
+		}
+
+		if (!providerRef.model.trim()) {
+			throw new Error("Enter an Azure OpenAI deployment name in AskMate settings before asking a question.");
+		}
+
+		const baseUrl = this.getAzureOpenAIBaseUrl(provider);
+		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
+			method: "POST",
+			headers: this.getAzureOpenAIHeaders(apiKey),
+			abortSignal,
+			body: JSON.stringify({
+				model: providerRef.model,
+				messages: [
+					{ role: "system", content: instructions },
+					{ role: "user", content: input }
+				]
+			})
+		});
+		const body = response.body;
+
+		if (!response.ok) {
+			throw new Error(this.formatProviderHttpError(providerRef.providerName, response.status, this.extractProviderError(body, "")));
+		}
+
+		return {
+			text: this.extractChatCompletionText(body),
+			model: providerRef.model,
+			endpoint: "chat_completions",
+			usage: this.normalizeChatCompletionsUsage(body?.usage)
+		};
 	}
 
 	private async completeOpenAICompatibleText(
@@ -3876,7 +3951,27 @@ export default class AskMatePlugin extends Plugin {
 
 	async refreshProviderModels(providerId: TextProviderId): Promise<string[]> {
 		const provider = this.getProviderSettings(providerId);
-		const models = await this.fetchProviderModels(providerId);
+		let models: string[];
+		try {
+			models = await this.fetchProviderModels(providerId);
+		} catch (error) {
+			const message = this.getErrorMessage(error);
+			if (providerId === "azure-openai" && !message.includes("API key") && !message.includes("base URL")) {
+				throw new Error("Azure OpenAI model listing is unavailable for this endpoint. Keep using a manual deployment name.");
+			}
+			throw error;
+		}
+
+		if (providerId === "azure-openai") {
+			if (models.length === 0) {
+				throw new Error("Azure OpenAI did not return model IDs. Keep using a manual deployment name.");
+			}
+
+			provider.modelOptions = normalizeProviderModelOptions(models, provider.modelOptions, provider.model);
+			await this.saveSettings();
+			return provider.modelOptions;
+		}
+
 		const options = providerId === "openai"
 			? this.normalizeModelOptions(models)
 			: normalizeProviderModelOptions(models, DEFAULT_PROVIDER_SETTINGS[providerId].modelOptions, provider.model);
@@ -3891,8 +3986,47 @@ export default class AskMatePlugin extends Plugin {
 	}
 
 	async testProviderConnection(providerId: TextProviderId): Promise<string> {
+		if (providerId === "azure-openai") {
+			return await this.testAzureOpenAIConnection();
+		}
+
 		const models = await this.fetchProviderModels(providerId);
 		return `AskMate ${getProviderLabel(providerId)} test passed. ${models.length} models are visible.`;
+	}
+
+	private async testAzureOpenAIConnection(): Promise<string> {
+		const provider = this.getProviderSettings("azure-openai");
+		const apiKey = await this.getProviderApiKey("azure-openai");
+		const deploymentName = provider.model.trim();
+
+		if (!apiKey) {
+			throw new Error("Add an Azure OpenAI API key before testing the provider connection.");
+		}
+
+		if (!deploymentName) {
+			throw new Error("Enter an Azure OpenAI deployment name before testing the provider connection.");
+		}
+
+		const baseUrl = this.getAzureOpenAIBaseUrl(provider);
+		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
+			method: "POST",
+			headers: this.getAzureOpenAIHeaders(apiKey),
+			timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
+			timeoutMessage: "Azure OpenAI test request timed out after 10 seconds.",
+			body: JSON.stringify({
+				model: deploymentName,
+				messages: [
+					{ role: "user", content: "Reply with OK to confirm this Azure OpenAI deployment works." }
+				]
+			})
+		});
+		const body = response.body;
+
+		if (!response.ok) {
+			throw new Error(this.formatProviderHttpError("Azure OpenAI", response.status, this.extractProviderError(body, "")));
+		}
+
+		return "AskMate Azure OpenAI test passed. It sent a minimal text request to the selected deployment and may have consumed a small number of tokens.";
 	}
 
 	private async fetchProviderModels(providerId: TextProviderId): Promise<string[]> {
@@ -3913,13 +4047,15 @@ export default class AskMatePlugin extends Plugin {
 			if (providerId === "anthropic") {
 				headers["x-api-key"] = apiKey;
 				headers["anthropic-version"] = "2023-06-01";
+			} else if (providerId === "azure-openai") {
+				Object.assign(headers, this.getAzureOpenAIHeaders(apiKey));
 			} else {
 				headers.Authorization = `Bearer ${apiKey}`;
 			}
 		}
 
 		const response = await this.requestJson<OpenAIModelListBody>(
-			`${validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl, getProviderLabel(providerId))}/models`,
+			`${providerId === "azure-openai" ? this.getAzureOpenAIBaseUrl(provider) : validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl, getProviderLabel(providerId))}/models`,
 			{
 				headers,
 				timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
@@ -4929,7 +5065,7 @@ export default class AskMatePlugin extends Plugin {
 	getChatProviderModelRef(): ProviderModelRef {
 		const providerId = this.getChatProviderId();
 		const provider = this.getProviderSettings(providerId);
-		const model = provider.model.trim() || DEFAULT_PROVIDER_SETTINGS[providerId].model;
+		const model = provider.model.trim() || (providerId === "azure-openai" ? "" : DEFAULT_PROVIDER_SETTINGS[providerId].model);
 		return {
 			providerId,
 			providerName: getProviderLabel(providerId),
@@ -4958,6 +5094,15 @@ export default class AskMatePlugin extends Plugin {
 
 		if (ref.providerId === "openai-compatible") {
 			return hasModel && provider.baseUrl.trim().length > 0;
+		}
+
+		if (ref.providerId === "azure-openai") {
+			try {
+				validateAzureOpenAIBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS["azure-openai"].baseUrl);
+			} catch {
+				return false;
+			}
+			return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
 		}
 
 		return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
@@ -7939,7 +8084,7 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("p", {
 			cls: "askmate-settings-note",
-			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
+			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, Azure OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
 		});
 	}
 
@@ -8138,7 +8283,9 @@ class AskMateSettingTab extends PluginSettingTab {
 			.setName(`${getProviderLabel(selectedProviderId)} API key`)
 			.setDesc(selectedProviderId === "openai-compatible"
 				? "Optional for local providers. Stored with Obsidian SecretStorage when provided."
-				: "Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings.")
+				: selectedProviderId === "azure-openai"
+					? "Azure OpenAI Phase 1 uses API-key auth. Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings."
+					: "Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings.")
 			.addComponent((el) => {
 				return new SecretComponent(this.app, el)
 					.setValue(selectedProvider.apiKeySecretName)
@@ -8148,17 +8295,25 @@ class AskMateSettingTab extends PluginSettingTab {
 					});
 			});
 
-		if (selectedProviderId === "openai-compatible") {
+		if (selectedProviderId === "openai-compatible" || selectedProviderId === "azure-openai") {
+			const isAzureOpenAI = selectedProviderId === "azure-openai";
+			const baseUrlFallback = DEFAULT_PROVIDER_SETTINGS[selectedProviderId].baseUrl;
+			const baseUrlPlaceholder = isAzureOpenAI ? "https://<resource>.openai.azure.com/openai/v1" : DEFAULT_LOCAL_BASE_URL;
+
 			new Setting(containerEl)
-				.setName("Local provider base URL")
-				.setDesc("OpenAI-compatible endpoint, for example Ollama at http://localhost:11434/v1 or a self-hosted server.")
+				.setName(isAzureOpenAI ? "Azure OpenAI base URL" : "Local provider base URL")
+				.setDesc(isAzureOpenAI
+					? "Use the v1 base URL, for example https://<resource>.openai.azure.com/openai/v1. The model field is your Azure deployment name."
+					: "OpenAI-compatible endpoint, for example Ollama at http://localhost:11434/v1 or a self-hosted server.")
 				.addText((text) => {
 					text
-						.setPlaceholder(DEFAULT_LOCAL_BASE_URL)
+						.setPlaceholder(baseUrlPlaceholder)
 						.setValue(selectedProvider.baseUrl)
 						.onChange(async (value) => {
 							try {
-								selectedProvider.baseUrl = validateProviderBaseUrl(value, DEFAULT_LOCAL_BASE_URL, getProviderLabel(selectedProviderId));
+								selectedProvider.baseUrl = isAzureOpenAI
+									? validateAzureOpenAIBaseUrl(value, baseUrlFallback)
+									: validateProviderBaseUrl(value, baseUrlFallback, getProviderLabel(selectedProviderId));
 							} catch (error) {
 								new Notice(this.plugin.getErrorMessage(error));
 								return;
@@ -8170,7 +8325,9 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Test provider connection")
-			.setDesc("Checks whether the selected provider can list models. Times out after 10 seconds.")
+			.setDesc(selectedProviderId === "azure-openai"
+				? "Sends a minimal text request to the selected Azure deployment. This may consume a small number of tokens. Times out after 10 seconds."
+				: "Checks whether the selected provider can list models. Times out after 10 seconds.")
 			.addButton((button) => {
 				button.setButtonText("Test API").onClick(async () => {
 					button.setButtonText("Testing...");
@@ -8189,7 +8346,9 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Refresh provider models")
-			.setDesc("Loads model IDs visible to the selected provider. You can also type a manual model ID below.")
+			.setDesc(selectedProviderId === "azure-openai"
+				? "Best-effort model listing for Azure OpenAI. If listing fails or omits your deployment, keep using the manual deployment name below."
+				: "Loads model IDs visible to the selected provider. You can also type a manual model ID below.")
 			.addButton((button) => {
 				button.setButtonText("Refresh models").onClick(async () => {
 					button.setButtonText("Refreshing...");
@@ -8211,7 +8370,9 @@ class AskMateSettingTab extends PluginSettingTab {
 			.setName("Model")
 			.setDesc(selectedProviderId === "openai"
 				? "OpenAI GPT-5.5 models are used for text. gpt-image-2 is available for image generation."
-				: "Choose the selected provider model for text chat, workflows, and image prompt planning.")
+				: selectedProviderId === "azure-openai"
+					? "Choose the Azure OpenAI deployment used for text chat, workflows, and image prompt planning. Image generation remains OpenAI-only."
+					: "Choose the selected provider model for text chat, workflows, and image prompt planning.")
 			.addDropdown((dropdown) => {
 				for (const model of selectedProvider.modelOptions) {
 					dropdown.addOption(model, model);
@@ -8225,11 +8386,13 @@ class AskMateSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Manual model ID")
-			.setDesc("Use this when a provider supports a model that is not returned by model refresh.")
+			.setName(selectedProviderId === "azure-openai" ? "Manual deployment name" : "Manual model ID")
+			.setDesc(selectedProviderId === "azure-openai"
+				? "Enter your Azure OpenAI deployment name. Model refresh may not list every deployment."
+				: "Use this when a provider supports a model that is not returned by model refresh.")
 			.addText((text) => {
 				text
-					.setPlaceholder(DEFAULT_PROVIDER_SETTINGS[selectedProviderId].model)
+					.setPlaceholder(selectedProviderId === "azure-openai" ? "my-gpt-deployment" : DEFAULT_PROVIDER_SETTINGS[selectedProviderId].model)
 					.setValue(selectedProvider.model)
 					.onChange(async (value) => {
 						const model = value.trim();

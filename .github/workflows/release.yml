@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Updated the About description to read like compact labels for Q&A, summaries, rewrites, workflows, safe Apply, and images.
-            - Added visible README labels near the top of the project page.
-            - Expanded package keywords to match the public positioning.
+            - Added first-class Azure OpenAI text provider support.
+            - Added Azure OpenAI API-key auth, /openai/v1 endpoint validation, Test API behavior, and best-effort model refresh.
+            - Updated README provider docs and smoke tests for Azure OpenAI while keeping Azure AI Foundry planned.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
