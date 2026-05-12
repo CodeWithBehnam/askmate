@@ -1,5 +1,7 @@
 # AskMate
 
+**Labels:** AI notes, Q&A, summaries, rewrites, translation, workflows, safe Apply, image generation.
+
 AskMate is a desktop-only Obsidian plugin that adds a right-sidebar AI assistant for the note you are reading or editing.
 
 Use it to ask questions, summarize, rewrite, translate, run reusable workflows, generate images, and safely write AI output back into your vault.

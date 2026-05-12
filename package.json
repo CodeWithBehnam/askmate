@@ -1,6 +1,6 @@
 {
 	"name": "askmate-obsidian-plugin",
-	"version": "1.6.1",
+	"version": "1.6.2",
 	"author": "Behnam Ebrahimi",
 	"main": "main.js",
 	"devDependencies": {
@@ -9,11 +9,17 @@
 		"obsidian": "latest",
 		"typescript": "^5.9.0"
 	},
-	"description": "Ask AI questions about your current note or selected text.",
+	"description": "AI notes: Q&A, summaries, rewrites, workflows, safe Apply, images.",
 	"keywords": [
 		"obsidian",
 		"obsidian-plugin",
-		"openai",
+		"ai",
+		"q-and-a",
+		"summaries",
+		"rewriting",
+		"translation",
+		"workflows",
+		"image-generation",
 		"notes"
 	],
 	"license": "MIT",

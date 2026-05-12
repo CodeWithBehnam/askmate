@@ -62,10 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Reorganized AskMate settings into collapsible sections with category navigation.
-            - Added responsive settings styles for section cards, controls, focus states, and narrow sidebars.
-            - Added public release/community review rules and investigation notes for composer scroll behavior.
-            - Updated the README roadmap/status summary.
+            - Updated the About description to read like compact labels for Q&A, summaries, rewrites, workflows, safe Apply, and images.
+            - Added visible README labels near the top of the project page.
+            - Expanded package keywords to match the public positioning.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation

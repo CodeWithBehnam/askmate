@@ -1,9 +1,9 @@
 {
 	"id": "askmate",
 	"name": "AskMate",
-	"version": "1.6.1",
+	"version": "1.6.2",
 	"minAppVersion": "1.11.4",
-	"description": "Ask AI questions about your current note or selected text.",
+	"description": "AI notes: Q&A, summaries, rewrites, workflows, safe Apply, images.",
 	"author": "Behnam Ebrahimi",
 	"authorUrl": "https://github.com/CodeWithBehnam",
 	"fundingUrl": "",
