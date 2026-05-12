@@ -46,6 +46,7 @@
   - [Generate Images](#generate-images)
   - [Run Workflows](#run-workflows)
 - [Privacy And Network Use](#privacy-and-network-use)
+- [FAQ](#faq)
 - [Roadmap](#roadmap)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
@@ -242,6 +243,26 @@ The prompt inspector is local. It lets you review the final prompt before sendin
 Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores selected secret names, not raw keys. Generated notes, generated images, usage records, and plugin settings are stored locally in your vault or Obsidian plugin data.
 
 Provider requests are subject to the selected provider's API terms and privacy policy.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## FAQ
+
+### Does AskMate send my whole vault?
+
+No. AskMate sends only the context included for the request you run. By default, that means selected text or the current or remembered Markdown note. Extra notes, folders, style guides, glossaries, image metadata, and note history are included only when you enable those context sources.
+
+### Can I use local models?
+
+Yes. Choose the Local/self-hosted provider and set an OpenAI-compatible `/chat/completions` base URL. Local endpoints can be used for text chat and workflows. Image generation still uses OpenAI `gpt-image-2`.
+
+### Does image generation require OpenAI?
+
+Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. You can still use other providers for text chat and image prompt planning.
+
+### Can I apply changes safely?
+
+Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, asks for confirmation before full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
