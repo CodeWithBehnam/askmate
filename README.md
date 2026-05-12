@@ -280,6 +280,7 @@ AskMate's current roadmap and status surfaces focus on making note work safer, c
 - Queue for review mode for AI-suggested changes that should be checked before applying.
 - Smart result-note placement for keeping generated notes near their source notes.
 - Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
+- Broader provider support, including Azure OpenAI and Azure AI Foundry.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
