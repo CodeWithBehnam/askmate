@@ -1098,6 +1098,153 @@
 	line-height: 1.4;
 }
 
+.askmate-settings-tab {
+	--askmate-settings-radius: var(--radius-l, 16px);
+}
+
+.askmate-settings-nav {
+	background: color-mix(in srgb, var(--background-primary) 86%, var(--interactive-accent) 14%);
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border));
+	border-radius: var(--askmate-settings-radius);
+	display: grid;
+	gap: 12px;
+	margin: 8px 0 16px;
+	padding: 14px;
+}
+
+.askmate-settings-nav-copy h3 {
+	font-size: var(--font-ui-large);
+	font-weight: 800;
+	letter-spacing: -0.02em;
+	margin: 0;
+}
+
+.askmate-settings-nav-copy p {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	margin: 4px 0 0;
+}
+
+.askmate-settings-nav-buttons,
+.askmate-settings-nav-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.askmate-settings-nav-button,
+.askmate-settings-nav-actions button {
+	border-radius: 999px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 650;
+	line-height: 1.2;
+	padding: 6px 10px;
+}
+
+.askmate-settings-nav-button {
+	background: color-mix(in srgb, var(--background-primary) 78%, var(--background-secondary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 20%, var(--background-modifier-border));
+	color: var(--text-normal);
+}
+
+.askmate-settings-nav-button:hover,
+.askmate-settings-nav-button:focus-visible,
+.askmate-settings-nav-actions button:focus-visible,
+.askmate-settings-section-summary:focus-visible {
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+	outline: none;
+}
+
+.askmate-settings-sections {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.askmate-settings-section {
+	background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary));
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-settings-radius);
+	overflow: hidden;
+}
+
+.askmate-settings-section[open] {
+	border-color: color-mix(in srgb, var(--interactive-accent) 26%, var(--background-modifier-border));
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+}
+
+.askmate-settings-section-summary {
+	align-items: center;
+	cursor: pointer;
+	display: flex;
+	gap: 12px;
+	list-style: none;
+	padding: 14px;
+}
+
+.askmate-settings-section-summary::-webkit-details-marker {
+	display: none;
+}
+
+.askmate-settings-section-icon {
+	align-items: center;
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, var(--background-modifier-border));
+	border-radius: 10px;
+	color: var(--interactive-accent);
+	display: inline-flex;
+	flex: 0 0 34px;
+	height: 34px;
+	justify-content: center;
+	width: 34px;
+}
+
+.askmate-settings-section-icon svg {
+	height: 17px;
+	width: 17px;
+}
+
+.askmate-settings-section-copy {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.askmate-settings-section-title {
+	color: var(--text-normal);
+	font-size: var(--font-ui-medium);
+	font-weight: 800;
+	line-height: 1.2;
+}
+
+.askmate-settings-section-description {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.35;
+	margin-top: 3px;
+}
+
+.askmate-settings-section-chevron {
+	color: var(--text-muted);
+	flex: 0 0 auto;
+	font-size: 18px;
+	line-height: 1;
+	transition: transform 160ms ease;
+}
+
+.askmate-settings-section[open] .askmate-settings-section-chevron {
+	transform: rotate(180deg);
+}
+
+.askmate-settings-section-content {
+	border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+	padding: 4px 14px 14px;
+}
+
+.askmate-settings-section-content > .setting-item:first-child {
+	border-top: 0;
+}
+
 .askmate-usage-stats {
 	background: color-mix(in srgb, var(--background-primary) 88%, var(--background-secondary));
 	border: 1px solid var(--background-modifier-border);
@@ -1321,6 +1468,31 @@
 @media (max-width: 420px) {
 	.askmate-sidebar {
 		padding: 10px;
+	}
+
+	.askmate-settings-nav {
+		padding: 12px;
+	}
+
+	.askmate-settings-nav-actions,
+	.askmate-settings-nav-buttons {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.askmate-settings-nav-button,
+	.askmate-settings-nav-actions button {
+		width: 100%;
+	}
+
+	.askmate-settings-section-summary {
+		align-items: flex-start;
+		gap: 10px;
+		padding: 12px;
+	}
+
+	.askmate-settings-section-content {
+		padding: 2px 12px 12px;
 	}
 
 	.askmate-workflow-grid {

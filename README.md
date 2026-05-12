@@ -133,6 +133,21 @@ Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores se
 
 Provider requests are subject to the selected provider's API terms and privacy policy.
 
+## Roadmap
+
+AskMate's current roadmap/status surfaces focus on making note work safer, clearer, and easier to review:
+
+- evidence-linked answers for source-grounded replies and jump-to-source actions.
+- Markdown diff Apply preview for safer note edits before writing changes.
+- frontmatter controls for preserving, confirming, or replacing YAML during full-note Apply.
+- batch workflow runner support for running workflows across folders.
+- final prompt inspector tooling for reviewing the assembled prompt before sending.
+- note-specific AskMate history for per-note follow-up context.
+- style guide and glossary context roles for persistent writing and terminology guidance.
+- Queue for review mode for AI-suggested changes that should be checked before applying.
+- smart result-note placement for keeping generated notes near their source notes.
+- Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
+
 ## Troubleshooting
 
 ### AskMate used the wrong note

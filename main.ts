@@ -7900,8 +7900,22 @@ class AskMateView extends ItemView {
 	}
 }
 
+type SettingsSectionId = "providers" | "request" | "context" | "output" | "workflows" | "usage";
+
+interface SettingsSectionDefinition {
+	id: SettingsSectionId;
+	title: string;
+	description: string;
+	icon: string;
+	defaultOpen: boolean;
+	render: (containerEl: HTMLElement) => void;
+}
+
 class AskMateSettingTab extends PluginSettingTab {
 	private readonly plugin: AskMatePlugin;
+	private readonly expandedSettingsSections = new Set<SettingsSectionId>();
+	private readonly settingsSectionElements = new Map<SettingsSectionId, HTMLDetailsElement>();
+	private hasInitializedSettingsSectionState = false;
 
 	constructor(app: App, plugin: AskMatePlugin) {
 		super(app, plugin);
@@ -7911,9 +7925,177 @@ class AskMateSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		containerEl.addClass("askmate-settings-tab");
+		this.settingsSectionElements.clear();
 
-		new Setting(containerEl).setName("Providers").setHeading();
+		const sections = this.getSettingsSections();
+		this.ensureDefaultSettingsSectionsOpen(sections);
+		this.renderSettingsNavigation(containerEl, sections);
 
+		const sectionsEl = containerEl.createDiv({ cls: "askmate-settings-sections" });
+		for (const section of sections) {
+			this.renderSettingsSection(sectionsEl, section);
+		}
+
+		containerEl.createEl("p", {
+			cls: "askmate-settings-note",
+			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
+		});
+	}
+
+	private getSettingsSections(): SettingsSectionDefinition[] {
+		return [
+			{
+				id: "providers",
+				title: "Providers and models",
+				description: "API keys, provider routing, model selection, and reasoning effort.",
+				icon: "plug",
+				defaultOpen: true,
+				render: (containerEl) => this.renderProviderModelSettings(containerEl)
+			},
+			{
+				id: "request",
+				title: "Request defaults",
+				description: "Composer behavior, output defaults, preview, privacy, and context budget.",
+				icon: "sliders-horizontal",
+				defaultOpen: true,
+				render: (containerEl) => this.renderRequestDefaultSettings(containerEl)
+			},
+			{
+				id: "context",
+				title: "Context sources",
+				description: "Thread history, extra notes, folders, drawings, images, evidence, style guides, and glossaries.",
+				icon: "layers-3",
+				defaultOpen: false,
+				render: (containerEl) => this.renderContextSourceSettings(containerEl)
+			},
+			{
+				id: "output",
+				title: "Output, Apply, and review",
+				description: "Result notes, image output paths, Apply preview, frontmatter, placement, and review queue.",
+				icon: "file-check-2",
+				defaultOpen: false,
+				render: (containerEl) => this.renderOutputApplySettings(containerEl)
+			},
+			{
+				id: "workflows",
+				title: "Workflows and automation",
+				description: "Sidebar workflow organization, custom workflows, presets, and batch runs.",
+				icon: "workflow",
+				defaultOpen: false,
+				render: (containerEl) => this.renderWorkflowAutomationSettings(containerEl)
+			},
+			{
+				id: "usage",
+				title: "Usage and guardrails",
+				description: "Token budgets, warnings, operation statistics, charts, and reset controls.",
+				icon: "bar-chart-3",
+				defaultOpen: false,
+				render: (containerEl) => this.renderUsageStatistics(containerEl)
+			}
+		];
+	}
+
+	private ensureDefaultSettingsSectionsOpen(sections: SettingsSectionDefinition[]): void {
+		if (this.hasInitializedSettingsSectionState) {
+			return;
+		}
+
+		for (const section of sections) {
+			if (section.defaultOpen) {
+				this.expandedSettingsSections.add(section.id);
+			}
+		}
+		this.hasInitializedSettingsSectionState = true;
+	}
+
+	private isSettingsSectionOpen(section: SettingsSectionDefinition): boolean {
+		return this.expandedSettingsSections.has(section.id);
+	}
+
+	private renderSettingsNavigation(parent: HTMLElement, sections: SettingsSectionDefinition[]): void {
+		const nav = parent.createDiv({ cls: "askmate-settings-nav" });
+		const copy = nav.createDiv({ cls: "askmate-settings-nav-copy" });
+		copy.createEl("h3", { text: "AskMate settings" });
+		copy.createEl("p", { text: "Jump to a category or expand sections as needed." });
+
+		const buttons = nav.createDiv({ cls: "askmate-settings-nav-buttons" });
+		for (const section of sections) {
+			const button = buttons.createEl("button", { cls: "askmate-settings-nav-button", text: section.title });
+			button.type = "button";
+			button.addEventListener("click", () => this.openSettingsSection(section.id, true));
+		}
+
+		const actions = nav.createDiv({ cls: "askmate-settings-nav-actions" });
+		const expandAll = actions.createEl("button", { text: "Expand all" });
+		expandAll.type = "button";
+		expandAll.addEventListener("click", () => this.setAllSettingsSectionsOpen(sections, true));
+
+		const collapseAll = actions.createEl("button", { text: "Collapse all" });
+		collapseAll.type = "button";
+		collapseAll.addEventListener("click", () => this.setAllSettingsSectionsOpen(sections, false));
+	}
+
+	private renderSettingsSection(parent: HTMLElement, section: SettingsSectionDefinition): void {
+		const details = parent.createEl("details", { cls: "askmate-settings-section" }) as HTMLDetailsElement;
+		details.id = this.getSettingsSectionElementId(section.id);
+		details.open = this.isSettingsSectionOpen(section);
+		this.settingsSectionElements.set(section.id, details);
+
+		const summary = details.createEl("summary", { cls: "askmate-settings-section-summary" });
+		const iconEl = summary.createSpan({ cls: "askmate-settings-section-icon" });
+		setIcon(iconEl, section.icon);
+		const copy = summary.createDiv({ cls: "askmate-settings-section-copy" });
+		copy.createDiv({ cls: "askmate-settings-section-title", text: section.title });
+		copy.createDiv({ cls: "askmate-settings-section-description", text: section.description });
+		summary.createSpan({ cls: "askmate-settings-section-chevron", text: "⌄" });
+
+		const content = details.createDiv({ cls: "askmate-settings-section-content" });
+		section.render(content);
+
+		details.addEventListener("toggle", () => {
+			if (details.open) {
+				this.expandedSettingsSections.add(section.id);
+			} else {
+				this.expandedSettingsSections.delete(section.id);
+			}
+		});
+	}
+
+	private setAllSettingsSectionsOpen(sections: SettingsSectionDefinition[], open: boolean): void {
+		for (const section of sections) {
+			const details = this.settingsSectionElements.get(section.id);
+			if (open) {
+				this.expandedSettingsSections.add(section.id);
+			} else {
+				this.expandedSettingsSections.delete(section.id);
+			}
+			if (details) {
+				details.open = open;
+			}
+		}
+	}
+
+	private openSettingsSection(sectionId: SettingsSectionId, scrollIntoView: boolean): void {
+		this.expandedSettingsSections.add(sectionId);
+		const details = this.settingsSectionElements.get(sectionId);
+		if (!details) {
+			return;
+		}
+
+		details.open = true;
+		if (scrollIntoView) {
+			details.scrollIntoView({ behavior: "smooth", block: "start" });
+			const summary = details.querySelector("summary") as HTMLElement | null;
+			summary?.focus();
+		}
+	}
+
+	private getSettingsSectionElementId(sectionId: SettingsSectionId): string {
+		return `askmate-settings-section-${sectionId}`;
+	}
+
+	private renderProviderModelSettings(containerEl: HTMLElement): void {
 		const selectedProviderId = this.plugin.getSelectedTextProviderId();
 		const selectedProvider = this.plugin.getProviderSettings(selectedProviderId);
 
@@ -8089,6 +8271,9 @@ class AskMateSettingTab extends PluginSettingTab {
 						await this.plugin.setReasoningEffort(value);
 					});
 			});
+	}
+
+	private renderRequestDefaultSettings(containerEl: HTMLElement): void {
 
 		new Setting(containerEl)
 			.setName("Send shortcut")
@@ -8132,73 +8317,6 @@ class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.outputMode)
 					.onChange(async (value) => {
 						this.plugin.settings.outputMode = value as OutputMode;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Result folder")
-			.setDesc("Folder for notes created by AskMate.")
-			.addText((text) => {
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.resultFolder)
-					.setValue(this.plugin.settings.resultFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.resultFolder = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Result note template")
-			.setDesc("Markdown template for text result notes. Variables include {{title}}, {{sourceLink}}, {{providerName}}, {{model}}, {{request}}, and {{response}}.")
-			.addTextArea((text) => {
-				text.inputEl.rows = 8;
-				text.inputEl.addClass("askmate-settings-template-input");
-				text
-					.setValue(this.plugin.settings.resultNoteTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.resultNoteTemplate = normalizeTemplateString(value, DEFAULT_RESULT_NOTE_TEMPLATE);
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Image result note template")
-			.setDesc("Markdown template for generated image notes. Variables include {{imageEmbed}}, {{imagePrompt}}, {{revisedPromptSection}}, and {{planningModel}}.")
-			.addTextArea((text) => {
-				text.inputEl.rows = 8;
-				text.inputEl.addClass("askmate-settings-template-input");
-				text
-					.setValue(this.plugin.settings.imageResultNoteTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.imageResultNoteTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Image folder template")
-			.setDesc("Folder template for generated PNG files. Use {{resultFolder}}, {{date}}, {{noteTitle}}, or {{workflowName}}.")
-			.addText((text) => {
-				text
-					.setPlaceholder(DEFAULT_IMAGE_FOLDER_TEMPLATE)
-					.setValue(this.plugin.settings.imageFolderTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.imageFolderTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FOLDER_TEMPLATE);
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Image file name template")
-			.setDesc("Base file name template for generated PNG files. AskMate still adds a timestamp and resolves duplicates.")
-			.addText((text) => {
-				text
-					.setPlaceholder(DEFAULT_IMAGE_FILE_NAME_TEMPLATE)
-					.setValue(this.plugin.settings.imageFileNameTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.imageFileNameTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
 						await this.plugin.saveSettings();
 					});
 			});
@@ -8292,8 +8410,9 @@ class AskMateSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+	}
 
-		new Setting(containerEl).setName("Context expansion").setHeading();
+	private renderContextSourceSettings(containerEl: HTMLElement): void {
 
 		new Setting(containerEl)
 			.setName("Threaded chat mode")
@@ -8396,51 +8515,6 @@ class AskMateSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Default partial Apply scope")
-			.setDesc("Auto keeps the existing selected-text or full-note behavior. Assistant message actions can also apply to selected blocks or heading sections.")
-			.addDropdown((dropdown) => {
-				dropdown
-					.addOption("auto", "Auto")
-					.addOption("selected-block", "Selected block")
-					.addOption("heading-section", "Heading section")
-					.addOption("full-note", "Full note")
-					.setValue(this.plugin.settings.partialApplyDefaultScope)
-					.onChange(async (value) => {
-						this.plugin.settings.partialApplyDefaultScope = normalizeApplyScope(value);
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Show Apply preview")
-			.setDesc("Shows a Markdown diff confirmation before AskMate writes generated text into a note.")
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.plugin.settings.showApplyPreview)
-					.onChange(async (value) => {
-						this.plugin.settings.showApplyPreview = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		this.renderAskMateMvpSettings(containerEl);
-
-		this.renderWorkflowDisplaySettings(containerEl);
-		this.renderCustomWorkflows(containerEl);
-
-		this.renderUsageStatistics(containerEl);
-
-		containerEl.createEl("p", {
-			cls: "askmate-settings-note",
-			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
-		});
-	}
-
-
-	private renderAskMateMvpSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Advanced AskMate features").setHeading();
-
-		new Setting(containerEl)
 			.setName("Evidence-linked answers")
 			.setDesc("Ask text models to cite evidence sources like [S1], then show jump-to-source actions on cited replies.")
 			.addToggle((toggle) => toggle.setValue(this.plugin.settings.evidenceLinkedAnswersEnabled).onChange(async (value) => {
@@ -8454,19 +8528,6 @@ class AskMateSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
-
-		new Setting(containerEl)
-			.setName("Frontmatter Apply handling")
-			.setDesc("Controls how full-note Apply handles YAML frontmatter.")
-			.addDropdown((dropdown) => dropdown
-				.addOption("preserve", "Preserve original frontmatter")
-				.addOption("confirm", "Confirm frontmatter changes")
-				.addOption("replace", "Replace from AI output")
-				.setValue(this.plugin.settings.frontmatterApplyPolicy)
-				.onChange(async (value) => {
-					this.plugin.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(value);
-					await this.plugin.saveSettings();
-				}));
 
 		new Setting(containerEl)
 			.setName("Note-specific AskMate history")
@@ -8503,6 +8564,117 @@ class AskMateSettingTab extends PluginSettingTab {
 				this.plugin.settings.glossaryContextPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
 				await this.plugin.saveSettings();
 			}));
+	}
+
+	private renderOutputApplySettings(containerEl: HTMLElement): void {
+
+		new Setting(containerEl)
+			.setName("Result folder")
+			.setDesc("Folder for notes created by AskMate.")
+			.addText((text) => {
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.resultFolder)
+					.setValue(this.plugin.settings.resultFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.resultFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Result note template")
+			.setDesc("Markdown template for text result notes. Variables include {{title}}, {{sourceLink}}, {{providerName}}, {{model}}, {{request}}, and {{response}}.")
+			.addTextArea((text) => {
+				text.inputEl.rows = 8;
+				text.inputEl.addClass("askmate-settings-template-input");
+				text
+					.setValue(this.plugin.settings.resultNoteTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.resultNoteTemplate = normalizeTemplateString(value, DEFAULT_RESULT_NOTE_TEMPLATE);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Image result note template")
+			.setDesc("Markdown template for generated image notes. Variables include {{imageEmbed}}, {{imagePrompt}}, {{revisedPromptSection}}, and {{planningModel}}.")
+			.addTextArea((text) => {
+				text.inputEl.rows = 8;
+				text.inputEl.addClass("askmate-settings-template-input");
+				text
+					.setValue(this.plugin.settings.imageResultNoteTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.imageResultNoteTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Image folder template")
+			.setDesc("Folder template for generated PNG files. Use {{resultFolder}}, {{date}}, {{noteTitle}}, or {{workflowName}}.")
+			.addText((text) => {
+				text
+					.setPlaceholder(DEFAULT_IMAGE_FOLDER_TEMPLATE)
+					.setValue(this.plugin.settings.imageFolderTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.imageFolderTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FOLDER_TEMPLATE);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Image file name template")
+			.setDesc("Base file name template for generated PNG files. AskMate still adds a timestamp and resolves duplicates.")
+			.addText((text) => {
+				text
+					.setPlaceholder(DEFAULT_IMAGE_FILE_NAME_TEMPLATE)
+					.setValue(this.plugin.settings.imageFileNameTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.imageFileNameTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Default partial Apply scope")
+			.setDesc("Auto keeps the existing selected-text or full-note behavior. Assistant message actions can also apply to selected blocks or heading sections.")
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption("auto", "Auto")
+					.addOption("selected-block", "Selected block")
+					.addOption("heading-section", "Heading section")
+					.addOption("full-note", "Full note")
+					.setValue(this.plugin.settings.partialApplyDefaultScope)
+					.onChange(async (value) => {
+						this.plugin.settings.partialApplyDefaultScope = normalizeApplyScope(value);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Show Apply preview")
+			.setDesc("Shows a Markdown diff confirmation before AskMate writes generated text into a note.")
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.showApplyPreview)
+					.onChange(async (value) => {
+						this.plugin.settings.showApplyPreview = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Frontmatter Apply handling")
+			.setDesc("Controls how full-note Apply handles YAML frontmatter.")
+			.addDropdown((dropdown) => dropdown
+				.addOption("preserve", "Preserve original frontmatter")
+				.addOption("confirm", "Confirm frontmatter changes")
+				.addOption("replace", "Replace from AI output")
+				.setValue(this.plugin.settings.frontmatterApplyPolicy)
+				.onChange(async (value) => {
+					this.plugin.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(value);
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName("Smart result-note placement")
@@ -8516,9 +8688,15 @@ class AskMateSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			}));
 
-		this.renderBatchWorkflowRunner(containerEl);
 		this.renderReviewQueue(containerEl);
 	}
+
+	private renderWorkflowAutomationSettings(containerEl: HTMLElement): void {
+		this.renderWorkflowDisplaySettings(containerEl);
+		this.renderCustomWorkflows(containerEl);
+		this.renderBatchWorkflowRunner(containerEl);
+	}
+
 
 	private renderBatchWorkflowRunner(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Batch workflow runner").setHeading();

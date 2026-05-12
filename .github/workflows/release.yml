@@ -60,10 +60,12 @@ jobs:
             manifest.json
             styles.css
           body: |
-            ## Fix
+            ## Changes
 
-            - Fixed Obsidian Community CSS review warnings for partially supported selectors and broad selector invalidation.
-            - Published release assets from GitHub Actions with artifact attestations.
+            - Reorganized AskMate settings into collapsible sections with category navigation.
+            - Added responsive settings styles for section cards, controls, focus states, and narrow sidebars.
+            - Added public release/community review rules and investigation notes for composer scroll behavior.
+            - Updated the README roadmap/status summary.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
