@@ -1,0 +1,98 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">AskMate hero banner</title>
+  <desc id="desc">A polished banner showing AskMate as an AI assistant for Obsidian notes, with cards for Q and A, summaries, workflows, safe Apply, and image generation.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151A2D"/>
+      <stop offset="0.52" stop-color="#24204A"/>
+      <stop offset="1" stop-color="#092F34"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="167" y1="142" x2="984" y2="540" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset="0.52" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="256" y1="112" x2="1078" y2="546" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.17"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.07"/>
+    </linearGradient>
+    <filter id="shadow" x="144" y="76" width="992" height="500" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="34"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.01 0 0 0 0 0.02 0 0 0 0 0.08 0 0 0 0.42 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.30 0 0 0 0 0.85 0 0 0 0 0.95 0 0 0 0.35 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+    <radialGradient id="orbA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1072 116) rotate(122) scale(300)">
+      <stop stop-color="#22D3EE" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(178 520) rotate(-42) scale(340)">
+      <stop stop-color="#8B5CF6" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" rx="44" fill="url(#bg)"/>
+  <rect width="1280" height="640" rx="44" fill="url(#orbA)"/>
+  <rect width="1280" height="640" rx="44" fill="url(#orbB)"/>
+
+  <g opacity="0.26">
+    <path d="M88 134H1192" stroke="white" stroke-opacity="0.18"/>
+    <path d="M88 506H1192" stroke="white" stroke-opacity="0.12"/>
+    <path d="M196 64V576" stroke="white" stroke-opacity="0.10"/>
+    <path d="M1084 64V576" stroke="white" stroke-opacity="0.10"/>
+    <circle cx="1114" cy="174" r="3" fill="white"/>
+    <circle cx="177" cy="214" r="3" fill="white"/>
+    <circle cx="1010" cy="482" r="3" fill="white"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="188" y="116" width="904" height="424" rx="34" fill="url(#panel)" stroke="white" stroke-opacity="0.18"/>
+    <rect x="220" y="150" width="302" height="356" rx="24" fill="#0D1326" fill-opacity="0.78" stroke="white" stroke-opacity="0.14"/>
+    <rect x="244" y="178" width="92" height="14" rx="7" fill="#FFFFFF" fill-opacity="0.22"/>
+    <rect x="244" y="212" width="230" height="14" rx="7" fill="#FFFFFF" fill-opacity="0.16"/>
+    <rect x="244" y="240" width="188" height="14" rx="7" fill="#FFFFFF" fill-opacity="0.12"/>
+    <rect x="244" y="288" width="230" height="72" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="white" stroke-opacity="0.11"/>
+    <rect x="264" y="310" width="132" height="12" rx="6" fill="#22D3EE" fill-opacity="0.82"/>
+    <rect x="264" y="335" width="174" height="10" rx="5" fill="#FFFFFF" fill-opacity="0.16"/>
+    <rect x="244" y="384" width="230" height="72" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="white" stroke-opacity="0.11"/>
+    <rect x="264" y="406" width="102" height="12" rx="6" fill="#34D399" fill-opacity="0.82"/>
+    <rect x="264" y="431" width="168" height="10" rx="5" fill="#FFFFFF" fill-opacity="0.16"/>
+
+    <g filter="url(#glow)">
+      <circle cx="639" cy="316" r="104" fill="url(#accent)" fill-opacity="0.2"/>
+      <path d="M635 200C700 200 753 253 753 318C753 383 700 436 635 436C570 436 517 383 517 318C517 253 570 200 635 200Z" fill="#0B1224" stroke="url(#accent)" stroke-width="4"/>
+      <path d="M602 317C602 294 617 277 639 277C661 277 676 294 676 317C676 340 661 357 639 357C617 357 602 340 602 317Z" fill="url(#accent)"/>
+      <path d="M639 238V262" stroke="#DDFBFF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M639 372V396" stroke="#DDFBFF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M718 317H694" stroke="#DDFBFF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M584 317H560" stroke="#DDFBFF" stroke-width="10" stroke-linecap="round"/>
+    </g>
+
+    <rect x="755" y="150" width="304" height="356" rx="24" fill="#0D1326" fill-opacity="0.78" stroke="white" stroke-opacity="0.14"/>
+    <rect x="786" y="184" width="118" height="28" rx="14" fill="#8B5CF6" fill-opacity="0.82"/>
+    <text x="845" y="203" text-anchor="middle" fill="white" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="700">Q&amp;A</text>
+    <rect x="916" y="184" width="112" height="28" rx="14" fill="#22D3EE" fill-opacity="0.78"/>
+    <text x="972" y="203" text-anchor="middle" fill="#06111E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="800">Summaries</text>
+    <rect x="786" y="232" width="242" height="76" rx="18" fill="#FFFFFF" fill-opacity="0.07" stroke="white" stroke-opacity="0.11"/>
+    <text x="808" y="262" fill="#EAF7FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18" font-weight="800">Current note</text>
+    <text x="808" y="288" fill="#AEB9D5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14">Selected text or full note context</text>
+    <rect x="786" y="326" width="112" height="58" rx="16" fill="#34D399" fill-opacity="0.16" stroke="#34D399" stroke-opacity="0.36"/>
+    <text x="842" y="360" text-anchor="middle" fill="#D9FFF0" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" font-weight="800">Workflows</text>
+    <rect x="916" y="326" width="112" height="58" rx="16" fill="#F59E0B" fill-opacity="0.16" stroke="#FBBF24" stroke-opacity="0.36"/>
+    <text x="972" y="360" text-anchor="middle" fill="#FFF2CC" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" font-weight="800">Safe Apply</text>
+    <rect x="786" y="404" width="242" height="58" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="white" stroke-opacity="0.11"/>
+    <text x="907" y="439" text-anchor="middle" fill="#EAF7FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="800">Image generation</text>
+  </g>
+
+  <text x="640" y="78" text-anchor="middle" fill="#F8FBFF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="56" font-weight="900" letter-spacing="-1.8">AskMate</text>
+  <text x="640" y="588" text-anchor="middle" fill="#C6D2F0" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="650">AI Q&amp;A, summaries, workflows, safe note edits, and images inside Obsidian</text>
+</svg>

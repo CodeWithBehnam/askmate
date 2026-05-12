@@ -1,36 +1,86 @@
-# AskMate
+<a id="top"></a>
 
-**Labels:** AI notes, Q&A, summaries, rewrites, translation, workflows, safe Apply, image generation.
+<p align="center">
+  <img src="docs/assets/askmate-hero.svg" alt="AskMate hero banner showing AI note Q&A, summaries, workflows, safe Apply, and image generation inside Obsidian" width="100%">
+</p>
+
+<h1 align="center">AskMate</h1>
+
+<p align="center">
+  <strong>AI Q&A, summaries, rewrites, workflows, safe note edits, and image generation inside Obsidian.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/CodeWithBehnam/askmate/releases"><img src="https://img.shields.io/github/v/release/CodeWithBehnam/askmate?style=for-the-badge&label=release&color=8B5CF6" alt="Latest release"></a>
+  <a href="https://github.com/CodeWithBehnam/askmate/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/CodeWithBehnam/askmate/release.yml?style=for-the-badge&label=release%20build" alt="Release workflow status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/CodeWithBehnam/askmate?style=for-the-badge&color=34D399" alt="License"></a>
+  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-1.11.4%2B-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian 1.11.4 or newer"></a>
+  <a href="https://github.com/CodeWithBehnam/askmate/stargazers"><img src="https://img.shields.io/github/stars/CodeWithBehnam/askmate?style=for-the-badge&color=22D3EE" alt="GitHub stars"></a>
+  <a href="https://github.com/CodeWithBehnam/askmate/issues"><img src="https://img.shields.io/github/issues/CodeWithBehnam/askmate?style=for-the-badge&color=F59E0B" alt="Open issues"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/-AI%20notes-8B5CF6?style=flat-square" alt="AI notes">
+  <img src="https://img.shields.io/badge/-Q%26A-22D3EE?style=flat-square" alt="Q&A">
+  <img src="https://img.shields.io/badge/-summaries-34D399?style=flat-square" alt="Summaries">
+  <img src="https://img.shields.io/badge/-rewrites-F472B6?style=flat-square" alt="Rewrites">
+  <img src="https://img.shields.io/badge/-workflows-F59E0B?style=flat-square" alt="Workflows">
+  <img src="https://img.shields.io/badge/-safe%20Apply-10B981?style=flat-square" alt="Safe Apply">
+  <img src="https://img.shields.io/badge/-image%20generation-6366F1?style=flat-square" alt="Image generation">
+</p>
+
+## Table of Contents
+
+- [About The Project](#about-the-project)
+  - [Built With](#built-with)
+- [Getting Started](#getting-started)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+  - [Quick Setup](#quick-setup)
+- [Usage](#usage)
+  - [Ask About A Note](#ask-about-a-note)
+  - [Create Or Apply Output](#create-or-apply-output)
+  - [Generate Images](#generate-images)
+  - [Run Workflows](#run-workflows)
+- [Privacy And Network Use](#privacy-and-network-use)
+- [Roadmap](#roadmap)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Contributing And Support](#contributing-and-support)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
+
+## About The Project
 
 AskMate is a desktop-only Obsidian plugin that adds a right-sidebar AI assistant for the note you are reading or editing.
 
 Use it to ask questions, summarize, rewrite, translate, run reusable workflows, generate images, and safely write AI output back into your vault.
 
-## What It Does
+### Built With
 
-- Uses selected text first, then falls back to the current or most recently active Markdown note.
-- Works from the right sidebar without losing note context when the sidebar has focus.
-- Supports OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and local OpenAI-compatible text endpoints.
-- Streams GPT-5.5 responses from OpenAI and supports provider-specific text responses elsewhere.
-- Generates images with OpenAI `gpt-image-2`.
-- Offers three output modes: Chat, New note, and Apply.
-- Shows a local request preview before sending, including source, context size, provider, model, output mode, and privacy controls.
-- Supports custom workflows, workflow variables, workflow import/export, and batch workflow runs across folders.
-- Supports optional extra context from specific notes, folders, style guides, glossaries, Excalidraw text, image metadata, and note-specific AskMate history.
-- Includes safer Apply previews, Markdown diffs, frontmatter handling, partial section Apply, and a review queue for suggested changes.
-- Stores provider API keys through Obsidian `SecretStorage`.
-- Does not include telemetry.
+<p>
+  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/Bun-000000?style=for-the-badge&logo=bun&logoColor=white" alt="Bun"></a>
+  <a href="https://esbuild.github.io"><img src="https://img.shields.io/badge/esbuild-FFCF00?style=for-the-badge&logo=esbuild&logoColor=111827" alt="esbuild"></a>
+  <a href="https://openai.com"><img src="https://img.shields.io/badge/OpenAI-111827?style=for-the-badge&logo=openai&logoColor=white" alt="OpenAI"></a>
+  <a href="https://www.anthropic.com"><img src="https://img.shields.io/badge/Anthropic-191919?style=for-the-badge" alt="Anthropic"></a>
+  <a href="https://ai.google.dev/gemini-api"><img src="https://img.shields.io/badge/Gemini-4285F4?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Google Gemini"></a>
+  <a href="https://openrouter.ai"><img src="https://img.shields.io/badge/OpenRouter-111827?style=for-the-badge" alt="OpenRouter"></a>
+</p>
 
-## Requirements
+## Getting Started
+
+### Requirements
 
 - Obsidian `1.11.4` or newer.
 - Desktop Obsidian.
 - An API key for your selected provider, unless your local endpoint does not require one.
 - OpenAI API access for image generation with `gpt-image-2`.
 
-## Installation
+### Installation
 
-### From Obsidian Community Plugins
+#### From Obsidian Community Plugins
 
 After AskMate is available in Obsidian Community Plugins:
 
@@ -40,7 +90,7 @@ After AskMate is available in Obsidian Community Plugins:
 4. Search for `AskMate`.
 5. Install and enable the plugin.
 
-### Manual Installation
+#### Manual Installation
 
 1. Download these files from the latest GitHub release:
 
@@ -60,7 +110,7 @@ YourVault/.obsidian/plugins/askmate/
 4. Restart Obsidian or reload plugins.
 5. Enable AskMate from Community plugins.
 
-## Quick Setup
+### Quick Setup
 
 1. Open AskMate settings in Obsidian.
 2. Choose a chat provider: OpenAI, OpenRouter, Anthropic Claude, Google Gemini, or Local/self-hosted.
@@ -72,7 +122,9 @@ YourVault/.obsidian/plugins/askmate/
 8. Optional: configure image prompt planning and add an OpenAI key for `gpt-image-2`.
 9. Optional: configure workflows, output templates, context budgets, send shortcut, usage budgets, and privacy defaults.
 
-## Common Workflows
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## Usage
 
 ### Ask About A Note
 
@@ -123,6 +175,8 @@ You can also create custom workflows in settings. Custom workflows can use varia
 {{customInstructions}}
 ```
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 ## Privacy And Network Use
 
 AskMate sends data only when you run a request. Depending on your settings and request, that data can include your prompt, selected text, the current note, workflow instructions, opted-in extra context, image prompt planning content, or generated image prompts.
@@ -135,20 +189,24 @@ Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores se
 
 Provider requests are subject to the selected provider's API terms and privacy policy.
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 ## Roadmap
 
-AskMate's current roadmap/status surfaces focus on making note work safer, clearer, and easier to review:
+AskMate's current roadmap and status surfaces focus on making note work safer, clearer, and easier to review:
 
-- evidence-linked answers for source-grounded replies and jump-to-source actions.
+- Evidence-linked answers for source-grounded replies and jump-to-source actions.
 - Markdown diff Apply preview for safer note edits before writing changes.
-- frontmatter controls for preserving, confirming, or replacing YAML during full-note Apply.
-- batch workflow runner support for running workflows across folders.
-- final prompt inspector tooling for reviewing the assembled prompt before sending.
-- note-specific AskMate history for per-note follow-up context.
-- style guide and glossary context roles for persistent writing and terminology guidance.
+- Frontmatter controls for preserving, confirming, or replacing YAML during full-note Apply.
+- Batch workflow runner support for running workflows across folders.
+- Final prompt inspector tooling for reviewing the assembled prompt before sending.
+- Note-specific AskMate history for per-note follow-up context.
+- Style guide and glossary context roles for persistent writing and terminology guidance.
 - Queue for review mode for AI-suggested changes that should be checked before applying.
-- smart result-note placement for keeping generated notes near their source notes.
+- Smart result-note placement for keeping generated notes near their source notes.
 - Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Troubleshooting
 
@@ -167,6 +225,8 @@ Click `Refresh models` after adding or changing an API key. If the provider does
 ### Image generation fails
 
 `gpt-image-2` may require OpenAI API access and organization verification. Check your OpenAI dashboard, then try again.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Development
 
@@ -202,12 +262,28 @@ manifest.json
 styles.css
 ```
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 ## Contributing And Support
 
 - Read `CONTRIBUTING.md` before opening a pull request.
 - Use the issue templates for bug reports and feature requests.
 - Report security concerns through `SECURITY.md`, not public issues.
 
+## Acknowledgements
+
+AskMate is built on the work of these tools, APIs, and communities:
+
+- [Obsidian](https://obsidian.md) and the Obsidian plugin API.
+- [OpenAI](https://openai.com) for GPT-5.5 text support and `gpt-image-2` image generation.
+- [OpenRouter](https://openrouter.ai), [Anthropic](https://www.anthropic.com), and [Google Gemini](https://ai.google.dev/gemini-api) for provider options.
+- [Bun](https://bun.sh), [TypeScript](https://www.typescriptlang.org), and [esbuild](https://esbuild.github.io) for the development toolchain.
+- [Shields.io](https://shields.io) for README badges.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 ## License
 
 AskMate is released under the MIT License. See `LICENSE`.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
