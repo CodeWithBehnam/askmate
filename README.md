@@ -33,11 +33,14 @@
 
 - [About The Project](#about-the-project)
   - [Built With](#built-with)
+  - [Use Cases](#use-cases)
+  - [Provider Comparison](#provider-comparison)
 - [Getting Started](#getting-started)
   - [Requirements](#requirements)
   - [Installation](#installation)
   - [Quick Setup](#quick-setup)
 - [Usage](#usage)
+  - [Example Prompts](#example-prompts)
   - [Ask About A Note](#ask-about-a-note)
   - [Create Or Apply Output](#create-or-apply-output)
   - [Generate Images](#generate-images)
@@ -68,6 +71,29 @@ Use it to ask questions, summarize, rewrite, translate, run reusable workflows, 
   <a href="https://ai.google.dev/gemini-api"><img src="https://img.shields.io/badge/Gemini-4285F4?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Google Gemini"></a>
   <a href="https://openrouter.ai"><img src="https://img.shields.io/badge/OpenRouter-111827?style=for-the-badge" alt="OpenRouter"></a>
 </p>
+
+### Use Cases
+
+| Use case | How AskMate helps |
+| --- | --- |
+| Students | Turn lecture notes into summaries, flashcards, study questions, and action items. |
+| Researchers | Extract claims, compare ideas, map evidence, and find gaps across note context. |
+| Writers | Rewrite rough notes, polish tone, translate drafts, and preserve structure. |
+| Product managers | Convert meetings and research notes into decisions, risks, next steps, and briefs. |
+| Developers | Explain technical notes, draft documentation, generate diagrams, and review plans. |
+| Knowledge workers | Ask targeted questions, organize scattered notes, and safely apply updates back to the vault. |
+
+### Provider Comparison
+
+| Provider | Text support | Image support | API key needed | Notes |
+| --- | --- | --- | --- | --- |
+| OpenAI | Yes | Yes, through `gpt-image-2` | Yes | Best fit when you want GPT-5.5 text plus image generation in one provider. |
+| OpenRouter | Yes | No | Yes | Use OpenRouter model IDs and route text requests through an OpenAI-compatible API. |
+| Anthropic Claude | Yes | No | Yes | Good for text workflows, critique, summarization, and long-form analysis. |
+| Google Gemini | Yes | No | Yes | Good for text workflows with Gemini models through Google's API. |
+| Local endpoint | Yes | No | Optional | Works with OpenAI-compatible `/chat/completions` endpoints such as local or self-hosted models. |
+
+<p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Getting Started
 
@@ -126,6 +152,26 @@ YourVault/.obsidian/plugins/askmate/
 
 ## Usage
 
+### Example Prompts
+
+Copy and paste any of these into AskMate:
+
+```text
+Summarize this note into action items.
+```
+
+```text
+Rewrite this in a clearer tone.
+```
+
+```text
+Find gaps or contradictions.
+```
+
+```text
+Create a Mermaid diagram from this note.
+```
+
 ### Ask About A Note
 
 1. Open a Markdown note.
@@ -178,6 +224,14 @@ You can also create custom workflows in settings. Custom workflows can use varia
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Privacy And Network Use
+
+> [!IMPORTANT]
+> Privacy-first defaults:
+>
+> - No telemetry.
+> - Sends data only when you run a request.
+> - API keys are stored through Obsidian `SecretStorage`.
+> - Prompt inspector is local and does not contact a provider by itself.
 
 AskMate sends data only when you run a request. Depending on your settings and request, that data can include your prompt, selected text, the current note, workflow instructions, opted-in extra context, image prompt planning content, or generated image prompts.
 
