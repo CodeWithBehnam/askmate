@@ -62,7 +62,7 @@ jobs:
           body: |
             ## Fix
 
-            - Fixed the remaining Obsidian Community review source checks for settings headings, promise handling, and quote cleanup.
+            - Fixed Obsidian Community CSS review warnings for partially supported selectors and broad selector invalidation.
             - Published release assets from GitHub Actions with artifact attestations.
             - Bumped plugin version to ${{ github.ref_name }}.
 

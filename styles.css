@@ -97,12 +97,11 @@
 	align-items: center;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--askmate-radius-md);
-	column-gap: 7px;
 	display: grid;
+	gap: 0 7px;
 	grid-template-areas: "avatar body actions";
 	grid-template-columns: auto minmax(0, 1fr) auto;
 	padding: 8px;
-	row-gap: 0;
 }
 
 .askmate-message-user {
@@ -241,22 +240,22 @@
 	align-self: center;
 }
 
-.askmate-message:has(.askmate-message-body-markdown),
-.askmate-message:has(.askmate-message-body-image) {
+.askmate-message-has-markdown,
+.askmate-message-has-image {
 	align-items: start;
 }
 
-.askmate-message:has(.askmate-message-body-markdown.is-simple-markdown) {
+.askmate-message-has-markdown.askmate-message-simple-markdown {
 	align-items: center;
 }
 
-.askmate-message:has(.askmate-message-body-markdown) .askmate-message-header,
-.askmate-message:has(.askmate-message-body-image) .askmate-message-header {
+.askmate-message-has-markdown .askmate-message-header,
+.askmate-message-has-image .askmate-message-header {
 	align-self: start;
 	padding-top: 1px;
 }
 
-.askmate-message:has(.askmate-message-body-markdown.is-simple-markdown) .askmate-message-header {
+.askmate-message-has-markdown.askmate-message-simple-markdown .askmate-message-header {
 	align-self: center;
 	padding-top: 0;
 }
@@ -1083,7 +1082,6 @@
 
 .askmate-visually-hidden {
 	clip: rect(0 0 0 0);
-	clip-path: inset(50%);
 	height: 1px;
 	overflow: hidden;
 	position: absolute;

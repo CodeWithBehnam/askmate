@@ -6168,7 +6168,9 @@ class AskMateView extends ItemView {
 
 	private createMessageEl(role: ChatRole, text: string, renderMarkdown: boolean): MessageElements {
 		const wrapper = this.messagesEl.createDiv({
-			cls: `askmate-message askmate-message-${role}`
+			cls: renderMarkdown
+				? `askmate-message askmate-message-${role} askmate-message-has-markdown`
+				: `askmate-message askmate-message-${role}`
 		});
 
 		const header = wrapper.createDiv({ cls: "askmate-message-header" });
@@ -6241,6 +6243,7 @@ class AskMateView extends ItemView {
 		}
 
 		const message = this.createMessageEl("system", "", false);
+		message.wrapper.addClass("askmate-message-has-image");
 		message.body.empty();
 		message.body.addClass("askmate-message-body-image");
 		const shell = message.body.createDiv({ cls: "askmate-context-image-preview" });
@@ -6512,11 +6515,14 @@ class AskMateView extends ItemView {
 
 		const renderId = String(++this.markdownRenderId);
 		body.dataset.askmateRenderId = renderId;
-		body.classList.toggle("is-simple-markdown", this.isSimpleMarkdownReply(markdown));
+		const isSimpleMarkdown = this.isSimpleMarkdownReply(markdown);
+		body.classList.toggle("is-simple-markdown", isSimpleMarkdown);
+		body.closest(".askmate-message")?.classList.toggle("askmate-message-simple-markdown", isSimpleMarkdown);
 
 		if (!markdown.trim()) {
 			body.empty();
 			body.removeClass("is-simple-markdown");
+			body.closest(".askmate-message")?.removeClass("askmate-message-simple-markdown");
 			return;
 		}
 
