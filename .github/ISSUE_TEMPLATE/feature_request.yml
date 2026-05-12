@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest an improvement for AskMate
+title: "Feature: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please explain the workflow and user value.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to do, and what is hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should AskMate do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other ways this could work?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Providers
+        - Chat and context
+        - Workflows
+        - Output and Apply
+        - Images
+        - Privacy and safety
+        - User experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Add examples, screenshots, or links if useful.

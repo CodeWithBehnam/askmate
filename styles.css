@@ -1,0 +1,1494 @@
+.askmate-sidebar {
+	--askmate-radius-lg: var(--radius-l, 18px);
+	--askmate-radius-md: var(--radius-m, 12px);
+	--askmate-radius-sm: var(--radius-s, 8px);
+	--askmate-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+	--askmate-focus-ring: color-mix(in srgb, var(--interactive-accent) 48%, transparent);
+	background:
+		radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--interactive-accent) 16%, transparent), transparent 32%),
+		linear-gradient(180deg, var(--background-primary), var(--background-secondary) 120%);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	height: 100%;
+	min-width: 0;
+	padding: 8px;
+}
+
+.askmate-hero {
+	align-items: center;
+	background: color-mix(in srgb, var(--background-primary) 86%, var(--interactive-accent) 14%);
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border));
+	border-radius: var(--askmate-radius-md);
+	box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
+	display: flex;
+	flex: 0 0 auto;
+	flex-direction: row;
+	gap: 6px;
+	overflow: hidden;
+	padding: 5px 6px;
+	position: relative;
+}
+
+.askmate-logo {
+	align-items: center;
+	background: linear-gradient(135deg, var(--interactive-accent), color-mix(in srgb, var(--interactive-accent) 55%, #ffffff));
+	border-radius: 8px;
+	box-shadow: 0 3px 9px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+	color: var(--text-on-accent);
+	display: inline-flex;
+	flex: 0 0 22px;
+	height: 22px;
+	justify-content: center;
+	width: 22px;
+}
+
+.askmate-logo svg {
+	height: 12px;
+	width: 12px;
+}
+
+.askmate-context,
+.askmate-context-chip {
+	background: color-mix(in srgb, var(--background-secondary) 72%, var(--interactive-accent) 28%);
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+	border-radius: 999px;
+	color: var(--text-muted);
+	flex: 1 1 auto;
+	font-size: var(--font-ui-smaller);
+	line-height: 1.2;
+	min-width: 0;
+	overflow: hidden;
+	padding: 3px 7px;
+	position: relative;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	z-index: 1;
+}
+
+.askmate-model-chip {
+	background: color-mix(in srgb, var(--background-secondary) 84%, var(--interactive-accent) 16%);
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+	border-radius: 999px;
+	color: var(--text-faint);
+	flex: 0 1 auto;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 700;
+	line-height: 1.2;
+	max-width: 38%;
+	overflow: hidden;
+	padding: 3px 7px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-messages {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 220px;
+	overflow-y: auto;
+	padding: 2px 2px 4px;
+	scrollbar-width: thin;
+}
+
+.askmate-message {
+	align-items: center;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-md);
+	column-gap: 7px;
+	display: grid;
+	grid-template-areas: "avatar body actions";
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	padding: 8px;
+	row-gap: 0;
+}
+
+.askmate-message-user {
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 32%, var(--background-modifier-border));
+}
+
+.askmate-message-assistant {
+	background: color-mix(in srgb, var(--background-primary) 88%, var(--background-secondary));
+	align-items: center;
+}
+
+.askmate-message-system {
+	align-items: center;
+	background: color-mix(in srgb, var(--background-secondary-alt) 88%, var(--background-primary));
+	color: var(--text-muted);
+	grid-template-areas: "avatar body";
+	grid-template-columns: auto minmax(0, 1fr);
+	row-gap: 0;
+}
+
+.askmate-message-header {
+	align-self: center;
+	grid-area: avatar;
+	padding-top: 0;
+}
+
+.askmate-message-system .askmate-message-header {
+	align-self: center;
+	padding-top: 0;
+}
+
+.askmate-message-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+	grid-area: actions;
+	justify-content: flex-end;
+	min-height: 28px;
+}
+
+.askmate-message-actions:empty {
+	display: none;
+}
+
+.askmate-message-assistant .askmate-message-actions:not(:empty) {
+	align-self: start;
+	background: color-mix(in srgb, var(--background-primary) 82%, transparent);
+	backdrop-filter: blur(8px);
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+	border-radius: 999px;
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
+	justify-self: end;
+	padding: 3px;
+	position: sticky;
+	top: 8px;
+	z-index: 3;
+}
+
+.askmate-message-action {
+	align-items: center;
+	background: color-mix(in srgb, var(--background-secondary) 78%, transparent);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	color: var(--text-muted);
+	cursor: pointer;
+	display: inline-flex;
+	height: 28px;
+	justify-content: center;
+	padding: 0;
+	width: 28px;
+}
+
+.askmate-message-action:hover,
+.askmate-message-action:focus-visible {
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+	color: var(--text-normal);
+}
+
+.askmate-message-action:disabled {
+	cursor: not-allowed;
+	opacity: 0.48;
+}
+
+.askmate-onboarding-message {
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+}
+
+.askmate-onboarding-card {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.askmate-onboarding-card p {
+	margin: 0;
+}
+
+.askmate-onboarding-card button {
+	align-self: flex-start;
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	border-radius: 999px;
+	color: var(--text-normal);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	padding: 3px 8px;
+}
+
+
+.askmate-message-body {
+	align-self: center;
+	grid-area: body;
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	min-width: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.askmate-message-system .askmate-message-body {
+	align-self: center;
+	line-height: 1.35;
+	padding-top: 0;
+}
+
+.askmate-message-body-markdown,
+.askmate-message-body-image,
+.askmate-message-assistant .askmate-message-body {
+	align-self: start;
+}
+
+.askmate-message-body-markdown.is-simple-markdown {
+	align-self: center;
+}
+
+.askmate-message:has(.askmate-message-body-markdown),
+.askmate-message:has(.askmate-message-body-image) {
+	align-items: start;
+}
+
+.askmate-message:has(.askmate-message-body-markdown.is-simple-markdown) {
+	align-items: center;
+}
+
+.askmate-message:has(.askmate-message-body-markdown) .askmate-message-header,
+.askmate-message:has(.askmate-message-body-image) .askmate-message-header {
+	align-self: start;
+	padding-top: 1px;
+}
+
+.askmate-message:has(.askmate-message-body-markdown.is-simple-markdown) .askmate-message-header {
+	align-self: center;
+	padding-top: 0;
+}
+
+.askmate-message-body-markdown,
+.askmate-message-body-image {
+	white-space: normal;
+}
+
+.askmate-message-assistant,
+.askmate-message-assistant .askmate-message-body,
+.askmate-message-assistant .askmate-rendered-markdown,
+.askmate-message-assistant .askmate-rendered-markdown * {
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.askmate-message-assistant .askmate-message-header,
+.askmate-message-assistant .askmate-message-header *,
+.askmate-message-assistant .askmate-message-actions,
+.askmate-message-assistant .askmate-message-actions * {
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.askmate-image-result {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.askmate-generated-image {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-md);
+	display: block;
+	max-width: 100%;
+}
+
+.askmate-context-image-preview {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	width: 100%;
+}
+
+.askmate-context-image-heading,
+.askmate-context-image-more {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 650;
+	line-height: 1.3;
+}
+
+.askmate-context-image-more {
+	color: var(--text-faint);
+	font-weight: 500;
+}
+
+.askmate-context-image-grid {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+}
+
+.askmate-context-image-card {
+	background: color-mix(in srgb, var(--background-secondary) 72%, transparent);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-sm);
+	margin: 0;
+	overflow: hidden;
+	padding: 6px;
+}
+
+.askmate-chat-image {
+	background: var(--background-secondary);
+	border-radius: calc(var(--askmate-radius-sm) - 2px);
+	display: block;
+	max-height: 220px;
+	object-fit: contain;
+	width: 100%;
+}
+
+.askmate-context-image-card figcaption {
+	color: var(--text-faint);
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	line-height: 1.25;
+	margin-top: 5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-image-meta {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+}
+
+.askmate-image-prompt-details {
+	background: color-mix(in srgb, var(--background-secondary) 82%, transparent);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-sm);
+	padding: 6px 8px;
+}
+
+.askmate-image-prompt-details summary {
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	font-weight: 650;
+}
+
+.askmate-image-prompt-details pre {
+	font-size: var(--font-ui-smaller);
+	margin: 6px 0 0;
+	overflow-x: auto;
+	white-space: pre-wrap;
+}
+
+.askmate-rendered-markdown {
+	overflow-wrap: anywhere;
+}
+
+.askmate-rendered-markdown > :first-child {
+	margin-top: 0;
+}
+
+.askmate-rendered-markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.askmate-message-body-markdown.is-simple-markdown .askmate-rendered-markdown {
+	line-height: 1.35;
+}
+
+.askmate-rendered-markdown h1,
+.askmate-rendered-markdown h2,
+.askmate-rendered-markdown h3,
+.askmate-rendered-markdown h4 {
+	font-weight: 750;
+	line-height: 1.25;
+	margin: 0.85em 0 0.35em;
+}
+
+.askmate-rendered-markdown h1 {
+	font-size: calc(var(--font-ui-large) + 1px);
+}
+
+.askmate-rendered-markdown h2 {
+	font-size: var(--font-ui-large);
+}
+
+.askmate-rendered-markdown h3,
+.askmate-rendered-markdown h4 {
+	font-size: var(--font-ui-medium);
+}
+
+.askmate-rendered-markdown p,
+.askmate-rendered-markdown ul,
+.askmate-rendered-markdown ol,
+.askmate-rendered-markdown blockquote,
+.askmate-rendered-markdown table,
+.askmate-rendered-markdown pre {
+	margin-block: 0.55em;
+}
+
+.askmate-rendered-markdown ul,
+.askmate-rendered-markdown ol {
+	padding-inline-start: 1.45em;
+}
+
+.askmate-rendered-markdown li {
+	margin-block: 0.2em;
+}
+
+.askmate-rendered-markdown blockquote {
+	border-inline-start: 3px solid var(--interactive-accent);
+	color: var(--text-muted);
+	padding-inline-start: 0.8em;
+}
+
+.askmate-rendered-markdown table {
+	border-collapse: collapse;
+	display: block;
+	overflow-x: auto;
+	width: 100%;
+}
+
+.askmate-rendered-markdown th,
+.askmate-rendered-markdown td {
+	border: 1px solid var(--background-modifier-border);
+	padding: 5px 7px;
+	vertical-align: top;
+}
+
+.askmate-rendered-markdown code {
+	background: var(--background-secondary-alt);
+	border-radius: 4px;
+	font-size: 0.92em;
+	padding: 0.1em 0.28em;
+}
+
+.askmate-rendered-markdown pre {
+	background: var(--background-secondary-alt);
+	border-radius: var(--askmate-radius-sm);
+	overflow-x: auto;
+	padding: 9px;
+}
+
+.askmate-rendered-markdown pre code {
+	background: transparent;
+	padding: 0;
+}
+
+.askmate-avatar {
+	align-items: center;
+	border-radius: 999px;
+	display: inline-flex;
+	height: 28px;
+	justify-content: center;
+	position: relative;
+	width: 28px;
+}
+
+.askmate-avatar-assistant {
+	background: linear-gradient(135deg, color-mix(in srgb, var(--interactive-accent) 88%, #ffffff), color-mix(in srgb, var(--interactive-accent) 42%, #ffffff));
+	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+}
+
+.askmate-avatar-user {
+	background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-secondary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+}
+
+.askmate-avatar-system {
+	background: var(--background-secondary-alt);
+	border: 1px solid var(--background-modifier-border);
+	height: 24px;
+	width: 24px;
+}
+
+.askmate-message-system .askmate-avatar-status-mark {
+	transform: translateY(0);
+}
+
+.askmate-avatar-robot-antenna {
+	background: var(--text-on-accent);
+	border: 2px solid color-mix(in srgb, var(--text-on-accent) 72%, transparent);
+	border-radius: 999px;
+	height: 5px;
+	left: 50%;
+	position: absolute;
+	top: 3px;
+	transform: translateX(-50%);
+	width: 5px;
+}
+
+.askmate-avatar-robot-face {
+	background: color-mix(in srgb, var(--text-on-accent) 92%, transparent);
+	border-radius: 8px;
+	height: 16px;
+	position: relative;
+	width: 19px;
+}
+
+.askmate-avatar-robot-eyes {
+	display: flex;
+	gap: 5px;
+	justify-content: center;
+	padding-top: 4px;
+}
+
+.askmate-avatar-robot-eyes span {
+	background: var(--interactive-accent);
+	border-radius: 999px;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+	height: 3px;
+	width: 3px;
+}
+
+.askmate-avatar-robot-smile {
+	background: transparent;
+	border: 0;
+	border-bottom: 2px solid var(--interactive-accent);
+	border-radius: 0 0 999px 999px;
+	height: 5px;
+	left: 5px;
+	position: absolute;
+	top: 8px;
+	width: 9px;
+}
+
+.askmate-avatar-person-head {
+	background: var(--text-muted);
+	border-radius: 999px;
+	height: 7px;
+	margin: 5px auto 2px;
+	width: 7px;
+}
+
+.askmate-avatar-person-body {
+	background: var(--text-muted);
+	border-radius: 999px 999px 4px 4px;
+	height: 7px;
+	margin: 0 auto;
+	width: 14px;
+}
+
+.askmate-avatar-status-mark {
+	display: flex;
+	gap: 3px;
+}
+
+.askmate-avatar-status-mark div {
+	background: var(--text-muted);
+	border-radius: 999px;
+	height: 4px;
+	width: 4px;
+}
+
+.askmate-workflow-section {
+	background: color-mix(in srgb, var(--background-primary) 70%, transparent);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-md);
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
+	display: flex;
+	flex: 0 0 auto;
+	flex-direction: column;
+	gap: 6px;
+	padding: 7px;
+}
+
+.askmate-workflow-section.is-collapsed {
+	display: none;
+}
+
+.askmate-section-heading {
+	align-items: center;
+	color: var(--text-muted);
+	display: flex;
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	justify-content: space-between;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+.askmate-section-count {
+	background: var(--background-secondary-alt);
+	border-radius: 999px;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 600;
+	padding: 2px 7px;
+	text-transform: none;
+}
+
+.askmate-workflow-grid {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.askmate-workflow-card {
+	--askmate-card-accent: var(--interactive-accent);
+	align-items: flex-start;
+	background: linear-gradient(135deg, color-mix(in srgb, var(--askmate-card-accent) 13%, var(--background-primary)), var(--background-primary));
+	border: 1px solid color-mix(in srgb, var(--askmate-card-accent) 32%, var(--background-modifier-border));
+	border-radius: 10px;
+	box-shadow: 0 3px 10px color-mix(in srgb, var(--askmate-card-accent) 8%, transparent);
+	color: var(--text-normal);
+	cursor: pointer;
+	display: flex;
+	gap: 6px;
+	min-height: 48px;
+	padding: 7px;
+	text-align: left;
+	transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+	width: 100%;
+}
+
+.askmate-workflow-card:hover {
+	background: linear-gradient(135deg, color-mix(in srgb, var(--askmate-card-accent) 20%, var(--background-primary)), var(--background-secondary));
+	border-color: color-mix(in srgb, var(--askmate-card-accent) 56%, var(--background-modifier-border));
+	transform: translateY(-1px);
+}
+
+.askmate-workflow-card:disabled {
+	cursor: not-allowed;
+	opacity: 0.48;
+	transform: none;
+}
+
+.askmate-workflow-card:focus-visible,
+.askmate-workflow-toggle:focus-visible,
+.askmate-segment:focus-visible,
+.askmate-icon-select-control:focus-within,
+.askmate-action-button:focus-visible,
+.askmate-message-action:focus-visible,
+.askmate-request-preview-select:focus-visible {
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 32%, transparent);
+	outline: none;
+}
+
+.askmate-workflow-icon {
+	align-items: center;
+	background: color-mix(in srgb, var(--askmate-card-accent) 16%, var(--background-secondary));
+	border-radius: 8px;
+	color: var(--askmate-card-accent);
+	display: inline-flex;
+	flex: 0 0 22px;
+	height: 22px;
+	justify-content: center;
+	width: 22px;
+}
+
+.askmate-workflow-icon svg {
+	height: 13px;
+	width: 13px;
+}
+
+.askmate-workflow-copy {
+	min-width: 0;
+	padding-top: 4px;
+}
+
+.askmate-workflow-name {
+	font-size: var(--font-ui-smaller);
+	font-weight: 750;
+	line-height: 1.15;
+}
+
+.askmate-workflow-desc {
+	color: var(--text-muted);
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	line-height: 1.2;
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-accent-blue { --askmate-card-accent: #3b82f6; }
+.askmate-accent-violet { --askmate-card-accent: #8b5cf6; }
+.askmate-accent-green { --askmate-card-accent: #10b981; }
+.askmate-accent-amber { --askmate-card-accent: #f59e0b; }
+.askmate-accent-rose { --askmate-card-accent: #f43f5e; }
+.askmate-accent-slate { --askmate-card-accent: #64748b; }
+
+.askmate-composer {
+	background: color-mix(in srgb, var(--background-primary) 78%, var(--background-secondary));
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-md);
+	box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.07);
+	display: flex;
+	flex: 0 0 auto;
+	flex-direction: column;
+	gap: 7px;
+	padding: 8px;
+}
+
+.askmate-composer-layout-expanded .askmate-composer {
+	gap: 10px;
+	padding: 12px;
+}
+
+.askmate-composer-layout-expanded .askmate-question {
+	min-height: 112px;
+	padding: 12px 56px 46px 12px;
+}
+
+.askmate-composer-layout-expanded .askmate-composer-footer {
+	gap: 10px;
+}
+
+.askmate-composer-layout-expanded .askmate-request-preview {
+	font-size: var(--font-ui-small);
+}
+
+.askmate-composer-header {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+	min-width: 0;
+}
+
+.askmate-composer-header-left {
+	align-items: center;
+	display: flex;
+	flex: 1 1 auto;
+	gap: 6px;
+	min-width: 0;
+}
+
+.askmate-composer-brand {
+	flex: 0 0 auto;
+	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	border-radius: 999px;
+	color: var(--text-faint);
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 750;
+	letter-spacing: 0.01em;
+	line-height: 1;
+	padding: 4px 8px;
+}
+
+.askmate-composer-brand.is-api-key-set {
+	border-color: color-mix(in srgb, #10b981 72%, var(--background-modifier-border));
+	box-shadow: 0 0 0 1px color-mix(in srgb, #10b981 18%, transparent);
+	color: color-mix(in srgb, #10b981 72%, var(--text-normal));
+}
+
+.askmate-composer-model {
+	flex: 0 1 auto;
+	max-width: 60%;
+}
+
+.askmate-composer-footer {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: space-between;
+	min-width: 0;
+}
+
+.askmate-output-shell {
+	align-items: center;
+	display: flex;
+	flex: 1 1 190px;
+	justify-content: flex-end;
+	min-width: 0;
+}
+
+.askmate-output-controls {
+	align-items: center;
+	display: flex;
+	flex-wrap: nowrap;
+	gap: 6px;
+	justify-content: flex-end;
+	min-width: 0;
+	width: auto;
+}
+
+.askmate-output-toggle {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	display: inline-flex;
+	flex: 0 0 auto;
+	gap: 2px;
+	padding: 2px;
+}
+
+.askmate-workflow-toggle,
+.askmate-segment,
+.askmate-reasoning-shell {
+	align-items: center;
+	border-radius: 999px;
+	color: var(--text-muted);
+	cursor: pointer;
+	display: inline-flex;
+	flex: 0 0 32px;
+	height: 32px;
+	justify-content: center;
+	line-height: 1;
+	min-height: 32px;
+	min-width: 32px;
+	padding: 0;
+	position: relative;
+	width: 32px;
+}
+
+.askmate-workflow-toggle,
+.askmate-segment {
+	background: transparent;
+	border: 0;
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+}
+
+.askmate-workflow-toggle,
+.askmate-reasoning-shell {
+	background: color-mix(in srgb, var(--background-secondary) 74%, var(--background-primary));
+	border: 1px solid var(--background-modifier-border);
+}
+
+.askmate-workflow-toggle:hover:not(.is-active),
+.askmate-segment:hover:not(.is-active),
+.askmate-reasoning-shell:hover:not(.is-disabled) {
+	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+	color: var(--text-normal);
+}
+
+.askmate-workflow-toggle:focus-visible,
+.askmate-segment:focus-visible,
+.askmate-reasoning-shell:focus-within,
+.askmate-action-button:focus-visible,
+.askmate-message-action:focus-visible {
+	box-shadow: 0 0 0 2px var(--askmate-focus-ring);
+	outline: none;
+}
+
+.askmate-workflow-toggle.is-active,
+.askmate-segment.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+}
+
+.askmate-workflow-toggle:disabled,
+.askmate-segment:disabled,
+.askmate-reasoning-select:disabled {
+	cursor: not-allowed;
+}
+
+.askmate-workflow-toggle:disabled,
+.askmate-segment:disabled {
+	opacity: 0.5;
+}
+
+.askmate-segment-icon,
+.askmate-reasoning-icon,
+.askmate-action-icon,
+.askmate-message-action-icon {
+	align-items: center;
+	display: inline-flex;
+	flex: 0 0 auto;
+	height: 14px;
+	justify-content: center;
+	line-height: 0;
+	pointer-events: none;
+	width: 14px;
+}
+
+.askmate-segment-icon svg,
+.askmate-reasoning-icon svg,
+.askmate-action-icon svg,
+.askmate-message-action-icon svg,
+.askmate-workflow-icon svg,
+.askmate-logo svg {
+	display: block;
+	flex: 0 0 auto;
+	margin: 0;
+}
+
+.askmate-segment-icon svg,
+.askmate-reasoning-icon svg,
+.askmate-action-icon svg,
+.askmate-message-action-icon svg {
+	height: 14px;
+	width: 14px;
+}
+
+.askmate-reasoning-icon {
+	color: currentColor;
+	position: relative;
+	z-index: 4;
+}
+
+.askmate-reasoning-icon svg {
+	stroke: currentColor;
+}
+
+.askmate-reasoning-shell {
+	overflow: hidden;
+}
+
+.askmate-reasoning-shell.is-disabled {
+	cursor: not-allowed;
+	opacity: 0.82;
+}
+
+.askmate-reasoning-shell.is-disabled .askmate-reasoning-icon {
+	color: color-mix(in srgb, var(--text-muted) 82%, var(--text-normal));
+}
+
+.askmate-reasoning-select {
+	-webkit-appearance: none;
+	appearance: none;
+	background: transparent;
+	border: 0;
+	border-radius: inherit;
+	box-shadow: none;
+	color: transparent;
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	height: 100%;
+	inset: 0;
+	margin: 0;
+	outline: none;
+	padding: 0;
+	position: absolute;
+	width: 100%;
+	z-index: 2;
+}
+
+.askmate-reasoning-select:disabled {
+	cursor: not-allowed;
+}
+
+.askmate-reasoning-select option {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.25;
+}
+
+.askmate-input-shell {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-md);
+	overflow: hidden;
+	position: relative;
+}
+
+.askmate-question {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.4;
+	min-height: 68px;
+	outline: none;
+	padding: 9px 52px 42px 9px;
+	resize: vertical;
+	width: 100%;
+}
+
+.askmate-question:focus {
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+
+.askmate-actions {
+	align-items: center;
+	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: nowrap;
+	gap: 6px;
+}
+
+.askmate-action-button {
+	align-items: center;
+	border-radius: 999px;
+	display: inline-flex;
+	flex: 0 0 32px;
+	font-weight: 750;
+	gap: 0;
+	height: 32px;
+	justify-content: center;
+	min-height: 32px;
+	min-width: 32px;
+	padding: 0;
+	width: 32px;
+}
+
+.askmate-image-button {
+	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-secondary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	color: var(--text-normal);
+	padding-inline: 0;
+}
+
+.askmate-context-button {
+	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	color: var(--text-faint);
+	flex-basis: 22px;
+	height: 22px;
+	min-height: 22px;
+	min-width: 22px;
+	width: 22px;
+}
+
+.askmate-context-button:hover,
+.askmate-context-button:focus-visible {
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+	color: var(--text-normal);
+}
+
+
+.askmate-send-button {
+	box-shadow: 0 10px 24px color-mix(in srgb, var(--interactive-accent) 32%, transparent);
+	min-width: 32px;
+}
+
+.askmate-input-shell .askmate-send-button {
+	bottom: 8px;
+	position: absolute;
+	right: 8px;
+	z-index: 2;
+}
+
+.askmate-send-button:not(:disabled) {
+	background: linear-gradient(135deg, var(--interactive-accent), color-mix(in srgb, var(--interactive-accent) 72%, #ffffff));
+	border-color: color-mix(in srgb, var(--interactive-accent) 72%, var(--background-modifier-border));
+	color: var(--text-on-accent);
+}
+
+.askmate-stop-button:not([hidden]) {
+	align-items: center;
+	display: inline-flex;
+}
+
+.askmate-stop-button:not(:disabled) {
+	background: color-mix(in srgb, #f43f5e 12%, var(--background-primary));
+	border-color: color-mix(in srgb, #f43f5e 48%, var(--background-modifier-border));
+	color: #f43f5e;
+}
+
+.askmate-action-button:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+.askmate-sidebar.is-loading .askmate-logo,
+.askmate-sidebar.is-loading .askmate-avatar-assistant {
+	animation: askmate-pulse 1.4s ease-in-out infinite;
+}
+
+.askmate-visually-hidden {
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	height: 1px;
+	overflow: hidden;
+	position: absolute;
+	white-space: nowrap;
+	width: 1px;
+}
+
+.askmate-settings-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+}
+
+.askmate-usage-stats {
+	background: color-mix(in srgb, var(--background-primary) 88%, var(--background-secondary));
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin: 10px 0 16px;
+	padding: 14px;
+}
+
+.askmate-usage-header {
+	align-items: flex-start;
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
+}
+
+.askmate-usage-copy h4,
+.askmate-chart-card h4,
+.askmate-usage-table-card h4 {
+	font-size: var(--font-ui-medium);
+	font-weight: 750;
+	letter-spacing: -0.01em;
+	margin: 0;
+}
+
+.askmate-usage-copy p,
+.askmate-chart-card p {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.45;
+	margin: 4px 0 0;
+}
+
+.askmate-usage-actions {
+	flex: 0 0 auto;
+}
+
+.askmate-stat-grid {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.askmate-stat-card {
+	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	padding: 10px 11px;
+}
+
+.askmate-stat-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	line-height: 1.2;
+}
+
+.askmate-stat-value {
+	color: var(--text-normal);
+	font-size: calc(var(--font-ui-large) + 2px);
+	font-weight: 800;
+	letter-spacing: -0.03em;
+	line-height: 1.1;
+	margin-top: 4px;
+}
+
+.askmate-stat-desc {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.25;
+	margin-top: 3px;
+}
+
+.askmate-usage-empty {
+	background: color-mix(in srgb, var(--background-secondary) 70%, var(--interactive-accent) 8%);
+	border: 1px dashed color-mix(in srgb, var(--interactive-accent) 32%, var(--background-modifier-border));
+	border-radius: 12px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+	padding: 14px;
+}
+
+.askmate-chart-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.askmate-chart-card,
+.askmate-usage-table-card {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	overflow: hidden;
+	padding: 12px;
+}
+
+.askmate-chart-legend {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 8px;
+}
+
+.askmate-chart-legend-item {
+	align-items: center;
+	color: var(--text-muted);
+	display: inline-flex;
+	font-size: var(--font-ui-smaller);
+	gap: 6px;
+}
+
+.askmate-chart-legend-swatch {
+	border-radius: 999px;
+	display: inline-block;
+	height: 9px;
+	width: 18px;
+}
+
+.askmate-chart-legend-input,
+.askmate-chart-bar-input {
+	fill: var(--interactive-accent);
+	background: var(--interactive-accent);
+}
+
+.askmate-chart-legend-output,
+.askmate-chart-bar-output {
+	fill: #f59e0b;
+	background: #f59e0b;
+}
+
+.askmate-chart-svg {
+	display: block;
+	height: auto;
+	margin-top: 10px;
+	overflow: visible;
+	width: 100%;
+}
+
+.askmate-chart-axis path,
+.askmate-chart-axis line {
+	stroke: var(--background-modifier-border);
+}
+
+.askmate-chart-axis text {
+	fill: var(--text-muted);
+	font-size: 11px;
+}
+
+.askmate-chart-bar-input,
+.askmate-chart-bar-output {
+	shape-rendering: crispEdges;
+}
+
+.askmate-chart-bar-output {
+	opacity: 0.88;
+}
+
+.askmate-chart-line {
+	fill: none;
+	stroke: var(--interactive-accent);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 3;
+}
+
+.askmate-chart-dot {
+	fill: var(--interactive-accent);
+	stroke: var(--background-primary);
+	stroke-width: 2;
+}
+
+.askmate-chart-average {
+	stroke: var(--text-faint);
+	stroke-dasharray: 5 5;
+	stroke-width: 1.5;
+}
+
+.askmate-usage-table-wrapper {
+	overflow-x: auto;
+}
+
+.askmate-usage-table {
+	border-collapse: collapse;
+	font-size: var(--font-ui-smaller);
+	margin-top: 10px;
+	min-width: 1080px;
+	width: 100%;
+}
+
+.askmate-usage-table th,
+.askmate-usage-table td {
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 7px 8px;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.askmate-usage-table th {
+	color: var(--text-muted);
+	font-weight: 750;
+}
+
+.askmate-usage-table td {
+	color: var(--text-normal);
+}
+
+@keyframes askmate-pulse {
+	0%, 100% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(1.04);
+	}
+}
+
+@media (max-width: 420px) {
+	.askmate-sidebar {
+		padding: 10px;
+	}
+
+	.askmate-workflow-grid {
+		grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+	}
+
+	.askmate-output-shell {
+		align-items: center;
+		flex-direction: row;
+	}
+
+	.askmate-output-controls {
+		justify-content: flex-end;
+		width: 100%;
+	}
+
+	.askmate-output-toggle {
+		justify-content: center;
+		width: auto;
+	}
+
+	.askmate-workflow-toggle,
+	.askmate-segment,
+	.askmate-reasoning-shell {
+		flex: 0 0 32px;
+		width: 32px;
+	}
+}
+.askmate-request-preview {
+	background: color-mix(in srgb, var(--background-secondary) 80%, var(--background-primary));
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-sm);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 6px;
+	padding: 7px 8px;
+}
+
+.askmate-request-preview-summary {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-request-preview-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.askmate-request-preview-toggle {
+	align-items: center;
+	color: var(--text-faint);
+	display: inline-flex;
+	font-size: var(--font-ui-smaller);
+	gap: 5px;
+	line-height: 1.2;
+}
+
+.askmate-request-preview-toggle input {
+	margin: 0;
+}
+
+.askmate-request-preview-select {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	max-width: 110px;
+	min-height: 24px;
+	padding: 1px 18px 1px 6px;
+}
+
+.askmate-extra-context-controls {
+	border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+	margin-top: 6px;
+	padding-top: 6px;
+}
+
+.askmate-extra-context-controls summary {
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+}
+
+.askmate-extra-context-body {
+	display: grid;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.askmate-extra-context-body label,
+.askmate-extra-context-inline {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.askmate-extra-context-inline {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+}
+
+.askmate-extra-context-textarea,
+.askmate-extra-context-input,
+.askmate-extra-context-number {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	width: 100%;
+}
+
+.askmate-extra-context-number {
+	max-width: 92px;
+}
+
+.askmate-workflow-display-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 8px 0 16px;
+}
+
+.askmate-workflow-display-card {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 10px;
+}
+
+.askmate-workflow-display-title {
+	color: var(--text-normal);
+	font-weight: 700;
+	margin-bottom: 4px;
+}
+
+.askmate-custom-workflow-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin: 8px 0 16px;
+}
+
+.askmate-custom-workflow-card {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 12px;
+}
+
+.askmate-custom-workflow-card h4 {
+	margin: 0 0 8px;
+}
+
+.askmate-custom-workflow-card textarea {
+	min-height: 160px;
+	width: 100%;
+}
+
+.askmate-settings-template-input {
+	font-family: var(--font-monospace);
+	min-height: 120px;
+	width: 100%;
+}

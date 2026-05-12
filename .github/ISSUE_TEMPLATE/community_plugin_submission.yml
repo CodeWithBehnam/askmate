@@ -1,0 +1,26 @@
+name: Community plugin submission checklist
+description: Track readiness for submitting AskMate to Obsidian Community Plugins
+title: "Community plugin submission checklist"
+labels:
+  - release
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this checklist before submitting AskMate to Obsidian Community Plugins.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: README clearly explains features, setup, privacy, and manual installation.
+        - label: `manifest.json` has the correct plugin id, name, version, and minimum app version.
+        - label: `versions.json` includes the current release version.
+        - label: Release assets include `main.js`, `manifest.json`, and `styles.css`.
+        - label: `bun run test` passes.
+        - label: `bun run build` passes.
+        - label: Plugin was manually tested in Obsidian desktop.
+        - label: API keys are stored through Obsidian SecretStorage, not raw settings.
+        - label: Security, contributing, license, and code of conduct files exist.
+        - label: No private vault paths, API keys, or local-only docs are included in release docs.
