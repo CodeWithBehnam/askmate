@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Removed direct system clipboard writes from AskMate copy-style actions.
-            - Replaced vault-wide Markdown enumeration with folder-scoped listing for batch and folder-context workflows.
-            - Added smoke-test guards for Obsidian review recommendations around clipboard access and vault enumeration.
+            - Updated OpenAI model refresh to show every model ID returned by the OpenAI Models API.
+            - Added the Remotion demo project, generated demo video, and thumbnail assets.
+            - Added demo run scripts and smoke-test coverage for the model refresh behavior.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
