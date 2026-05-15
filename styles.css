@@ -1112,10 +1112,19 @@
 	padding: 14px;
 }
 
-.askmate-settings-nav-copy h3 {
+.askmate-settings-nav-copy .setting-item-heading {
+	border: 0;
+	padding: 0;
+}
+
+.askmate-settings-nav-copy .setting-item-heading .setting-item-info {
+	margin: 0;
+}
+
+.askmate-settings-nav-copy .setting-item-heading .setting-item-name {
 	font-size: var(--font-ui-large);
 	font-weight: 800;
-	letter-spacing: -0.02em;
+	letter-spacing: 0;
 	margin: 0;
 }
 

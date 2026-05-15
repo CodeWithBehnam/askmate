@@ -4619,10 +4619,6 @@ export default class AskMatePlugin extends Plugin {
 		after: string;
 		warning?: string;
 	}): Promise<boolean> {
-		const beforeLines = before ? before.split(/\r?\n/).length : 0;
-		const afterLines = after ? after.split(/\r?\n/).length : 0;
-		const scopeLabel = scope === "selected-text" ? "selected text" : "full note";
-
 		if (!this.settings.showApplyPreview) {
 			return scope === "selected-text"
 				? true
@@ -8161,7 +8157,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	private renderSettingsNavigation(parent: HTMLElement, sections: SettingsSectionDefinition[]): void {
 		const nav = parent.createDiv({ cls: "askmate-settings-nav" });
 		const copy = nav.createDiv({ cls: "askmate-settings-nav-copy" });
-		copy.createEl("h3", { text: "AskMate settings" });
+		new Setting(copy).setName("Categories").setHeading();
 		copy.createEl("p", { text: "Jump to a category or expand sections as needed." });
 
 		const buttons = nav.createDiv({ cls: "askmate-settings-nav-buttons" });
@@ -8182,7 +8178,7 @@ class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private renderSettingsSection(parent: HTMLElement, section: SettingsSectionDefinition): void {
-		const details = parent.createEl("details", { cls: "askmate-settings-section" }) as HTMLDetailsElement;
+		const details = parent.createEl("details", { cls: "askmate-settings-section" });
 		details.id = this.getSettingsSectionElementId(section.id);
 		details.open = this.isSettingsSectionOpen(section);
 		this.settingsSectionElements.set(section.id, details);
@@ -8231,7 +8227,7 @@ class AskMateSettingTab extends PluginSettingTab {
 		details.open = true;
 		if (scrollIntoView) {
 			details.scrollIntoView({ behavior: "smooth", block: "start" });
-			const summary = details.querySelector("summary") as HTMLElement | null;
+			const summary = details.querySelector("summary");
 			summary?.focus();
 		}
 	}
