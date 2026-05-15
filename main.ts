@@ -2352,6 +2352,34 @@ class AskMateDiffConfirmModal extends Modal {
 	}
 }
 
+class AskMateTextViewerModal extends Modal {
+	private readonly title: string;
+	private readonly value: string;
+
+	constructor(app: App, title: string, value: string) {
+		super(app);
+		this.title = title;
+		this.value = value;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("askmate-prompt-inspector");
+		contentEl.createDiv({ cls: "askmate-modal-title", text: this.title });
+		const textarea = contentEl.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
+		textarea.value = this.value;
+		textarea.readOnly = true;
+		textarea.rows = 14;
+		textarea.focus();
+		textarea.select();
+		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
+		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
+		closeButton.type = "button";
+		closeButton.addEventListener("click", () => this.close());
+	}
+}
+
 class AskMatePromptInspectorModal extends Modal {
 	private readonly inspection: PromptInspection;
 
@@ -2378,11 +2406,6 @@ class AskMatePromptInspectorModal extends Modal {
 			this.renderTextarea(contentEl, "Secondary image prompt", this.inspection.secondaryInput);
 		}
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const copyButton = actions.createEl("button", { text: "Copy final prompt" });
-		copyButton.type = "button";
-		copyButton.addEventListener("click", () => {
-			void navigator.clipboard.writeText(this.inspection.input).then(() => new Notice("Final prompt copied."));
-		});
 		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
 		closeButton.type = "button";
 		closeButton.addEventListener("click", () => this.close());
@@ -2428,12 +2451,12 @@ class AskMateNoteHistoryModal extends Modal {
 				card.createEl("p", { text: truncateLabel(turn.question, 220) });
 				card.createEl("p", { text: truncateLabel(turn.answer, 300) });
 				const actions = card.createDiv({ cls: "askmate-note-history-actions" });
-				const copyQuestion = actions.createEl("button", { text: "Copy question" });
-				copyQuestion.type = "button";
-				copyQuestion.addEventListener("click", () => void navigator.clipboard.writeText(turn.question));
-				const copyAnswer = actions.createEl("button", { text: "Copy answer" });
-				copyAnswer.type = "button";
-				copyAnswer.addEventListener("click", () => void navigator.clipboard.writeText(turn.answer));
+				const showQuestion = actions.createEl("button", { text: "Show question" });
+				showQuestion.type = "button";
+				showQuestion.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate question", turn.question).open());
+				const showAnswer = actions.createEl("button", { text: "Show answer" });
+				showAnswer.type = "button";
+				showAnswer.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate answer", turn.answer).open());
 			}
 		}
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
@@ -5025,16 +5048,60 @@ export default class AskMatePlugin extends Plugin {
 		await this.app.vault.modify(sourceFile, next);
 	}
 
-	getBatchWorkflowTargetFiles(folderPath: string, maxFiles: number): TFile[] {
+	private isVisibleMarkdownPath(path: string): boolean {
+		return path.endsWith(".md")
+			&& !path.startsWith(`${this.app.vault.configDir}/`)
+			&& !path.startsWith(".trash/")
+			&& !path.includes("/.");
+	}
+
+	private async listMarkdownFilesInFolder(folderPath: string, maxFiles: number, excludePath = ""): Promise<TFile[]> {
 		const folder = this.cleanFolderPath(folderPath);
 		if (!folder) {
 			return [];
 		}
-		return this.app.vault.getMarkdownFiles()
-			.filter((file) => file.path.startsWith(`${folder}/`) || file.parent?.path === folder)
-			.filter((file) => !file.path.startsWith(`${this.app.vault.configDir}/`) && !file.path.startsWith(".trash/") && !file.path.includes("/."))
-			.sort((a, b) => a.path.localeCompare(b.path))
-			.slice(0, normalizeBoundedInteger(maxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100));
+
+		const limit = normalizeBoundedInteger(maxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
+		const paths: string[] = [];
+
+		const visit = async (currentFolder: string): Promise<void> => {
+			if (paths.length >= limit) {
+				return;
+			}
+
+			let listed: { files: string[]; folders: string[] };
+			try {
+				listed = await this.app.vault.adapter.list(currentFolder);
+			} catch {
+				return;
+			}
+
+			for (const path of listed.files.slice().sort((a, b) => a.localeCompare(b))) {
+				const normalizedPath = normalizePath(path);
+				if (paths.length >= limit) {
+					return;
+				}
+				if (normalizedPath !== excludePath && this.isVisibleMarkdownPath(normalizedPath)) {
+					paths.push(normalizedPath);
+				}
+			}
+
+			for (const path of listed.folders.slice().sort((a, b) => a.localeCompare(b))) {
+				await visit(normalizePath(path));
+				if (paths.length >= limit) {
+					return;
+				}
+			}
+		};
+
+		await visit(folder);
+		return paths
+			.map((path) => this.app.vault.getAbstractFileByPath(path))
+			.filter((file): file is TFile => file instanceof TFile && file.extension === "md");
+	}
+
+	async getBatchWorkflowTargetFiles(folderPath: string, maxFiles: number): Promise<TFile[]> {
+		return await this.listMarkdownFilesInFolder(folderPath, maxFiles);
 	}
 
 	async runBatchWorkflow(
@@ -5049,7 +5116,7 @@ export default class AskMatePlugin extends Plugin {
 		if (!workflow) {
 			throw new Error("No AskMate workflow is available for batch processing.");
 		}
-		const files = this.getBatchWorkflowTargetFiles(options.folderPath, options.maxFiles);
+		const files = await this.getBatchWorkflowTargetFiles(options.folderPath, options.maxFiles);
 		const summary: BatchWorkflowSummary = { total: files.length, completed: 0, failed: 0, createdNotes: [], queuedReviews: 0 };
 		for (const file of files) {
 			this.throwIfAborted(abortSignal);
@@ -5662,11 +5729,7 @@ export default class AskMatePlugin extends Plugin {
 		const maxFiles = normalizeBoundedInteger(options.maxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
 		let remaining = normalizeBoundedInteger(options.maxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
 		const attachments: ContextAttachment[] = [];
-		const files = this.app.vault.getMarkdownFiles()
-			.filter((file) => file.path.startsWith(`${folder}/`))
-			.filter((file) => file.path !== excludePath)
-			.filter((file) => !file.path.startsWith(`${this.app.vault.configDir}/`) && !file.path.startsWith(".trash/") && !file.path.includes("/."))
-			.sort((a, b) => a.path.localeCompare(b.path));
+		const files = await this.listMarkdownFilesInFolder(folder, maxFiles, excludePath);
 
 		for (const file of files) {
 			if (attachments.length >= maxFiles || remaining <= 0) {
@@ -7704,8 +7767,8 @@ class AskMateView extends ItemView {
 		model: string
 	): void {
 		parent.empty();
-		this.createMessageAction(parent, "copy", "Copy reply", async () => {
-			await this.copyText(getText(), "Reply copied.");
+		this.createMessageAction(parent, "file-text", "Show reply text", () => {
+			this.showText(getText(), "AskMate reply");
 		});
 		this.createMessageAction(parent, "corner-down-left", "Use reply", () => {
 			this.useTextInComposer(getText());
@@ -7801,8 +7864,8 @@ class AskMateView extends ItemView {
 		getResult: () => ImageAskMateResult
 	): void {
 		parent.empty();
-		this.createMessageAction(parent, "copy", "Copy image prompt", async () => {
-			await this.copyText(getResult().image.prompt, "Image prompt copied.");
+		this.createMessageAction(parent, "file-text", "Show image prompt", () => {
+			this.showText(getResult().image.prompt, "AskMate image prompt");
 		});
 		this.createMessageAction(parent, "file-plus", "New image note", async () => {
 			const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, getResult());
@@ -7846,16 +7909,15 @@ class AskMateView extends ItemView {
 		return button;
 	}
 
-	private async copyText(text: string, notice: string): Promise<void> {
+	private showText(text: string, title: string): void {
 		const value = text.trim();
 
 		if (!value) {
-			new Notice("Nothing to copy yet.");
+			new Notice("Nothing to show yet.");
 			return;
 		}
 
-		await navigator.clipboard.writeText(value);
-		new Notice(notice);
+		new AskMateTextViewerModal(this.app, title, value).open();
 	}
 
 	private useTextInComposer(text: string): void {
@@ -9036,9 +9098,9 @@ class AskMateSettingTab extends PluginSettingTab {
 			dismiss.addEventListener("click", () => {
 				void this.plugin.dismissReviewQueueItem(item.id).then(() => this.display());
 			});
-			const copy = actions.createEl("button", { text: "Copy proposal" });
-			copy.type = "button";
-			copy.addEventListener("click", () => void navigator.clipboard.writeText(item.proposedText));
+			const showProposal = actions.createEl("button", { text: "Show proposal" });
+			showProposal.type = "button";
+			showProposal.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate review proposal", item.proposedText).open());
 		}
 	}
 
@@ -9122,9 +9184,8 @@ class AskMateSettingTab extends PluginSettingTab {
 			.setName("Workflow presets")
 			.setDesc("Export custom workflows as JSON, or paste a preset JSON export and import it. Imports append workflows and do not overwrite existing ones.")
 			.addButton((button) => {
-				button.setButtonText("Copy export").onClick(async () => {
-					await navigator.clipboard.writeText(this.plugin.exportCustomWorkflowPresets());
-					new Notice("AskMate workflow preset JSON copied.");
+				button.setButtonText("Show export JSON").onClick(() => {
+					new AskMateTextViewerModal(this.app, "AskMate workflow preset export", this.plugin.exportCustomWorkflowPresets()).open();
 				});
 			})
 			.addButton((button) => {

@@ -65,6 +65,9 @@ assertIncludes("main.ts", main, "glossaryContextPath", "glossary context role");
 assertIncludes("main.ts", main, "ReviewQueueItem", "review queue model");
 assertIncludes("main.ts", main, "smartResultPlacementEnabled", "smart result placement setting");
 assertIncludes("main.ts", main, "usageGuardrailsEnabled", "usage guardrails setting");
+assertIncludes("main.ts", main, "listMarkdownFilesInFolder", "folder-scoped markdown listing helper");
+assertNotPattern("main.ts", main, /getMarkdownFiles\s*\(/, "vault-wide Markdown enumeration should stay absent");
+assertNotPattern("main.ts", main, /navigator\.clipboard/, "direct clipboard access should stay absent");
 
 assertIncludes("styles.css", styles, "askmate-composer-layout-expanded", "expanded composer layout styles");
 assertIncludes("styles.css", styles, "askmate-onboarding-card", "onboarding styles");

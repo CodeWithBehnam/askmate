@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Fixed default Apply behavior so no-selection text Apply appends to the captured note instead of replacing existing note content.
-            - Preserved explicit full-note replacement behind the existing Apply preview, truncated-context warning, and frontmatter safeguards.
-            - Updated Apply documentation and smoke tests for the safer default append behavior.
+            - Removed direct system clipboard writes from AskMate copy-style actions.
+            - Replaced vault-wide Markdown enumeration with folder-scoped listing for batch and folder-context workflows.
+            - Added smoke-test guards for Obsidian review recommendations around clipboard access and vault enumeration.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
