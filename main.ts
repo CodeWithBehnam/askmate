@@ -7886,6 +7886,11 @@ class AskMateView extends ItemView {
 		onClick: () => void | Promise<void>,
 		options: MessageActionOptions = {}
 	): HTMLButtonElement {
+		const wrapper = parent.closest(".askmate-message");
+		if (wrapper instanceof HTMLElement) {
+			wrapper.addClass("askmate-message-has-actions");
+		}
+
 		const button = parent.createEl("button", { cls: "askmate-message-action" });
 		button.type = "button";
 		button.setAttribute("aria-label", label);
