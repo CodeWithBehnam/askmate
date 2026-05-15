@@ -2284,8 +2284,10 @@ function buildMarkdownLineDiff(before: string, after: string): MarkdownDiffLine[
 	return diff;
 }
 
+type TextApplyPreviewScope = "selected-text" | "append" | "full-note";
+
 interface DiffConfirmOptions {
-	scope: "selected-text" | "full-note";
+	scope: TextApplyPreviewScope;
 	targetLabel: string;
 	before: string;
 	after: string;
@@ -2306,8 +2308,12 @@ class AskMateDiffConfirmModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("askmate-diff-modal");
-		const scopeLabel = this.options.scope === "selected-text" ? "selected text" : "full note";
-		contentEl.createDiv({ cls: "askmate-modal-title", text: `Apply AskMate output to ${scopeLabel}?` });
+		const title = this.options.scope === "selected-text"
+			? "Apply AskMate output to selected text?"
+			: this.options.scope === "append"
+				? "Append AskMate output to the captured note?"
+				: "Replace the full note with AskMate output?";
+		contentEl.createDiv({ cls: "askmate-modal-title", text: title });
 		contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
 		contentEl.createDiv({
 			cls: "askmate-diff-summary",
@@ -4436,6 +4442,61 @@ export default class AskMatePlugin extends Plugin {
 		return `Applied to heading "${section.path}" in ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 	}
 
+	private appendMarkdownBlockToContent(existing: string, block: string): string {
+		const cleanBlock = block.trim();
+		const newline = existing.includes("\r\n") ? "\r\n" : "\n";
+
+		if (!existing) {
+			return `${cleanBlock}${newline}`;
+		}
+
+		const trailingLineBreaks = existing.match(/(?:\r\n|\n|\r)+$/u)?.[0].match(/\r\n|\n|\r/gu)?.length ?? 0;
+		const separator = trailingLineBreaks >= 2 ? "" : trailingLineBreaks === 1 ? newline : `${newline}${newline}`;
+		return `${existing}${separator}${cleanBlock}${newline}`;
+	}
+
+	private async appendResponseToCapturedNote(request: AskRequest, output: string, targetView: MarkdownView | null, file: TFile | null): Promise<string> {
+		if (targetView) {
+			const editor = targetView.editor;
+			const targetLabel = file?.path ?? "the current note";
+			const before = editor.getValue();
+			const after = this.appendMarkdownBlockToContent(before, output);
+
+			if (!(await this.confirmTextApplyPreview({
+				scope: "append",
+				targetLabel,
+				before,
+				after
+			}))) {
+				return "Apply cancelled. No note was changed.";
+			}
+
+			editor.setValue(after);
+			this.rememberEditorContext(editor, file);
+			return `Appended to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
+		}
+
+		if (file?.extension === "md") {
+			const content = await this.app.vault.cachedRead(file);
+			const after = this.appendMarkdownBlockToContent(content, output);
+
+			if (!(await this.confirmTextApplyPreview({
+				scope: "append",
+				targetLabel: file.path,
+				before: content,
+				after
+			}))) {
+				return "Apply cancelled. No note was changed.";
+			}
+
+			await this.app.vault.modify(file, after);
+			this.rememberMarkdownFile(file);
+			return `Appended to ${file.path}. Use Obsidian undo or file history immediately if needed.`;
+		}
+
+		throw new Error("Open the original Markdown note before appending changes.");
+	}
+
 	async applyResponseToContext(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<string> {
 		const output = responseText.trim();
 
@@ -4532,6 +4593,10 @@ export default class AskMatePlugin extends Plugin {
 			throw new Error("AskMate could not safely find the original selected text. Select the text again, then apply.");
 		}
 
+		if (scope !== "full-note") {
+			return await this.appendResponseToCapturedNote(request, output, targetView, file);
+		}
+
 		if (targetView) {
 			const editor = targetView.editor;
 			const targetLabel = file?.path ?? "the current note";
@@ -4613,16 +4678,16 @@ export default class AskMatePlugin extends Plugin {
 		after,
 		warning
 	}: {
-		scope: "selected-text" | "full-note";
+		scope: TextApplyPreviewScope;
 		targetLabel: string;
 		before: string;
 		after: string;
 		warning?: string;
 	}): Promise<boolean> {
 		if (!this.settings.showApplyPreview) {
-			return scope === "selected-text"
-				? true
-				: await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`);
+			return scope === "full-note"
+				? await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`)
+				: true;
 		}
 
 		return await askMateDiffConfirm(this.app, {
@@ -6988,7 +7053,7 @@ class AskMateView extends ItemView {
 			{
 				mode: "apply",
 				icon: "pencil",
-				title: "Apply response, replaces selected text or the whole captured note",
+				title: "Apply response, replaces selected text or appends to the captured note",
 				ariaLabel: "Apply response to the captured note"
 			}
 		];
@@ -7670,6 +7735,13 @@ class AskMateView extends ItemView {
 			this.addMessage("system", message);
 			new Notice(message);
 		}, { requiresIdle: true });
+		if (request.context.source === "Current note") {
+			this.createMessageAction(parent, "file-text", "Replace full note", async () => {
+				const message = await this.plugin.applyResponseToContext(request, getText(), { scope: "full-note" });
+				this.addMessage("system", message);
+				new Notice(message);
+			}, { requiresIdle: true });
+		}
 		if (request.context.source === "Selected text") {
 			this.createMessageAction(parent, "text-cursor-input", "Apply selected block", async () => {
 				const message = await this.plugin.applyResponseToContext(request, getText(), { scope: "selected-block" });
@@ -8796,13 +8868,13 @@ class AskMateSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Default partial Apply scope")
-			.setDesc("Auto keeps the existing selected-text or full-note behavior. Assistant message actions can also apply to selected blocks or heading sections.")
+			.setDesc("Auto replaces captured selected text, otherwise appends to the captured note. Choose full-note replacement only for intentional whole-note rewrites.")
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOption("auto", "Auto")
 					.addOption("selected-block", "Selected block")
 					.addOption("heading-section", "Heading section")
-					.addOption("full-note", "Full note")
+					.addOption("full-note", "Full note replacement")
 					.setValue(this.plugin.settings.partialApplyDefaultScope)
 					.onChange(async (value) => {
 						this.plugin.settings.partialApplyDefaultScope = normalizeApplyScope(value);

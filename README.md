@@ -195,7 +195,7 @@ Choose an output mode before sending:
 - `New note`: create a Markdown result note.
 - `Apply`: write generated text back into the captured source note after safety checks.
 
-Apply mode can preview diffs, preserve or confirm frontmatter changes, replace selected text, replace a heading section, or queue a suggested change for later review.
+Apply mode can preview diffs, preserve or confirm frontmatter changes, replace selected text, append generated output to the captured note when no text was selected, replace a heading section, explicitly replace the full note, or queue a suggested change for later review.
 
 ### Generate Images
 
@@ -267,7 +267,7 @@ Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenA
 
 ### Can I apply changes safely?
 
-Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, asks for confirmation before full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately.
+Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, replaces selected text exactly when a selection was captured, appends generated output to the captured note when no text was selected, asks for confirmation before explicit full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -276,8 +276,8 @@ Yes. Apply mode targets the note captured when the request was built, can previe
 AskMate's current roadmap and status surfaces focus on making note work safer, clearer, and easier to review:
 
 - Evidence-linked answers for source-grounded replies and jump-to-source actions.
-- Markdown diff Apply preview for safer note edits before writing changes.
-- Frontmatter controls for preserving, confirming, or replacing YAML during full-note Apply.
+- Markdown diff Apply preview for safer appends, selected-text replacements, heading-section replacements, and explicit full-note changes.
+- Frontmatter controls for preserving, confirming, or replacing YAML during explicit full-note Apply.
 - Batch workflow runner support for running workflows across folders.
 - Final prompt inspector tooling for reviewing the assembled prompt before sending.
 - Note-specific AskMate history for per-note follow-up context.
@@ -297,7 +297,7 @@ AskMate remembers the most recent Markdown note because the sidebar can take foc
 
 ### Apply cannot find selected text
 
-AskMate only applies selected-text output when it can safely find the original selected text. Select the text again and use Apply from the assistant response.
+AskMate only applies selected-text output when it can safely find the original selected text. Select the text again and use Apply from the assistant response. If no text was selected when the request was built, default Apply appends generated output to the captured note instead of replacing the note.
 
 ### My model is not listed
 

@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Added first-class Azure OpenAI text provider support.
-            - Added Azure OpenAI API-key auth, /openai/v1 endpoint validation, Test API behavior, and best-effort model refresh.
-            - Updated README provider docs and smoke tests for Azure OpenAI while keeping Azure AI Foundry planned.
+            - Fixed default Apply behavior so no-selection text Apply appends to the captured note instead of replacing existing note content.
+            - Preserved explicit full-note replacement behind the existing Apply preview, truncated-context warning, and frontmatter safeguards.
+            - Updated Apply documentation and smoke tests for the safer default append behavior.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation

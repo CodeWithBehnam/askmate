@@ -32,6 +32,6 @@
 
 - [ ] README updated, if behavior changed
 - [ ] Settings migration considered, if settings changed
-- [ ] Apply safety preserved, if output/editing changed
+- [ ] Apply safety preserved, including no-selection append behavior, if output/editing changed
 - [ ] Provider privacy and SecretStorage behavior preserved, if provider code changed
 - [ ] Release assets considered, if this is a release change

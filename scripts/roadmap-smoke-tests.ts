@@ -23,6 +23,7 @@ function assertNotPattern(fileName: string, contents: string, pattern: RegExp, l
 const main = readFileSync("main.ts", "utf8");
 const styles = readFileSync("styles.css", "utf8");
 const readme = readFileSync("README.md", "utf8");
+const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 
 assertIncludes("main.ts", main, "ProviderRoleSettings", "provider role settings type");
 assertIncludes("main.ts", main, "getChatProviderModelRef", "chat provider routing");
@@ -43,6 +44,10 @@ assertIncludes("main.ts", main, "buildFolderContextAttachments", "folder context
 assertIncludes("main.ts", main, "extractExcalidrawSummary", "Excalidraw summary extraction");
 assertIncludes("main.ts", main, "buildImageManifestAttachments", "image manifest context builder");
 assertIncludes("main.ts", main, "ApplyScope", "partial Apply scope type");
+assertIncludes("main.ts", main, "TextApplyPreviewScope", "text Apply preview scope type");
+assertIncludes("main.ts", main, "appendMarkdownBlockToContent", "current-note append formatter");
+assertIncludes("main.ts", main, "appendResponseToCapturedNote", "current-note append Apply helper");
+assertIncludes("main.ts", main, "scope: \"append\"", "append Apply preview scope");
 assertIncludes("main.ts", main, "applyResponseToHeadingSection", "heading section Apply helper");
 assertIncludes("main.ts", main, "resultNoteTemplate", "per-workflow result template support");
 assertPattern("main.ts", main, /imagePromptPlanningProviderId:\s*"same-as-chat"/, "default planning provider role");
@@ -84,6 +89,8 @@ assertIncludes("README.md", readme, "Style guide and glossary", "role context do
 assertIncludes("README.md", readme, "Queue for review", "review queue documentation");
 assertIncludes("README.md", readme, "Smart result-note placement", "smart placement documentation");
 assertIncludes("README.md", readme, "Usage budgets", "usage guardrails documentation");
+assertIncludes("README.md", readme, "appends generated output to the captured note", "default no-selection Apply append documentation");
+assertIncludes("CONTRIBUTING.md", contributing, "Default no-selection text Apply appends", "default no-selection Apply append contributor guard");
 assertIncludes("README.md", readme, "Azure OpenAI", "Azure OpenAI documentation");
 assertIncludes("README.md", readme, "/openai/v1", "Azure OpenAI v1 endpoint documentation");
 assertIncludes("README.md", readme, "deployment name", "Azure OpenAI deployment name documentation");

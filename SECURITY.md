@@ -29,7 +29,7 @@ Security-sensitive areas include:
 
 - Provider API key storage and retrieval.
 - Request privacy controls and context capture.
-- Apply and partial Apply write safety.
+- Apply and partial Apply write safety, including default append behavior and explicit full-note replacement gates.
 - File path handling for generated notes and images.
 - Import/export of workflow presets.
 - Any behavior that could expose private note content unexpectedly.
