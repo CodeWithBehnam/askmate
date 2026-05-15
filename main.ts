@@ -44,6 +44,7 @@ type ContextAttachmentKind =
 	| "excalidraw_summary"
 	| "image_manifest";
 type ApplyScope = "auto" | "selected-block" | "heading-section" | "full-note";
+type ApplyApprovalMode = "auto-approve" | "full" | "manual";
 type FrontmatterApplyPolicy = "preserve" | "confirm" | "replace";
 type BatchWorkflowOutputMode = "note" | "review-queue";
 type BudgetEnforcementMode = "warn" | "block";
@@ -97,6 +98,7 @@ interface AskMateSettings {
 	contextBudgetMode: ContextBudgetMode;
 	workflowDisplayPreferences: WorkflowDisplayPreference[];
 	showRequestPreview: boolean;
+	applyApprovalMode: ApplyApprovalMode;
 	showApplyPreview: boolean;
 	outputMode: OutputMode;
 	reasoningEffort: ReasoningEffort;
@@ -892,6 +894,14 @@ function normalizeApplyScope(value: unknown): ApplyScope {
 	return "auto";
 }
 
+function normalizeApplyApprovalMode(value: unknown, legacyShowApplyPreview: unknown): ApplyApprovalMode {
+	if (value === "auto-approve" || value === "full" || value === "manual") {
+		return value;
+	}
+
+	return legacyShowApplyPreview === false ? "auto-approve" : "manual";
+}
+
 function normalizeFrontmatterApplyPolicy(value: unknown): FrontmatterApplyPolicy {
 	return value === "confirm" || value === "replace" || value === "preserve" ? value : "preserve";
 }
@@ -1300,11 +1310,10 @@ function normalizeProviderSettings(
 		};
 	}
 
-	providers.openai.modelOptions = providers.openai.modelOptions.filter(isSupportedModel);
 	if (providers.openai.modelOptions.length === 0) {
 		providers.openai.modelOptions = DEFAULT_MODEL_OPTIONS;
 	}
-	if (!isSupportedModel(providers.openai.model)) {
+	if (!providers.openai.model.trim()) {
 		providers.openai.model = DEFAULT_PROVIDER_SETTINGS.openai.model;
 	}
 
@@ -1621,6 +1630,7 @@ const DEFAULT_SETTINGS: AskMateSettings = {
 	contextBudgetMode: "expanded",
 	workflowDisplayPreferences: [],
 	showRequestPreview: true,
+	applyApprovalMode: "manual",
 	showApplyPreview: true,
 	outputMode: "chat",
 	reasoningEffort: DEFAULT_REASONING_EFFORT,
@@ -2110,10 +2120,6 @@ function isGptImage2Model(model: string): boolean {
 	return model.trim() === GPT_IMAGE_2_MODEL_ID;
 }
 
-function isSupportedModel(model: string): boolean {
-	return isGpt55Model(model) || isGptImage2Model(model);
-}
-
 function getModelCapability(model: string): ModelCapability {
 	return isGptImage2Model(model) ? "image" : "text";
 }
@@ -2284,7 +2290,7 @@ function buildMarkdownLineDiff(before: string, after: string): MarkdownDiffLine[
 	return diff;
 }
 
-type TextApplyPreviewScope = "selected-text" | "append" | "full-note";
+type TextApplyPreviewScope = "selected-text" | "append" | "heading-section" | "full-note";
 
 interface DiffConfirmOptions {
 	scope: TextApplyPreviewScope;
@@ -2312,7 +2318,9 @@ class AskMateDiffConfirmModal extends Modal {
 			? "Apply AskMate output to selected text?"
 			: this.options.scope === "append"
 				? "Append AskMate output to the captured note?"
-				: "Replace the full note with AskMate output?";
+				: this.options.scope === "heading-section"
+					? "Replace this heading section with AskMate output?"
+					: "Replace the full note with AskMate output?";
 		contentEl.createDiv({ cls: "askmate-modal-title", text: title });
 		contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
 		contentEl.createDiv({
@@ -2591,14 +2599,15 @@ export default class AskMatePlugin extends Plugin {
 		this.settings.providers = normalizeProviderSettings(loaded.providers, legacy);
 		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
 		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = this.normalizeModelOptions(this.settings.providers.openai.modelOptions);
+		this.settings.modelOptions = this.normalizeOpenAIModelOptions(this.settings.providers.openai.modelOptions);
 		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
 		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
 		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
 		this.settings.contextBudgetMode = normalizeContextBudgetMode(this.settings.contextBudgetMode);
 		this.settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(this.settings.workflowDisplayPreferences);
 		this.settings.showRequestPreview = this.settings.showRequestPreview !== false;
-		this.settings.showApplyPreview = this.settings.showApplyPreview !== false;
+		this.settings.applyApprovalMode = normalizeApplyApprovalMode(raw?.applyApprovalMode, raw?.showApplyPreview);
+		this.settings.showApplyPreview = this.settings.applyApprovalMode === "manual";
 		this.settings.reasoningEffort = normalizeReasoningEffort(this.settings.reasoningEffort);
 		this.settings.sendShortcut = normalizeSendShortcut(this.settings.sendShortcut);
 		this.settings.translationTargetLanguage = normalizeTranslationTargetLanguage(this.settings.translationTargetLanguage);
@@ -2657,12 +2666,14 @@ export default class AskMatePlugin extends Plugin {
 		this.settings.selectedTextProvider = this.settings.providerRoles.chatProviderId;
 		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
 		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = this.normalizeModelOptions(this.settings.providers.openai.modelOptions);
+		this.settings.modelOptions = this.normalizeOpenAIModelOptions(this.settings.providers.openai.modelOptions, []);
 		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
 		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
 		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
 		this.settings.contextBudgetMode = normalizeContextBudgetMode(this.settings.contextBudgetMode);
 		this.settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(this.settings.workflowDisplayPreferences);
+		this.settings.applyApprovalMode = normalizeApplyApprovalMode(this.settings.applyApprovalMode, this.settings.showApplyPreview);
+		this.settings.showApplyPreview = this.settings.applyApprovalMode === "manual";
 		this.settings.workflowCustomInstructions = normalizeOptionalString(this.settings.workflowCustomInstructions, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
 		this.settings.resultNoteTemplate = normalizeTemplateString(this.settings.resultNoteTemplate, DEFAULT_RESULT_NOTE_TEMPLATE);
 		this.settings.imageResultNoteTemplate = normalizeTemplateString(this.settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
@@ -4002,8 +4013,12 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		const options = providerId === "openai"
-			? this.normalizeModelOptions(models)
+			? this.normalizeOpenAIModelOptions(models, [], "")
 			: normalizeProviderModelOptions(models, DEFAULT_PROVIDER_SETTINGS[providerId].modelOptions, provider.model);
+
+		if (options.length === 0) {
+			throw new Error(`${getProviderLabel(providerId)} did not return model IDs.`);
+		}
 
 		provider.modelOptions = options;
 		if (!provider.modelOptions.includes(provider.model)) {
@@ -4099,7 +4114,7 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		const models = body?.data?.map((model) => model.id ?? "").filter(Boolean) ?? [];
-		return providerId === "openai" ? this.filterSupportedModels(models) : models.sort((a, b) => a.localeCompare(b));
+		return models.sort((a, b) => a.localeCompare(b));
 	}
 
 	private async fetchGeminiModels(): Promise<string[]> {
@@ -4438,7 +4453,7 @@ export default class AskMatePlugin extends Plugin {
 		}
 
 		if (!(await this.confirmTextApplyPreview({
-			scope: "selected-text",
+			scope: "heading-section",
 			targetLabel: `${file.path} > ${section.path}`,
 			before,
 			after: output
@@ -4694,6 +4709,20 @@ export default class AskMatePlugin extends Plugin {
 		].join("\n"));
 	}
 
+	private shouldUseDiffApproval(scope: TextApplyPreviewScope): boolean {
+		const mode = normalizeApplyApprovalMode(this.settings.applyApprovalMode, this.settings.showApplyPreview);
+
+		if (mode === "manual") {
+			return true;
+		}
+
+		if (mode === "full") {
+			return scope === "full-note" || scope === "heading-section";
+		}
+
+		return false;
+	}
+
 	private async confirmTextApplyPreview({
 		scope,
 		targetLabel,
@@ -4707,19 +4736,22 @@ export default class AskMatePlugin extends Plugin {
 		after: string;
 		warning?: string;
 	}): Promise<boolean> {
-		if (!this.settings.showApplyPreview) {
-			return scope === "full-note"
-				? await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.`)
-				: true;
+		if (this.shouldUseDiffApproval(scope)) {
+			return await askMateDiffConfirm(this.app, {
+				scope,
+				targetLabel,
+				before,
+				after,
+				warning
+			});
 		}
 
-		return await askMateDiffConfirm(this.app, {
-			scope,
-			targetLabel,
-			before,
-			after,
-			warning
-		});
+		if (scope === "full-note") {
+			const warningText = warning ? `\n\nWarning: ${warning}` : "";
+			return await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.${warningText}`);
+		}
+
+		return true;
 	}
 
 
@@ -6427,36 +6459,21 @@ export default class AskMatePlugin extends Plugin {
 		}
 	}
 
-	private filterSupportedModels(models: string[]): string[] {
-		const blocked = [
-			"audio",
-			"clip",
-			"dall",
-			"embedding",
-			"image",
-			"moderation",
-			"realtime",
-			"search",
-			"speech",
-			"tts",
-			"transcribe",
-			"transcription",
-			"translate",
-			"vision",
-			"whisper"
-		];
-
-		return models
-			.filter(Boolean)
-			.filter(isSupportedModel)
-			.filter((model) => isGptImage2Model(model) || !blocked.some((word) => model.toLowerCase().includes(word)))
-			.sort((a, b) => a.localeCompare(b));
-	}
-
-	private normalizeModelOptions(models: string[]): string[] {
-		return Array.from(
-			new Set([...models, this.settings?.model, ...DEFAULT_MODEL_OPTIONS].filter(Boolean).filter(isSupportedModel))
+	private normalizeOpenAIModelOptions(
+		models: string[],
+		fallback: string[] = DEFAULT_MODEL_OPTIONS,
+		selectedModel = this.settings?.providers?.openai?.model ?? this.settings?.model
+	): string[] {
+		const normalizeList = (values: unknown[]): string[] => Array.from(
+			new Set(
+				values
+					.filter((model): model is string => typeof model === "string")
+					.map((model) => model.trim())
+					.filter(Boolean)
+			)
 		);
+		const options = normalizeList([...models, selectedModel]);
+		return options.length > 0 ? options : normalizeList(fallback);
 	}
 
 	private getImageResultFolder(request?: AskRequest, result?: ImageAskMateResult): string {
@@ -8490,7 +8507,7 @@ class AskMateSettingTab extends PluginSettingTab {
 					button.setDisabled(true);
 					try {
 						const models = await this.plugin.refreshSelectedProviderModels();
-						new Notice(`AskMate loaded ${models.length} supported model options.`);
+						new Notice(`AskMate loaded ${models.length} model options.`);
 						this.display();
 					} catch (error) {
 						new Notice(this.plugin.getErrorMessage(error));
@@ -8504,7 +8521,7 @@ class AskMateSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Model")
 			.setDesc(selectedProviderId === "openai"
-				? "OpenAI GPT-5.5 models are used for text. gpt-image-2 is available for image generation."
+				? "Choose any model ID returned by the OpenAI Models API. Text chat requires a model that supports the Responses API; gpt-image-2 is used for image generation."
 				: selectedProviderId === "azure-openai"
 					? "Choose the Azure OpenAI deployment used for text chat, workflows, and image prompt planning. Image generation remains OpenAI-only."
 					: "Choose the selected provider model for text chat, workflows, and image prompt planning.")
@@ -8950,13 +8967,16 @@ class AskMateSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Show Apply preview")
-			.setDesc("Shows a Markdown diff confirmation before AskMate writes generated text into a note.")
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.plugin.settings.showApplyPreview)
+			.setName("Apply approval mode")
+			.setDesc("Controls when AskMate asks before writing generated text into notes. Auto approve skips selected-text, append, and heading-section diff previews, but still confirms full-note replacement. Full approves full-note and heading-section replacements. Manual approves every text Apply write with a diff. All modes keep truncated-context, frontmatter, captured-file, and exact-match safeguards.")
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption("auto-approve", "Auto approve")
+					.addOption("full", "Full")
+					.addOption("manual", "Manual")
+					.setValue(this.plugin.settings.applyApprovalMode)
 					.onChange(async (value) => {
-						this.plugin.settings.showApplyPreview = value;
+						this.plugin.settings.applyApprovalMode = normalizeApplyApprovalMode(value, this.plugin.settings.showApplyPreview);
 						await this.plugin.saveSettings();
 					});
 			});

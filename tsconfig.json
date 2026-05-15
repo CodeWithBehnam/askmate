@@ -23,5 +23,9 @@
 	},
 	"include": [
 		"**/*.ts"
+	],
+	"exclude": [
+		"demo/remotion",
+		"node_modules"
 	]
 }

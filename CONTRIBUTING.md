@@ -40,7 +40,8 @@ Copy `main.js`, `manifest.json`, and `styles.css` from a production build into t
 
 - Prefer small, focused pull requests.
 - Preserve AskMate's sidebar note-context fallback behavior.
-- Preserve Apply safety checks. Default no-selection text Apply appends to the captured note instead of overwriting it. Do not weaken captured-file targeting, exact selected-text matching, explicit full-note confirmation, truncated-context confirmation, or Apply preview behavior.
+- Preserve Apply safety checks. Default no-selection text Apply appends to the captured note instead of overwriting it. Do not weaken captured-file targeting, exact selected-text matching, explicit full-note confirmation, truncated-context confirmation, or Apply approval mode behavior.
+- Keep Apply approval modes scoped to confirmation only: `auto-approve` skips selected-text, append, and heading-section diff previews while still confirming full-note replacement, `full` previews full-note and heading-section replacements, and `manual` previews every text Apply write. No approval mode may bypass hard safety checks.
 - Keep provider API keys in Obsidian `SecretStorage`. Do not store raw API keys in plugin settings.
 - Make prompt changes outcome-first and compatible with the GPT-5.5 prompt guidance documented in `AGENTS.md`.
 - Update `README.md` when behavior, settings, commands, or release assets change.

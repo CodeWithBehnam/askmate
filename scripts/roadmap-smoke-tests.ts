@@ -33,6 +33,11 @@ assertIncludes("main.ts", main, "importCustomWorkflowPresets", "workflow preset 
 assertIncludes("main.ts", main, "expandWorkflowPrompt", "workflow variable expansion");
 assertIncludes("main.ts", main, "confirmTruncatedContextFullApply", "Apply truncated-context safety guard");
 assertIncludes("main.ts", main, "confirmTextApplyPreview", "Apply preview safety guard");
+assertIncludes("main.ts", main, "ApplyApprovalMode", "Apply approval mode type");
+assertIncludes("main.ts", main, "applyApprovalMode", "persisted Apply approval setting");
+assertIncludes("main.ts", main, "normalizeApplyApprovalMode", "Apply approval setting migration");
+assertIncludes("main.ts", main, "shouldUseDiffApproval", "Apply approval decision helper");
+assertIncludes("main.ts", main, "scope === \"full-note\" || scope === \"heading-section\"", "Full approval mode high-risk scopes");
 assertIncludes("main.ts", main, "recordOperationUsage", "usage tracking");
 assertIncludes("main.ts", main, "buildPromptContextContent", "context capture and budget prompt helper");
 assertIncludes("main.ts", main, "ContextAttachment", "context attachment model");
@@ -84,6 +89,10 @@ assertIncludes("styles.css", styles, "flex: 1 1 0;\n\tflex-direction: column;\n\
 assertIncludes("README.md", readme, "Roadmap", "roadmap documentation");
 assertIncludes("README.md", readme, "Evidence-linked", "evidence-linked answers documentation");
 assertIncludes("README.md", readme, "Markdown diff Apply preview", "diff Apply documentation");
+assertIncludes("README.md", readme, "Apply approval mode", "Apply approval mode documentation");
+assertIncludes("README.md", readme, "`Auto approve`: skips selected-text, append, and heading-section diff previews", "auto approve documentation");
+assertIncludes("README.md", readme, "`Full`: asks with a diff for full-note and heading-section replacements", "full approval documentation");
+assertIncludes("README.md", readme, "`Manual`: asks with a diff before every text Apply write", "manual approval documentation");
 assertIncludes("README.md", readme, "frontmatter", "frontmatter controls documentation");
 assertIncludes("README.md", readme, "Batch workflow runner", "batch workflow documentation");
 assertIncludes("README.md", readme, "Final prompt inspector", "prompt inspector documentation");
@@ -94,6 +103,7 @@ assertIncludes("README.md", readme, "Smart result-note placement", "smart placem
 assertIncludes("README.md", readme, "Usage budgets", "usage guardrails documentation");
 assertIncludes("README.md", readme, "appends generated output to the captured note", "default no-selection Apply append documentation");
 assertIncludes("CONTRIBUTING.md", contributing, "Default no-selection text Apply appends", "default no-selection Apply append contributor guard");
+assertIncludes("CONTRIBUTING.md", contributing, "Apply approval modes", "Apply approval mode contributor guard");
 assertIncludes("README.md", readme, "Azure OpenAI", "Azure OpenAI documentation");
 assertIncludes("README.md", readme, "/openai/v1", "Azure OpenAI v1 endpoint documentation");
 assertIncludes("README.md", readme, "deployment name", "Azure OpenAI deployment name documentation");

@@ -26,6 +26,9 @@
 	"scripts": {
 		"dev": "bun run esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && bun run esbuild.config.mjs production",
+		"demo:video": "bun run scripts/remotion-safe-run.mjs dev",
+		"demo:render": "bun run scripts/remotion-safe-run.mjs render",
+		"demo:still": "bun run scripts/remotion-safe-run.mjs still",
 		"test": "bun run scripts/roadmap-smoke-tests.ts",
 		"install:vault": "bun run build && bun run scripts/install-to-vault.ts",
 		"verify:vault": "bun run build && bun run scripts/install-to-vault.ts --verify-only"

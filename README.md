@@ -197,6 +197,12 @@ Choose an output mode before sending:
 
 Apply mode can preview diffs, preserve or confirm frontmatter changes, replace selected text, append generated output to the captured note when no text was selected, replace a heading section, explicitly replace the full note, or queue a suggested change for later review.
 
+Use the Apply approval mode setting to choose how much confirmation AskMate asks for before text writes:
+
+- `Auto approve`: skips selected-text, append, and heading-section diff previews, but still confirms full-note replacement and keeps hard safety checks.
+- `Full`: asks with a diff for full-note and heading-section replacements, but skips selected-text and append previews.
+- `Manual`: asks with a diff before every text Apply write.
+
 ### Generate Images
 
 Use the Image button or start a request with `/image` or `/img`.
@@ -267,7 +273,7 @@ Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenA
 
 ### Can I apply changes safely?
 
-Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, replaces selected text exactly when a selection was captured, appends generated output to the captured note when no text was selected, asks for confirmation before explicit full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately.
+Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, replaces selected text exactly when a selection was captured, appends generated output to the captured note when no text was selected, asks for confirmation before explicit full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately. Apply approval mode controls how often previews appear, but it does not disable captured-file targeting, exact selected-text matching, explicit full-note confirmation, truncated-context confirmation, or frontmatter safeguards.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
