@@ -121,7 +121,8 @@
 	align-items: start;
 	grid-template-areas:
 		"avatar actions"
-		"avatar body";
+		"avatar body"
+		"avatar evidence";
 	grid-template-columns: auto minmax(0, 1fr);
 	row-gap: 6px;
 }
@@ -175,10 +176,6 @@
 	position: sticky;
 	top: 8px;
 	z-index: 3;
-}
-
-.askmate-message-assistant.askmate-message-has-actions .askmate-message-actions:not(:empty) {
-	width: 100%;
 }
 
 .askmate-message-action {
@@ -1692,15 +1689,25 @@
 }
 
 /* AskMate advanced MVP surfaces */
-.askmate-evidence-actions {
-	display: flex;
-	flex: 1 1 180px;
+.askmate-message-evidence {
+	align-items: center;
+	display: none;
 	flex-wrap: wrap;
-	gap: 6px;
-	justify-content: flex-end;
-	margin: 4px 0;
-	max-width: 100%;
+	gap: 5px;
+	grid-area: evidence;
 	min-width: 0;
+}
+
+.askmate-message-evidence:not(:empty) {
+	display: flex;
+}
+
+.askmate-evidence-label {
+	color: var(--text-faint);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
 }
 
 .askmate-evidence-chip {
@@ -1709,8 +1716,8 @@
 	background: var(--background-secondary);
 	color: var(--text-muted);
 	cursor: pointer;
-	font-size: 11px;
-	max-width: 100%;
+	font-size: 10px;
+	max-width: min(260px, 100%);
 	overflow: hidden;
 	padding: 3px 8px;
 	text-overflow: ellipsis;

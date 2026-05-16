@@ -333,6 +333,7 @@ interface MessageElements {
 	header: HTMLElement;
 	actions: HTMLElement;
 	body: HTMLElement;
+	evidence: HTMLElement;
 }
 
 interface OpenAIResponsePart {
@@ -7524,7 +7525,7 @@ class AskMateView extends ItemView {
 			if (result.kind === "text") {
 				responseText = result.text.trim() || responseText.trim() || "OpenAI returned no text.";
 				this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
-				this.renderAssistantMessageActions(activeAssistantMessage.actions, request, () => responseText, result.model);
+				this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model);
 				this.messages.push({ role: "assistant", text: responseText });
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 
@@ -7631,6 +7632,7 @@ class AskMateView extends ItemView {
 				? "askmate-message-body askmate-message-body-markdown"
 				: "askmate-message-body"
 		});
+		const evidence = wrapper.createDiv({ cls: "askmate-message-evidence" });
 
 		if (renderMarkdown) {
 			this.renderMarkdownNow(body, text, "");
@@ -7643,7 +7645,8 @@ class AskMateView extends ItemView {
 			wrapper,
 			header,
 			actions,
-			body
+			body,
+			evidence
 		};
 	}
 
@@ -7779,11 +7782,13 @@ class AskMateView extends ItemView {
 
 	private renderAssistantMessageActions(
 		parent: HTMLElement,
+		evidenceParent: HTMLElement,
 		request: AskRequest,
 		getText: () => string,
 		model: string
 	): void {
 		parent.empty();
+		evidenceParent.empty();
 		this.createMessageAction(parent, "file-text", "Show reply text", () => {
 			this.showText(getText(), "AskMate reply");
 		});
@@ -7792,9 +7797,9 @@ class AskMateView extends ItemView {
 		});
 		const citations = this.plugin.extractEvidenceCitations(getText(), request.evidenceSources).slice(0, 6);
 		if (citations.length > 0) {
-			const evidence = parent.createDiv({ cls: "askmate-evidence-actions" });
+			evidenceParent.createSpan({ cls: "askmate-evidence-label", text: "Sources" });
 			for (const citation of citations) {
-				const button = evidence.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
+				const button = evidenceParent.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
 				button.type = "button";
 				button.addEventListener("click", () => {
 					void this.plugin.openEvidenceSource(citation.source);
