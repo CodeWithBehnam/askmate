@@ -267,9 +267,13 @@ Yes. Choose the Local/self-hosted provider and set an OpenAI-compatible `/chat/c
 
 Yes. Choose Azure OpenAI, set the v1 base URL such as `https://<resource>.openai.azure.com/openai/v1`, add an API key secret, and enter your Azure deployment name as the model. Azure OpenAI is text-only in Phase 1. Image generation still uses OpenAI `gpt-image-2`.
 
+### Can I use Azure AI Foundry?
+
+Yes. Choose Azure AI Foundry, set the Azure AI inference endpoint such as `https://<resource>.services.ai.azure.com/models`, add an API key secret, and enter the model or deployment name used by your Foundry resource. AskMate sends text requests to `/models/chat/completions?api-version=2024-05-01-preview`. Azure AI Foundry is text-only. Image generation still uses OpenAI `gpt-image-2`.
+
 ### Does image generation require OpenAI?
 
-Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. Azure OpenAI, OpenRouter, Anthropic Claude, Gemini, and local providers can be used only for text chat and image prompt planning. Azure AI Foundry support is planned for a later phase.
+Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Gemini, and local providers can be used only for text chat and image prompt planning.
 
 ### Can I apply changes safely?
 
@@ -291,7 +295,7 @@ AskMate's current roadmap and status surfaces focus on making note work safer, c
 - Queue for review mode for AI-suggested changes that should be checked before applying.
 - Smart result-note placement for keeping generated notes near their source notes.
 - Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
-- Broader provider support: Azure OpenAI for text chat in Phase 1, with Azure AI Foundry planned for a later phase.
+- Broader provider support across Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Gemini, and OpenAI-compatible endpoints for text chat and image prompt planning.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

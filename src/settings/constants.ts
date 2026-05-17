@@ -21,6 +21,9 @@ export const DEFAULT_OPENROUTER_MODEL_OPTIONS = [
 	"google/gemini-2.5-pro"
 ];
 export const DEFAULT_AZURE_OPENAI_MODEL_OPTIONS: string[] = [];
+export const DEFAULT_AZURE_AI_MODEL_OPTIONS = [
+	"mistral-large"
+];
 export const DEFAULT_ANTHROPIC_MODEL_OPTIONS = [
 	"claude-3-5-sonnet-latest",
 	"claude-3-5-haiku-latest"
@@ -35,10 +38,11 @@ export const DEFAULT_LOCAL_MODEL_OPTIONS = [
 	"qwen2.5"
 ];
 export const DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1";
-export const TEXT_PROVIDER_IDS: TextProviderId[] = ["openai", "azure-openai", "openrouter", "anthropic", "google-gemini", "openai-compatible"];
+export const TEXT_PROVIDER_IDS: TextProviderId[] = ["openai", "azure-openai", "azure-ai", "openrouter", "anthropic", "google-gemini", "openai-compatible"];
 export const TEXT_PROVIDER_LABELS: Record<TextProviderId, string> = {
 	openai: "OpenAI",
 	"azure-openai": "Azure OpenAI",
+	"azure-ai": "Azure AI Foundry",
 	openrouter: "OpenRouter",
 	anthropic: "Anthropic Claude",
 	"google-gemini": "Google Gemini",
@@ -55,6 +59,12 @@ export const DEFAULT_PROVIDER_SETTINGS: TextProviderSettings = {
 		apiKeySecretName: "",
 		model: "",
 		modelOptions: DEFAULT_AZURE_OPENAI_MODEL_OPTIONS,
+		baseUrl: ""
+	},
+	"azure-ai": {
+		apiKeySecretName: "",
+		model: "mistral-large",
+		modelOptions: DEFAULT_AZURE_AI_MODEL_OPTIONS,
 		baseUrl: ""
 	},
 	openrouter: {

@@ -47,7 +47,6 @@ import {
 	formatTokenCount,
 	FrontmatterApplyResult,
 	FrontmatterBlock,
-	GeminiModelListBody,
 	getContextBudgetOption,
 	getModelCapability,
 	getNonNegativeInteger,
@@ -104,11 +103,6 @@ import {
 	NoteContext,
 	NoteHistoryTurn,
 	offsetToEditorPosition,
-	OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-	OpenAIImageGenerationBody,
-	OpenAIModelListBody,
-	OpenAIResponseBody,
-	OpenAIStreamEvent,
 	OpenAITokenUsage,
 	OperationKind,
 	OperationStatus,
@@ -116,7 +110,6 @@ import {
 	PromptInspection,
 	ProviderModelRef,
 	ProviderSettings,
-	ProviderTextResult,
 	ReasoningEffort,
 	RequestIntentKind,
 	RequestPrivacyOptions,
@@ -128,11 +121,22 @@ import {
 	TokenUsageSummary,
 	UsageGuardrailResult,
 	validateAzureOpenAIBaseUrl,
-	validateProviderBaseUrl,
 	Workflow,
 	WorkflowDisplayPreference,
 	WORKFLOWS
 } from "../shared/core";
+import {
+	completeProviderTextRequest,
+	extractOpenAIText,
+	fetchProviderModels,
+	formatProviderHttpError,
+	getProviderTextEndpoint,
+	normalizeOpenAIModelOptions,
+	requestOpenAIImageGeneration,
+	requestOpenAIResponses,
+	testProviderConnection as testProviderConnectionWithProvider
+} from "../providers";
+import type { ProviderRequestOptions, ProviderRuntime } from "../providers";
 import { askMateConfirm, askMateDiffConfirm } from "../ui/modals/modals";
 import { AskMateView } from "../ui/sidebar/AskMateView";
 import { AskMateSettingTab } from "../ui/settings/AskMateSettingTab";
@@ -142,6 +146,14 @@ export class AskMatePlugin extends Plugin {
 	private lastMarkdownView: MarkdownView | null = null;
 	private lastMarkdownFile: TFile | null = null;
 	private lastNoteContext: NoteContext | null = null;
+
+	private getProviderRuntime(): ProviderRuntime {
+		return {
+			getProviderSettings: (providerId) => this.getProviderSettings(providerId),
+			getProviderApiKey: (providerId) => this.getProviderApiKey(providerId),
+			requestJson: async <T>(url: string, options?: ProviderRequestOptions) => await this.requestJson<T>(url, options)
+		};
+	}
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -238,7 +250,11 @@ export class AskMatePlugin extends Plugin {
 		this.settings.providers = normalizeProviderSettings(loaded.providers, legacy);
 		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
 		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = this.normalizeOpenAIModelOptions(this.settings.providers.openai.modelOptions);
+		this.settings.modelOptions = normalizeOpenAIModelOptions(
+			this.settings.providers.openai.modelOptions,
+			DEFAULT_MODEL_OPTIONS,
+			this.settings.providers.openai.model
+		);
 		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
 		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
 		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
@@ -305,7 +321,11 @@ export class AskMatePlugin extends Plugin {
 		this.settings.selectedTextProvider = this.settings.providerRoles.chatProviderId;
 		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
 		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = this.normalizeOpenAIModelOptions(this.settings.providers.openai.modelOptions, []);
+		this.settings.modelOptions = normalizeOpenAIModelOptions(
+			this.settings.providers.openai.modelOptions,
+			[],
+			this.settings.providers.openai.model
+		);
 		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
 		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
 		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
@@ -597,14 +617,7 @@ export class AskMatePlugin extends Plugin {
 
 	private async requestJson<T>(
 		url: string,
-		options: {
-			method?: string;
-			headers?: Record<string, string>;
-			body?: string;
-			timeoutMs?: number;
-			timeoutMessage?: string;
-			abortSignal?: AbortSignal;
-		} = {}
+		options: ProviderRequestOptions = {}
 	): Promise<AskMateHttpResponse<T>> {
 		this.throwIfAborted(options.abortSignal);
 		let timer: number | null = null;
@@ -738,26 +751,18 @@ export class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const response = await this.requestJson<OpenAIResponseBody>("https://api.openai.com/v1/responses", {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json"
-				},
+			const response = await requestOpenAIResponses(this.getProviderRuntime(), {
+				apiKey,
+				model,
+				instructions,
+				input,
+				reasoningEffort,
 				abortSignal,
-				body: JSON.stringify({
-					model,
-					instructions,
-					input,
-					reasoning: {
-						effort: reasoningEffort
-					}
-				})
 			});
 			const body = response.body;
 
 			if (!response.ok) {
-				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
+				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
 				await this.recordOperationUsage({
 					request,
 					operationKind: "text_response",
@@ -775,7 +780,7 @@ export class AskMatePlugin extends Plugin {
 				throw new Error(message);
 			}
 
-			answer = this.extractOpenAIText(body);
+			answer = extractOpenAIText(body);
 
 			if (!answer) {
 				throw new Error("OpenAI returned a response, but no text output was found.");
@@ -834,7 +839,7 @@ export class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const result = await this.completeProviderTextRequest(providerRef, instructions, input, abortSignal);
+			const result = await completeProviderTextRequest(this.getProviderRuntime(), providerRef, instructions, input, abortSignal);
 			answer = result.text;
 			usage = result.usage;
 			endpoint = result.endpoint;
@@ -902,26 +907,18 @@ export class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const response = await this.requestJson<OpenAIResponseBody>("https://api.openai.com/v1/responses", {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json"
-				},
+			const response = await requestOpenAIResponses(this.getProviderRuntime(), {
+				apiKey,
+				model: providerRef.model,
+				instructions,
+				input,
+				reasoningEffort: request.metadata.reasoningEffort,
 				abortSignal,
-				body: JSON.stringify({
-					model: providerRef.model,
-					instructions,
-					input,
-					reasoning: {
-						effort: request.metadata.reasoningEffort
-					}
-				})
 			});
 			const body = response.body;
 
 			if (!response.ok) {
-				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
+				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
 				await this.recordOperationUsage({
 					request,
 					providerId: providerRef.providerId,
@@ -941,7 +938,7 @@ export class AskMatePlugin extends Plugin {
 				throw new Error(message);
 			}
 
-			return this.extractOpenAIText(body);
+			return extractOpenAIText(body);
 		} catch (error) {
 			if (!usageRecorded) {
 				await this.recordOperationUsage({
@@ -963,388 +960,6 @@ export class AskMatePlugin extends Plugin {
 
 			throw error;
 		}
-	}
-
-	private async completeProviderTextRequest(
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<ProviderTextResult> {
-		if (providerRef.providerId === "anthropic") {
-			return await this.completeAnthropicText(providerRef, instructions, input, abortSignal);
-		}
-
-		if (providerRef.providerId === "google-gemini") {
-			return await this.completeGeminiText(providerRef, instructions, input, abortSignal);
-		}
-
-		if (providerRef.providerId === "azure-openai") {
-			return await this.completeAzureOpenAIText(providerRef, instructions, input, abortSignal);
-		}
-
-		return await this.completeOpenAICompatibleText(providerRef, instructions, input, abortSignal);
-	}
-
-	private getAzureOpenAIHeaders(apiKey: string): Record<string, string> {
-		return {
-			"Content-Type": "application/json",
-			"api-key": apiKey
-		};
-	}
-
-	private getAzureOpenAIBaseUrl(provider: ProviderSettings): string {
-		return validateAzureOpenAIBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS["azure-openai"].baseUrl);
-	}
-
-	private async completeAzureOpenAIText(
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<ProviderTextResult> {
-		const provider = this.getProviderSettings("azure-openai");
-		const apiKey = await this.getProviderApiKey("azure-openai");
-
-		if (!apiKey) {
-			throw new Error("Add an Azure OpenAI API key in AskMate settings before asking a question.");
-		}
-
-		if (!providerRef.model.trim()) {
-			throw new Error("Enter an Azure OpenAI deployment name in AskMate settings before asking a question.");
-		}
-
-		const baseUrl = this.getAzureOpenAIBaseUrl(provider);
-		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: this.getAzureOpenAIHeaders(apiKey),
-			abortSignal,
-			body: JSON.stringify({
-				model: providerRef.model,
-				messages: [
-					{ role: "system", content: instructions },
-					{ role: "user", content: input }
-				]
-			})
-		});
-		const body = response.body;
-
-		if (!response.ok) {
-			throw new Error(this.formatProviderHttpError(providerRef.providerName, response.status, this.extractProviderError(body, "")));
-		}
-
-		return {
-			text: this.extractChatCompletionText(body),
-			model: providerRef.model,
-			endpoint: "chat_completions",
-			usage: this.normalizeChatCompletionsUsage(body?.usage)
-		};
-	}
-
-	private async completeOpenAICompatibleText(
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<ProviderTextResult> {
-		const provider = this.getProviderSettings(providerRef.providerId);
-		const apiKey = await this.getProviderApiKey(providerRef.providerId);
-
-		if (providerRef.providerId !== "openai-compatible" && !apiKey) {
-			throw new Error(`Add a ${providerRef.providerName} API key in AskMate settings before asking a question.`);
-		}
-
-		const headers: Record<string, string> = {
-			"Content-Type": "application/json"
-		};
-
-		if (apiKey) {
-			headers.Authorization = `Bearer ${apiKey}`;
-		}
-
-		const baseUrl = validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerRef.providerId].baseUrl, providerRef.providerName);
-		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers,
-			abortSignal,
-			body: JSON.stringify({
-				model: providerRef.model,
-				messages: [
-					{ role: "system", content: instructions },
-					{ role: "user", content: input }
-				]
-			})
-		});
-		const body = response.body;
-
-		if (!response.ok) {
-			throw new Error(this.formatProviderHttpError(providerRef.providerName, response.status, this.extractProviderError(body, "")));
-		}
-
-		return {
-			text: this.extractChatCompletionText(body),
-			model: providerRef.model,
-			endpoint: "chat_completions",
-			usage: this.normalizeChatCompletionsUsage(body?.usage)
-		};
-	}
-
-	private async completeAnthropicText(
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<ProviderTextResult> {
-		const apiKey = await this.getProviderApiKey("anthropic");
-
-		if (!apiKey) {
-			throw new Error("Add an Anthropic API key in AskMate settings before asking a question.");
-		}
-
-		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("anthropic").baseUrl, DEFAULT_PROVIDER_SETTINGS.anthropic.baseUrl, getProviderLabel("anthropic"));
-		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/messages`, {
-			method: "POST",
-			headers: {
-				"x-api-key": apiKey,
-				"anthropic-version": "2023-06-01",
-				"Content-Type": "application/json"
-			},
-			abortSignal,
-			body: JSON.stringify({
-				model: providerRef.model,
-				system: instructions,
-				max_tokens: 4096,
-				messages: [
-					{ role: "user", content: input }
-				]
-			})
-		});
-		const body = response.body;
-
-		if (!response.ok) {
-			throw new Error(this.formatProviderHttpError("Anthropic", response.status, this.extractProviderError(body, "")));
-		}
-
-		return {
-			text: this.extractAnthropicText(body),
-			model: providerRef.model,
-			endpoint: "anthropic_messages",
-			usage: this.normalizeAnthropicUsage(body?.usage)
-		};
-	}
-
-	private async completeGeminiText(
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<ProviderTextResult> {
-		const apiKey = await this.getProviderApiKey("google-gemini");
-
-		if (!apiKey) {
-			throw new Error("Add a Google Gemini API key in AskMate settings before asking a question.");
-		}
-
-		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("google-gemini").baseUrl, DEFAULT_PROVIDER_SETTINGS["google-gemini"].baseUrl, getProviderLabel("google-gemini"));
-		const model = encodeURIComponent(providerRef.model);
-		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json"
-			},
-			abortSignal,
-			body: JSON.stringify({
-				systemInstruction: {
-					parts: [{ text: instructions }]
-				},
-				contents: [
-					{
-						role: "user",
-						parts: [{ text: input }]
-					}
-				]
-			})
-		});
-		const body = response.body;
-
-		if (!response.ok) {
-			throw new Error(this.formatProviderHttpError("Google Gemini", response.status, this.extractProviderError(body, "")));
-		}
-
-		return {
-			text: this.extractGeminiText(body),
-			model: providerRef.model,
-			endpoint: "gemini_generate_content",
-			usage: this.normalizeGeminiUsage(body?.usageMetadata)
-		};
-	}
-
-	private extractProviderError(body: Record<string, unknown> | null, fallback: string): string {
-		const error = body?.error;
-
-		if (error && typeof error === "object") {
-			const message = (error as { message?: unknown }).message;
-			if (typeof message === "string" && message.trim()) {
-				return message.trim();
-			}
-		}
-
-		return fallback;
-	}
-
-	private formatProviderHttpError(providerName: string, status: number, message: string): string {
-		const cleanMessage = message.trim();
-		const detail = cleanMessage ? ` Provider message: ${cleanMessage}` : "";
-
-		if (status === 401) {
-			return `${providerName} authentication failed. Check the API key secret in AskMate settings.${detail}`;
-		}
-
-		if (status === 403) {
-			return `${providerName} access is forbidden. Check model access, account permissions, or organization verification.${detail}`;
-		}
-
-		if (status === 404) {
-			return `${providerName} could not find the endpoint or model. Check the base URL and model ID.${detail}`;
-		}
-
-		if (status === 408 || status === 504) {
-			return `${providerName} request timed out. Try again or choose a smaller context budget.${detail}`;
-		}
-
-		if (status === 429) {
-			return `${providerName} rate limit or quota was reached. Wait, reduce context, or check billing.${detail}`;
-		}
-
-		if (status >= 500) {
-			return `${providerName} service error. Try again later.${detail}`;
-		}
-
-		return cleanMessage || `${providerName} request failed with HTTP ${status}.`;
-	}
-
-	private extractChatCompletionText(body: Record<string, unknown> | null): string {
-		const choices = Array.isArray(body?.choices) ? body.choices : [];
-		const parts: string[] = [];
-
-		for (const choice of choices) {
-			if (!choice || typeof choice !== "object") {
-				continue;
-			}
-
-			const message = (choice as { message?: unknown }).message;
-			if (!message || typeof message !== "object") {
-				continue;
-			}
-
-			const content = (message as { content?: unknown }).content;
-			if (typeof content === "string") {
-				parts.push(content);
-			}
-		}
-
-		return parts.join("\n").trim();
-	}
-
-	private extractAnthropicText(body: Record<string, unknown> | null): string {
-		const content = Array.isArray(body?.content) ? body.content : [];
-		const parts: string[] = [];
-
-		for (const block of content) {
-			if (!block || typeof block !== "object") {
-				continue;
-			}
-
-			const text = (block as { text?: unknown }).text;
-			if (typeof text === "string") {
-				parts.push(text);
-			}
-		}
-
-		return parts.join("\n").trim();
-	}
-
-	private extractGeminiText(body: Record<string, unknown> | null): string {
-		const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
-		const parts: string[] = [];
-
-		for (const candidate of candidates) {
-			if (!candidate || typeof candidate !== "object") {
-				continue;
-			}
-
-			const content = (candidate as { content?: unknown }).content;
-			const blocks = content && typeof content === "object"
-				? (content as { parts?: unknown }).parts
-				: null;
-
-			if (!Array.isArray(blocks)) {
-				continue;
-			}
-
-			for (const block of blocks) {
-				if (!block || typeof block !== "object") {
-					continue;
-				}
-
-				const text = (block as { text?: unknown }).text;
-				if (typeof text === "string") {
-					parts.push(text);
-				}
-			}
-		}
-
-		return parts.join("\n").trim();
-	}
-
-	private normalizeChatCompletionsUsage(value: unknown): OpenAITokenUsage | null {
-		if (!value || typeof value !== "object") {
-			return null;
-		}
-
-		const usage = value as { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
-		const inputTokens = getNonNegativeInteger(usage.prompt_tokens);
-		const outputTokens = getNonNegativeInteger(usage.completion_tokens);
-		const totalTokens = getNonNegativeInteger(usage.total_tokens);
-
-		return {
-			input_tokens: inputTokens ?? undefined,
-			output_tokens: outputTokens ?? undefined,
-			total_tokens: totalTokens ?? undefined
-		};
-	}
-
-	private normalizeAnthropicUsage(value: unknown): OpenAITokenUsage | null {
-		if (!value || typeof value !== "object") {
-			return null;
-		}
-
-		const usage = value as { input_tokens?: unknown; output_tokens?: unknown };
-		const inputTokens = getNonNegativeInteger(usage.input_tokens);
-		const outputTokens = getNonNegativeInteger(usage.output_tokens);
-
-		return {
-			input_tokens: inputTokens ?? undefined,
-			output_tokens: outputTokens ?? undefined,
-			total_tokens: inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : undefined
-		};
-	}
-
-	private normalizeGeminiUsage(value: unknown): OpenAITokenUsage | null {
-		if (!value || typeof value !== "object") {
-			return null;
-		}
-
-		const usage = value as { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown };
-		const inputTokens = getNonNegativeInteger(usage.promptTokenCount);
-		const outputTokens = getNonNegativeInteger(usage.candidatesTokenCount);
-		const totalTokens = getNonNegativeInteger(usage.totalTokenCount);
-
-		return {
-			input_tokens: inputTokens ?? undefined,
-			output_tokens: outputTokens ?? undefined,
-			total_tokens: totalTokens ?? undefined
-		};
 	}
 
 	async generateOpenAIImage(
@@ -1370,22 +985,16 @@ export class AskMatePlugin extends Plugin {
 		let usageRecorded = false;
 
 		try {
-			const response = await this.requestJson<OpenAIImageGenerationBody>("https://api.openai.com/v1/images/generations", {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json"
-				},
-				abortSignal,
-				body: JSON.stringify({
-					model,
-					prompt
-				})
+			const response = await requestOpenAIImageGeneration(this.getProviderRuntime(), {
+				apiKey,
+				model,
+				prompt,
+				abortSignal
 			});
 			const body = response.body;
 
 			if (!response.ok) {
-				const message = this.formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
+				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
 				await this.recordOperationUsage({
 					request,
 					providerId: "openai",
@@ -1470,13 +1079,7 @@ export class AskMatePlugin extends Plugin {
 		const instructions = this.buildImagePromptPlanningInstructions();
 		const input = this.buildImagePromptPlanningInput(request);
 		const startedAt = new Date();
-		const endpoint: ApiEndpoint = providerRef.providerId === "openai"
-			? "responses"
-			: providerRef.providerId === "anthropic"
-				? "anthropic_messages"
-				: providerRef.providerId === "google-gemini"
-					? "gemini_generate_content"
-					: "chat_completions";
+		const endpoint: ApiEndpoint = getProviderTextEndpoint(providerRef.providerId);
 
 		try {
 			const plannedText = providerRef.providerId === "openai"
@@ -1632,18 +1235,21 @@ export class AskMatePlugin extends Plugin {
 		const provider = this.getProviderSettings(providerId);
 		let models: string[];
 		try {
-			models = await this.fetchProviderModels(providerId);
+			models = await fetchProviderModels(this.getProviderRuntime(), providerId);
 		} catch (error) {
 			const message = this.getErrorMessage(error);
 			if (providerId === "azure-openai" && !message.includes("API key") && !message.includes("base URL")) {
 				throw new Error("Azure OpenAI model listing is unavailable for this endpoint. Keep using a manual deployment name.");
 			}
+			if (providerId === "azure-ai" && !message.includes("API key") && !message.includes("base URL")) {
+				throw new Error("Azure AI Foundry model listing is unavailable for this endpoint. Keep using a manual model or deployment name.");
+			}
 			throw error;
 		}
 
-		if (providerId === "azure-openai") {
+		if (providerId === "azure-openai" || providerId === "azure-ai") {
 			if (models.length === 0) {
-				throw new Error("Azure OpenAI did not return model IDs. Keep using a manual deployment name.");
+				throw new Error(`${getProviderLabel(providerId)} did not return model IDs. Keep using a manual model or deployment name.`);
 			}
 
 			provider.modelOptions = normalizeProviderModelOptions(models, provider.modelOptions, provider.model);
@@ -1652,7 +1258,7 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		const options = providerId === "openai"
-			? this.normalizeOpenAIModelOptions(models, [], "")
+			? normalizeOpenAIModelOptions(models, [], "")
 			: normalizeProviderModelOptions(models, DEFAULT_PROVIDER_SETTINGS[providerId].modelOptions, provider.model);
 
 		if (options.length === 0) {
@@ -1669,120 +1275,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	async testProviderConnection(providerId: TextProviderId): Promise<string> {
-		if (providerId === "azure-openai") {
-			return await this.testAzureOpenAIConnection();
-		}
-
-		const models = await this.fetchProviderModels(providerId);
-		return `AskMate ${getProviderLabel(providerId)} test passed. ${models.length} models are visible.`;
-	}
-
-	private async testAzureOpenAIConnection(): Promise<string> {
-		const provider = this.getProviderSettings("azure-openai");
-		const apiKey = await this.getProviderApiKey("azure-openai");
-		const deploymentName = provider.model.trim();
-
-		if (!apiKey) {
-			throw new Error("Add an Azure OpenAI API key before testing the provider connection.");
-		}
-
-		if (!deploymentName) {
-			throw new Error("Enter an Azure OpenAI deployment name before testing the provider connection.");
-		}
-
-		const baseUrl = this.getAzureOpenAIBaseUrl(provider);
-		const response = await this.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: this.getAzureOpenAIHeaders(apiKey),
-			timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-			timeoutMessage: "Azure OpenAI test request timed out after 10 seconds.",
-			body: JSON.stringify({
-				model: deploymentName,
-				messages: [
-					{ role: "user", content: "Reply with OK to confirm this Azure OpenAI deployment works." }
-				]
-			})
-		});
-		const body = response.body;
-
-		if (!response.ok) {
-			throw new Error(this.formatProviderHttpError("Azure OpenAI", response.status, this.extractProviderError(body, "")));
-		}
-
-		return "AskMate Azure OpenAI test passed. It sent a minimal text request to the selected deployment and may have consumed a small number of tokens.";
-	}
-
-	private async fetchProviderModels(providerId: TextProviderId): Promise<string[]> {
-		if (providerId === "google-gemini") {
-			return await this.fetchGeminiModels();
-		}
-
-		const provider = this.getProviderSettings(providerId);
-		const apiKey = await this.getProviderApiKey(providerId);
-
-		if (providerId !== "openai-compatible" && !apiKey) {
-			throw new Error(`Add a ${getProviderLabel(providerId)} API key before refreshing models.`);
-		}
-
-		const headers: Record<string, string> = {};
-
-		if (apiKey) {
-			if (providerId === "anthropic") {
-				headers["x-api-key"] = apiKey;
-				headers["anthropic-version"] = "2023-06-01";
-			} else if (providerId === "azure-openai") {
-				Object.assign(headers, this.getAzureOpenAIHeaders(apiKey));
-			} else {
-				headers.Authorization = `Bearer ${apiKey}`;
-			}
-		}
-
-		const response = await this.requestJson<OpenAIModelListBody>(
-			`${providerId === "azure-openai" ? this.getAzureOpenAIBaseUrl(provider) : validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl, getProviderLabel(providerId))}/models`,
-			{
-				headers,
-				timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-				timeoutMessage: `${getProviderLabel(providerId)} model refresh timed out after 10 seconds.`
-			}
-		);
-		const body = response.body;
-
-		if (!response.ok) {
-			const message = this.formatProviderHttpError(getProviderLabel(providerId), response.status, body?.error?.message ?? "");
-			throw new Error(message);
-		}
-
-		const models = body?.data?.map((model) => model.id ?? "").filter(Boolean) ?? [];
-		return models.sort((a, b) => a.localeCompare(b));
-	}
-
-	private async fetchGeminiModels(): Promise<string[]> {
-		const apiKey = await this.getProviderApiKey("google-gemini");
-
-		if (!apiKey) {
-			throw new Error("Add a Google Gemini API key before refreshing models.");
-		}
-
-		const baseUrl = validateProviderBaseUrl(this.getProviderSettings("google-gemini").baseUrl, DEFAULT_PROVIDER_SETTINGS["google-gemini"].baseUrl, getProviderLabel("google-gemini"));
-		const response = await this.requestJson<GeminiModelListBody>(
-			`${baseUrl}/models?key=${encodeURIComponent(apiKey)}`,
-			{
-				timeoutMs: OPENAI_MODEL_REQUEST_TIMEOUT_MS,
-				timeoutMessage: "Google Gemini model refresh timed out after 10 seconds."
-			}
-		);
-		const body = response.body;
-
-		if (!response.ok) {
-			const message = this.formatProviderHttpError("Google Gemini", response.status, body?.error?.message ?? "");
-			throw new Error(message);
-		}
-
-		return (body?.models ?? [])
-			.filter((model) => !Array.isArray(model.supportedGenerationMethods) || model.supportedGenerationMethods.includes("generateContent"))
-			.map((model) => (model.name ?? "").replace(/^models\//, ""))
-			.filter(Boolean)
-			.sort((a, b) => a.localeCompare(b));
+		return await testProviderConnectionWithProvider(this.getProviderRuntime(), providerId);
 	}
 
 	private renderTemplate(template: string, variables: Record<string, string>): string {
@@ -2904,6 +2397,10 @@ export class AskMatePlugin extends Plugin {
 			return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
 		}
 
+		if (ref.providerId === "azure-ai") {
+			return hasModel && provider.baseUrl.trim().length > 0 && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
+		}
+
 		return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
 	}
 
@@ -3877,91 +3374,6 @@ export class AskMatePlugin extends Plugin {
 		].join("\n");
 	}
 
-	private parseStreamEvent(line: string): OpenAIStreamEvent | null {
-		if (!line.startsWith("data: ")) {
-			return null;
-		}
-
-		const payload = line.slice(6).trim();
-
-		if (!payload || payload === "[DONE]") {
-			return null;
-		}
-
-		try {
-			const event = JSON.parse(payload) as OpenAIStreamEvent;
-
-			if (event.error?.message) {
-				throw new Error(event.error.message);
-			}
-
-			return event;
-		} catch (error) {
-			if (error instanceof Error) {
-				throw error;
-			}
-		}
-
-		return null;
-	}
-
-	private getStreamDelta(event: OpenAIStreamEvent): string {
-		if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-			return event.delta;
-		}
-
-		return "";
-	}
-
-	private getStreamUsage(event: OpenAIStreamEvent): OpenAITokenUsage | null {
-		return event.response?.usage ?? event.usage ?? null;
-	}
-
-	private isCompletedStreamEvent(event: OpenAIStreamEvent): boolean {
-		return event.type === "response.completed" || event.response?.status === "completed";
-	}
-
-	private getStreamTerminalError(event: OpenAIStreamEvent): string | null {
-		const responseError = event.response?.error?.message?.trim();
-
-		if (responseError) {
-			return responseError;
-		}
-
-		if (event.type === "response.failed" || event.response?.status === "failed") {
-			return "OpenAI response failed.";
-		}
-
-		if (event.type === "response.incomplete" || event.response?.status === "incomplete") {
-			const reason = event.response?.incomplete_details?.reason?.trim();
-			return reason ? `OpenAI response incomplete: ${reason}.` : "OpenAI response incomplete.";
-		}
-
-		return null;
-	}
-
-	private extractOpenAIText(body: OpenAIResponseBody | null): string {
-		if (!body) {
-			return "";
-		}
-
-		if (typeof body.output_text === "string") {
-			return body.output_text.trim();
-		}
-
-		const parts: string[] = [];
-
-		for (const item of body.output ?? []) {
-			for (const part of item.content ?? []) {
-				if (part.type === "output_text" && typeof part.text === "string") {
-					parts.push(part.text);
-				}
-			}
-		}
-
-		return parts.join("\n").trim();
-	}
-
 	private async recordOperationUsage({
 		request,
 		providerId,
@@ -4096,23 +3508,6 @@ export class AskMatePlugin extends Plugin {
 		} catch (error) {
 			new Notice(this.getErrorMessage(error));
 		}
-	}
-
-	private normalizeOpenAIModelOptions(
-		models: string[],
-		fallback: string[] = DEFAULT_MODEL_OPTIONS,
-		selectedModel = this.settings?.providers?.openai?.model ?? this.settings?.model
-	): string[] {
-		const normalizeList = (values: unknown[]): string[] => Array.from(
-			new Set(
-				values
-					.filter((model): model is string => typeof model === "string")
-					.map((model) => model.trim())
-					.filter(Boolean)
-			)
-		);
-		const options = normalizeList([...models, selectedModel]);
-		return options.length > 0 ? options : normalizeList(fallback);
 	}
 
 	private getImageResultFolder(request?: AskRequest, result?: ImageAskMateResult): string {
