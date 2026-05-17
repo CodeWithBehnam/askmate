@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Split provider-specific request, model refresh, and connection logic into `src/providers/`.
-            - Added one adapter file for each supported text provider.
-            - Added smoke-test coverage for the provider adapter folder.
+            - Added Azure AI Foundry as a text provider.
+            - Added Azure AI Foundry provider settings, connection testing, and model info refresh.
+            - Documented the Azure AI Foundry `/models/chat/completions` endpoint.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
