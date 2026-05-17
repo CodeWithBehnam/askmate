@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 function assertIncludes(fileName: string, contents: string, expected: string, label: string): void {
 	if (!contents.includes(expected)) {
@@ -20,7 +21,22 @@ function assertNotPattern(fileName: string, contents: string, pattern: RegExp, l
 	}
 }
 
-const main = readFileSync("main.ts", "utf8");
+function readSourceTree(dir: string): string {
+	return readdirSync(dir)
+		.sort((a, b) => a.localeCompare(b))
+		.map((entry) => join(dir, entry))
+		.map((path) => {
+			const stat = statSync(path);
+			if (stat.isDirectory()) {
+				return readSourceTree(path);
+			}
+			return path.endsWith(".ts") ? readFileSync(path, "utf8") : "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+const main = [readFileSync("main.ts", "utf8"), readSourceTree("src")].join("\n");
 const styles = readFileSync("styles.css", "utf8");
 const readme = readFileSync("README.md", "utf8");
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
