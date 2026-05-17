@@ -40,6 +40,14 @@ const main = [readFileSync("main.ts", "utf8"), readSourceTree("src")].join("\n")
 const styles = readFileSync("styles.css", "utf8");
 const readme = readFileSync("README.md", "utf8");
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
+const providerFiles = [
+	"open-ai.ts",
+	"azure-open-ai.ts",
+	"open-router.ts",
+	"anthropic.ts",
+	"google-gemini.ts",
+	"open-ai-compatible.ts"
+];
 
 assertIncludes("main.ts", main, "ProviderRoleSettings", "provider role settings type");
 assertIncludes("main.ts", main, "getChatProviderModelRef", "chat provider routing");
@@ -55,6 +63,10 @@ assertIncludes("main.ts", main, "normalizeApplyApprovalMode", "Apply approval se
 assertIncludes("main.ts", main, "shouldUseDiffApproval", "Apply approval decision helper");
 assertIncludes("main.ts", main, "scope === \"full-note\" || scope === \"heading-section\"", "Full approval mode high-risk scopes");
 assertIncludes("main.ts", main, "recordOperationUsage", "usage tracking");
+for (const providerFile of providerFiles) {
+	assertIncludes(`src/providers/${providerFile}`, readFileSync(join("src", "providers", providerFile), "utf8"), "ProviderRuntime", "provider adapter runtime interface");
+}
+assertIncludes("src/providers/index.ts", readFileSync(join("src", "providers", "index.ts"), "utf8"), "completeProviderTextRequest", "provider adapter dispatcher");
 assertIncludes("main.ts", main, "buildPromptContextContent", "context capture and budget prompt helper");
 assertIncludes("main.ts", main, "ContextAttachment", "context attachment model");
 assertIncludes("main.ts", main, "threadedChatEnabled", "threaded chat setting");
