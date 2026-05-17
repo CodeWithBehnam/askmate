@@ -6,6 +6,7 @@ import {
 	TextProviderId
 } from "../shared/core";
 import { completeAnthropicText, fetchAnthropicModels } from "./anthropic";
+import { completeAzureAIText, fetchAzureAIModels, testAzureAIConnection } from "./azure-ai";
 import { completeAzureOpenAIText, fetchAzureOpenAIModels, testAzureOpenAIConnection } from "./azure-open-ai";
 import { completeGeminiText, fetchGeminiModels } from "./google-gemini";
 import { fetchOpenAIModels } from "./open-ai";
@@ -68,6 +69,10 @@ export async function completeProviderTextRequest(
 		return await completeAzureOpenAIText(runtime, providerRef, instructions, input, abortSignal);
 	}
 
+	if (providerRef.providerId === "azure-ai") {
+		return await completeAzureAIText(runtime, providerRef, instructions, input, abortSignal);
+	}
+
 	if (providerRef.providerId === "openrouter") {
 		return await completeOpenRouterText(runtime, providerRef, instructions, input, abortSignal);
 	}
@@ -82,6 +87,10 @@ export async function fetchProviderModels(runtime: ProviderRuntime, providerId: 
 
 	if (providerId === "azure-openai") {
 		return await fetchAzureOpenAIModels(runtime);
+	}
+
+	if (providerId === "azure-ai") {
+		return await fetchAzureAIModels(runtime);
 	}
 
 	if (providerId === "openrouter") {
@@ -102,6 +111,10 @@ export async function fetchProviderModels(runtime: ProviderRuntime, providerId: 
 export async function testProviderConnection(runtime: ProviderRuntime, providerId: TextProviderId): Promise<string> {
 	if (providerId === "azure-openai") {
 		return await testAzureOpenAIConnection(runtime);
+	}
+
+	if (providerId === "azure-ai") {
+		return await testAzureAIConnection(runtime);
 	}
 
 	const models = await fetchProviderModels(runtime, providerId);

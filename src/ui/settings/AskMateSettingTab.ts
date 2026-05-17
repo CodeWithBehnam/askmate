@@ -101,7 +101,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("p", {
 			cls: "askmate-settings-note",
-			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, Azure OpenAI, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
+			text: `AskMate ${this.plugin.manifest.version}. Text providers support OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification.`
 		});
 	}
 
@@ -302,7 +302,9 @@ export class AskMateSettingTab extends PluginSettingTab {
 				? "Optional for local providers. Stored with Obsidian SecretStorage when provided."
 				: selectedProviderId === "azure-openai"
 					? "Azure OpenAI Phase 1 uses API-key auth. Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings."
-					: "Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings.")
+					: selectedProviderId === "azure-ai"
+						? "Azure AI Foundry uses API-key auth for this provider. Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings."
+						: "Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings.")
 			.addComponent((el) => {
 				return new SecretComponent(this.app, el)
 					.setValue(selectedProvider.apiKeySecretName)
@@ -312,16 +314,23 @@ export class AskMateSettingTab extends PluginSettingTab {
 					});
 			});
 
-		if (selectedProviderId === "openai-compatible" || selectedProviderId === "azure-openai") {
+		if (selectedProviderId === "openai-compatible" || selectedProviderId === "azure-openai" || selectedProviderId === "azure-ai") {
 			const isAzureOpenAI = selectedProviderId === "azure-openai";
+			const isAzureAI = selectedProviderId === "azure-ai";
 			const baseUrlFallback = DEFAULT_PROVIDER_SETTINGS[selectedProviderId].baseUrl;
-			const baseUrlPlaceholder = isAzureOpenAI ? "https://<resource>.openai.azure.com/openai/v1" : DEFAULT_LOCAL_BASE_URL;
+			const baseUrlPlaceholder = isAzureOpenAI
+				? "https://<resource>.openai.azure.com/openai/v1"
+				: isAzureAI
+					? "https://<resource>.services.ai.azure.com/models"
+					: DEFAULT_LOCAL_BASE_URL;
 
 			new Setting(containerEl)
-				.setName(isAzureOpenAI ? "Azure OpenAI base URL" : "Local provider base URL")
+				.setName(isAzureOpenAI ? "Azure OpenAI base URL" : isAzureAI ? "Azure AI Foundry endpoint" : "Local provider base URL")
 				.setDesc(isAzureOpenAI
 					? "Use the v1 base URL, for example https://<resource>.openai.azure.com/openai/v1. The model field is your Azure deployment name."
-					: "OpenAI-compatible endpoint, for example Ollama at http://localhost:11434/v1 or a self-hosted server.")
+					: isAzureAI
+						? "Use the Azure AI inference endpoint, for example https://<resource>.services.ai.azure.com/models. AskMate adds /models when it is omitted."
+						: "OpenAI-compatible endpoint, for example Ollama at http://localhost:11434/v1 or a self-hosted server.")
 				.addText((text) => {
 					text
 						.setPlaceholder(baseUrlPlaceholder)
@@ -344,7 +353,9 @@ export class AskMateSettingTab extends PluginSettingTab {
 			.setName("Test provider connection")
 			.setDesc(selectedProviderId === "azure-openai"
 				? "Sends a minimal text request to the selected Azure deployment. This may consume a small number of tokens. Times out after 10 seconds."
-				: "Checks whether the selected provider can list models. Times out after 10 seconds.")
+				: selectedProviderId === "azure-ai"
+					? "Sends a minimal text request to the selected Azure AI Foundry model. This may consume a small number of tokens. Times out after 10 seconds."
+					: "Checks whether the selected provider can list models. Times out after 10 seconds.")
 			.addButton((button) => {
 				button.setButtonText("Test API").onClick(async () => {
 					button.setButtonText("Testing...");
@@ -365,7 +376,9 @@ export class AskMateSettingTab extends PluginSettingTab {
 			.setName("Refresh provider models")
 			.setDesc(selectedProviderId === "azure-openai"
 				? "Best-effort model listing for Azure OpenAI. If listing fails or omits your deployment, keep using the manual deployment name below."
-				: "Loads model IDs visible to the selected provider. You can also type a manual model ID below.")
+				: selectedProviderId === "azure-ai"
+					? "Best-effort model info for Azure AI Foundry. If listing fails or omits your deployment, keep using the manual model name below."
+					: "Loads model IDs visible to the selected provider. You can also type a manual model ID below.")
 			.addButton((button) => {
 				button.setButtonText("Refresh models").onClick(async () => {
 					button.setButtonText("Refreshing...");
@@ -389,7 +402,9 @@ export class AskMateSettingTab extends PluginSettingTab {
 				? "Choose any model ID returned by the OpenAI Models API. Text chat requires a model that supports the Responses API; gpt-image-2 is used for image generation."
 				: selectedProviderId === "azure-openai"
 					? "Choose the Azure OpenAI deployment used for text chat, workflows, and image prompt planning. Image generation remains OpenAI-only."
-					: "Choose the selected provider model for text chat, workflows, and image prompt planning.")
+					: selectedProviderId === "azure-ai"
+						? "Choose the Azure AI Foundry model or deployment used for text chat, workflows, and image prompt planning. Image generation remains OpenAI-only."
+						: "Choose the selected provider model for text chat, workflows, and image prompt planning.")
 			.addDropdown((dropdown) => {
 				for (const model of selectedProvider.modelOptions) {
 					dropdown.addOption(model, model);
@@ -403,10 +418,12 @@ export class AskMateSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName(selectedProviderId === "azure-openai" ? "Manual deployment name" : "Manual model ID")
+			.setName(selectedProviderId === "azure-openai" ? "Manual deployment name" : selectedProviderId === "azure-ai" ? "Manual model or deployment name" : "Manual model ID")
 			.setDesc(selectedProviderId === "azure-openai"
 				? "Enter your Azure OpenAI deployment name. Model refresh may not list every deployment."
-				: "Use this when a provider supports a model that is not returned by model refresh.")
+				: selectedProviderId === "azure-ai"
+					? "Enter your Azure AI Foundry model or deployment name. Model refresh may not list every deployment."
+					: "Use this when a provider supports a model that is not returned by model refresh.")
 			.addText((text) => {
 				text
 					.setPlaceholder(selectedProviderId === "azure-openai" ? "my-gpt-deployment" : DEFAULT_PROVIDER_SETTINGS[selectedProviderId].model)

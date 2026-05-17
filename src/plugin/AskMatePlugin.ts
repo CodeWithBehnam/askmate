@@ -1241,12 +1241,15 @@ export class AskMatePlugin extends Plugin {
 			if (providerId === "azure-openai" && !message.includes("API key") && !message.includes("base URL")) {
 				throw new Error("Azure OpenAI model listing is unavailable for this endpoint. Keep using a manual deployment name.");
 			}
+			if (providerId === "azure-ai" && !message.includes("API key") && !message.includes("base URL")) {
+				throw new Error("Azure AI Foundry model listing is unavailable for this endpoint. Keep using a manual model or deployment name.");
+			}
 			throw error;
 		}
 
-		if (providerId === "azure-openai") {
+		if (providerId === "azure-openai" || providerId === "azure-ai") {
 			if (models.length === 0) {
-				throw new Error("Azure OpenAI did not return model IDs. Keep using a manual deployment name.");
+				throw new Error(`${getProviderLabel(providerId)} did not return model IDs. Keep using a manual model or deployment name.`);
 			}
 
 			provider.modelOptions = normalizeProviderModelOptions(models, provider.modelOptions, provider.model);
@@ -2392,6 +2395,10 @@ export class AskMatePlugin extends Plugin {
 				return false;
 			}
 			return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
+		}
+
+		if (ref.providerId === "azure-ai") {
+			return hasModel && provider.baseUrl.trim().length > 0 && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
 		}
 
 		return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;

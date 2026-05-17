@@ -43,6 +43,7 @@ const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 const providerFiles = [
 	"open-ai.ts",
 	"azure-open-ai.ts",
+	"azure-ai.ts",
 	"open-router.ts",
 	"anthropic.ts",
 	"google-gemini.ts",
@@ -133,9 +134,10 @@ assertIncludes("README.md", readme, "appends generated output to the captured no
 assertIncludes("CONTRIBUTING.md", contributing, "Default no-selection text Apply appends", "default no-selection Apply append contributor guard");
 assertIncludes("CONTRIBUTING.md", contributing, "Apply approval modes", "Apply approval mode contributor guard");
 assertIncludes("README.md", readme, "Azure OpenAI", "Azure OpenAI documentation");
+assertIncludes("README.md", readme, "Azure AI Foundry", "Azure AI Foundry documentation");
 assertIncludes("README.md", readme, "/openai/v1", "Azure OpenAI v1 endpoint documentation");
+assertIncludes("README.md", readme, "/models/chat/completions", "Azure AI Foundry inference endpoint documentation");
 assertIncludes("README.md", readme, "deployment name", "Azure OpenAI deployment name documentation");
-assertIncludes("README.md", readme, "Azure AI Foundry planned", "Azure AI Foundry roadmap documentation");
 assertIncludes("README.md", readme, "gpt-image-2", "OpenAI image model documentation");
 assertNotPattern("README.md", readme, /\| Azure OpenAI \| Yes \| Yes/i, "Azure OpenAI image support should stay absent");
 assertNotPattern("README.md", readme, /^- \[ \]/m, "unchecked roadmap boxes should be absent");
