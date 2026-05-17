@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Split the AskMate plugin source into a modular `src/` structure.
-            - Kept `main.ts` as the Obsidian build entrypoint.
-            - Updated roadmap smoke tests to validate the modular source tree.
+            - Split provider-specific request, model refresh, and connection logic into `src/providers/`.
+            - Added one adapter file for each supported text provider.
+            - Added smoke-test coverage for the provider adapter folder.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
