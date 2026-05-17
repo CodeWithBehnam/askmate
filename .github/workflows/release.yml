@@ -62,9 +62,9 @@ jobs:
           body: |
             ## Changes
 
-            - Updated OpenAI model refresh to show every model ID returned by the OpenAI Models API.
-            - Added the Remotion demo project, generated demo video, and thumbnail assets.
-            - Added demo run scripts and smoke-test coverage for the model refresh behavior.
+            - Split the AskMate plugin source into a modular `src/` structure.
+            - Kept `main.ts` as the Obsidian build entrypoint.
+            - Updated roadmap smoke tests to validate the modular source tree.
             - Bumped plugin version to ${{ github.ref_name }}.
 
             ## Validation
