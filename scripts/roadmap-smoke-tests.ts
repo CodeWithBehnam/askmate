@@ -85,6 +85,10 @@ assertIncludes("main.ts", main, "scope: \"append\"", "append Apply preview scope
 assertIncludes("main.ts", main, "resolveApplyScope", "shared Apply scope resolver for live Apply and review queue");
 assertIncludes("main.ts", main, "createAbortError", "abort error factory");
 assertIncludes("main.ts", main, "isAbortError", "abort error classifier");
+assertIncludes("main.ts", main, "awaitWithAbortAndTimeout", "immediate abort and timeout request race");
+assertIncludes("main.ts", main, "resolveSelectionIdentity", "selection identity resolver");
+assertIncludes("main.ts", main, "BuiltRetrySnapshot", "built request retry snapshot");
+assertIncludes("main.ts", main, "MutationOutcome", "structured mutation outcome");
 assertIncludes("main.ts", main, "throwIfNoteChangedDuringPreview", "Apply concurrent-edit safety guard");
 assertIncludes("main.ts", main, "notifySideEffect", "post-mutation success notification helper");
 assertIncludes("main.ts", main, "applyResponseToHeadingSection", "heading section Apply helper");

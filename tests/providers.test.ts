@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ANTHROPIC_DEFAULT_MAX_TOKENS } from "../src/providers/anthropic";
 import { GEMINI_DEFAULT_MAX_OUTPUT_TOKENS } from "../src/providers/google-gemini";
 import { completeProviderTextRequest, getProviderTextEndpoint } from "../src/providers/index";
-import { joinOpenAIUrl } from "../src/providers/open-ai";
+import { joinOpenAIUrl, requestOpenAIImageGeneration, requestOpenAIResponses } from "../src/providers/open-ai";
 import type { ProviderRuntime } from "../src/providers/types";
 import type { ProviderModelRef, ProviderSettings, TextProviderId } from "../src/shared/types";
 
@@ -52,6 +52,29 @@ describe("completeProviderTextRequest routing", () => {
 		expect(getProviderTextEndpoint("anthropic")).toBe("anthropic_messages");
 		expect(getProviderTextEndpoint("google-gemini")).toBe("gemini_generate_content");
 		expect(getProviderTextEndpoint("openai-compatible")).toBe("chat_completions");
+	});
+});
+
+describe("provider generation timeouts", () => {
+	test("OpenAI text and image generation use long timeouts", async () => {
+		const calls: Array<{ timeoutMs?: number; timeoutMessage?: string }> = [];
+		const runtime: ProviderRuntime = {
+			...mockRuntime(),
+			requestJson: async (_url, options) => {
+				calls.push(options ?? {});
+				return { status: 200, ok: true, body: null, text: "" };
+			}
+		};
+		await requestOpenAIResponses(runtime, {
+			apiKey: "key",
+			model: "model",
+			instructions: "instructions",
+			input: "input",
+			reasoningEffort: "low"
+		});
+		await requestOpenAIImageGeneration(runtime, { apiKey: "key", model: "image", prompt: "prompt" });
+		expect(calls[0].timeoutMs).toBe(120000);
+		expect(calls[1].timeoutMs).toBe(300000);
 	});
 });
 

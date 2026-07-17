@@ -31,6 +31,13 @@ describe("normalizeAskMateSettings", () => {
 		expect(saved.applyApprovalMode).toBe("auto-approve");
 	});
 
+	test("invalid output mode normalizes on load and save", () => {
+		const loaded = normalizeAskMateSettings({ outputMode: "invalid" } as never, "load");
+		expect(loaded.outputMode).toBe("chat");
+		loaded.outputMode = "invalid" as never;
+		expect(normalizeAskMateSettings(loaded, "save").outputMode).toBe("chat");
+	});
+
 	test("legacy showApplyPreview false migrates to auto-approve on load", () => {
 		const settings = normalizeAskMateSettings({
 			showApplyPreview: false

@@ -1,4 +1,4 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import {
 	buildMarkdownLineDiff,
@@ -25,7 +25,7 @@ class AskMateConfirmModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createDiv({ cls: "askmate-modal-title", text: "Confirm AskMate action" });
+		this.setTitle("Confirm AskMate action");
 		contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
 		const cancelButton = actions.createEl("button", { text: "Cancel" });
@@ -71,9 +71,12 @@ class AskMatePromptModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createDiv({ cls: "askmate-modal-title", text: "AskMate input" });
-		contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
+		this.setTitle("AskMate input");
+		const messageEl = contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
+		messageEl.id = "askmate-prompt-message";
 		this.inputEl = contentEl.createEl("input", { type: "text", value: this.initialValue });
+		this.inputEl.setAttribute("aria-label", this.message);
+		this.inputEl.setAttribute("aria-describedby", messageEl.id);
 		this.inputEl.addClass("askmate-modal-input");
 		this.inputEl.addEventListener("keydown", (event) => {
 			if (event.key === "Enter") {
@@ -132,7 +135,7 @@ export class AskMateDiffConfirmModal extends Modal {
 				: this.options.scope === "heading-section"
 					? "Replace this heading section with AskMate output?"
 					: "Replace the full note with AskMate output?";
-		contentEl.createDiv({ cls: "askmate-modal-title", text: title });
+		this.setTitle(title);
 		contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
 		contentEl.createDiv({
 			cls: "askmate-diff-summary",
@@ -185,17 +188,17 @@ export class AskMateTextViewerModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("askmate-prompt-inspector");
-		contentEl.createDiv({ cls: "askmate-modal-title", text: this.title });
+		this.setTitle(this.title);
 		const textarea = contentEl.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
+		textarea.setAttribute("aria-label", this.title);
 		textarea.value = this.value;
 		textarea.readOnly = true;
 		textarea.rows = 14;
-		textarea.focus();
-		textarea.select();
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
 		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
 		closeButton.type = "button";
 		closeButton.addEventListener("click", () => this.close());
+		closeButton.focus();
 	}
 }
 
@@ -211,11 +214,14 @@ export class AskMatePromptInspectorModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("askmate-prompt-inspector");
-		contentEl.createDiv({ cls: "askmate-modal-title", text: "Final prompt inspector" });
+		this.setTitle("Final prompt inspector");
 		contentEl.createDiv({
 			cls: "askmate-prompt-inspector-meta",
 			text: `${this.inspection.providerName}: ${this.inspection.model} · about ${formatTokenCount(this.inspection.estimatedInputTokens)} input tokens · ${formatRequestIntent(this.inspection.request.metadata.intentKind)}`
 		});
+		if (this.inspection.blockers.length > 0) {
+			contentEl.createDiv({ cls: "askmate-budget-blocker", text: this.inspection.blockers.join(" ") });
+		}
 		if (this.inspection.warnings.length > 0) {
 			contentEl.createDiv({ cls: "askmate-budget-warning", text: this.inspection.warnings.join(" ") });
 		}
@@ -231,8 +237,11 @@ export class AskMatePromptInspectorModal extends Modal {
 	}
 
 	private renderTextarea(parent: HTMLElement, label: string, value: string): void {
-		parent.createDiv({ cls: "askmate-prompt-inspector-label", text: label });
+		const labelEl = parent.createEl("label", { cls: "askmate-prompt-inspector-label", text: label });
 		const textarea = parent.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
+		const id = `askmate-inspector-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+		labelEl.htmlFor = id;
+		textarea.id = id;
 		textarea.value = value;
 		textarea.readOnly = true;
 		textarea.rows = 10;
@@ -257,7 +266,7 @@ export class AskMateNoteHistoryModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("askmate-note-history");
-		contentEl.createDiv({ cls: "askmate-modal-title", text: "AskMate note history" });
+		this.setTitle("AskMate note history");
 		contentEl.createDiv({ cls: "askmate-note-history-meta", text: this.sourcePath || "No active note" });
 		const turns = this.plugin.getNoteHistoryForPath(this.sourcePath).slice().reverse();
 		if (turns.length === 0) {
@@ -283,7 +292,13 @@ export class AskMateNoteHistoryModal extends Modal {
 		clearButton.type = "button";
 		clearButton.disabled = turns.length === 0;
 		clearButton.addEventListener("click", () => {
-			void this.plugin.clearNoteHistoryForPath(this.sourcePath).then(() => this.render());
+			void askMateConfirm(this.app, `Clear stored AskMate history for "${this.sourcePath}"?`).then(async (confirmed) => {
+				if (!confirmed) {
+					return;
+				}
+				await this.plugin.clearNoteHistoryForPath(this.sourcePath);
+				this.render();
+			}).catch((error) => new Notice(this.plugin.getErrorMessage(error)));
 		});
 		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
 		closeButton.type = "button";

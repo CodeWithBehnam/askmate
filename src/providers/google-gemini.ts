@@ -1,5 +1,6 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
+	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	GeminiModelListBody,
 	getNonNegativeInteger,
 	getProviderLabel,
@@ -37,6 +38,8 @@ export async function completeGeminiText(
 			"x-goog-api-key": apiKey
 		},
 		abortSignal,
+		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+		timeoutMessage: "Google Gemini generation timed out after 2 minutes.",
 		body: JSON.stringify({
 			systemInstruction: {
 				parts: [{ text: instructions }]

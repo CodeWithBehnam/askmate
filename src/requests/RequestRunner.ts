@@ -25,6 +25,7 @@ import {
 	getProviderLabel,
 	isAbortError,
 	normalizeContextBudgetMode,
+	normalizeOutputMode,
 	normalizeRequestPrivacyOptions,
 	normalizeTextProviderId
 } from "../shared/core";
@@ -145,7 +146,7 @@ export class RequestRunner {
 			metadata: {
 				intentKind,
 				commandSource: options.commandSource ?? "sidebar",
-				outputMode: options.outputMode ?? settings.outputMode,
+				outputMode: normalizeOutputMode(options.outputMode ?? settings.outputMode),
 				promptVersion: ASKMATE_PROMPT_VERSION,
 				providerId: providerRef.providerId,
 				providerName: providerRef.providerName,
@@ -281,6 +282,7 @@ export class RequestRunner {
 				throw new Error("OpenAI returned a response, but no text output was found.");
 			}
 
+			this.host.throwIfAborted(abortSignal);
 			onDelta(answer);
 			await this.host.recordOperationUsage({
 				request,
@@ -295,6 +297,7 @@ export class RequestRunner {
 				startedAt
 			});
 			usageRecorded = true;
+			this.host.throwIfAborted(abortSignal);
 			return answer.trim();
 		} catch (error) {
 			if (!usageRecorded) {
@@ -330,7 +333,7 @@ export class RequestRunner {
 		const startedAt = new Date();
 		let answer = "";
 		let usage: OpenAITokenUsage | null = null;
-		let endpoint: ApiEndpoint = "chat_completions";
+		let endpoint: ApiEndpoint = getProviderTextEndpoint(providerRef.providerId);
 		let usageRecorded = false;
 
 		try {
@@ -343,6 +346,7 @@ export class RequestRunner {
 				throw new Error(`${providerRef.providerName} returned a response, but no text output was found.`);
 			}
 
+			this.host.throwIfAborted(abortSignal);
 			onDelta(answer);
 			if (operationKind !== "image_prompt_planning") {
 				await this.host.recordOperationUsage({
@@ -361,6 +365,7 @@ export class RequestRunner {
 				});
 				usageRecorded = true;
 			}
+			this.host.throwIfAborted(abortSignal);
 			return answer.trim();
 		} catch (error) {
 			if (!usageRecorded) {

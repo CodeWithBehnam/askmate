@@ -41,10 +41,17 @@ export class HistoryService {
 			outputMode: request.metadata.outputMode,
 			intentKind: request.metadata.intentKind
 		};
-		const existing = normalizeNoteHistoryStore(settings.noteHistoryStore).turns.filter((item) => item.sourcePath !== turn.sourcePath);
-		const forNote = this.getNoteHistoryForPath(turn.sourcePath).concat(turn).slice(-settings.noteHistoryMaxTurnsPerNote);
+		const normalizedTurns = normalizeNoteHistoryStore(settings.noteHistoryStore).turns;
+		const previousStore = settings.noteHistoryStore;
+		const existing = normalizedTurns.filter((item) => item.sourcePath !== turn.sourcePath);
+		const forNote = normalizedTurns.filter((item) => item.sourcePath === turn.sourcePath).concat(turn).slice(-settings.noteHistoryMaxTurnsPerNote);
 		settings.noteHistoryStore = { turns: [...existing, ...forNote].slice(-MAX_NOTE_HISTORY_TURNS) };
-		await this.host.saveSettings();
+		try {
+			await this.host.saveSettings();
+		} catch (error) {
+			settings.noteHistoryStore = previousStore;
+			console.warn("AskMate could not save note history.", error);
+		}
 	}
 
 	getNoteHistoryForPath(sourcePath: string): NoteHistoryTurn[] {
@@ -69,8 +76,15 @@ export class HistoryService {
 			throw new Error("Review queue requires a source Markdown note.");
 		}
 		const normalizedScope = resolveApplyScope(scope, request.context.source);
-		const currentContent = await this.host.readFileText(file.path);
-		const beforeText = normalizedScope === "selected-block" ? request.context.content : currentContent;
+		const selectionIdentity = normalizedScope === "selected-block" ? request.context.selectionIdentity ?? null : null;
+		if (normalizedScope === "selected-block" && (!selectionIdentity || selectionIdentity.sourcePath !== file.path)) {
+			throw new Error("Review queue requires the original selected-text identity. Select the text again, then queue the reply.");
+		}
+		if (normalizedScope === "heading-section") {
+			throw new Error("Heading-section review queueing is not safe yet. Apply to the heading directly instead.");
+		}
+		const currentContent = normalizedScope === "selected-block" ? "" : await this.host.readFileText(file.path);
+		const beforeText = normalizedScope === "selected-block" ? "" : currentContent;
 		if (proposedText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS || beforeText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS) {
 			throw new Error("Review queue item is too large. Apply it directly or reduce the output size.");
 		}
@@ -86,7 +100,8 @@ export class HistoryService {
 			proposedText: proposedText.trim(),
 			beforeText,
 			scope: normalizedScope,
-			headingPath: normalizedScope === "heading-section" ? request.context.activeHeadingPath ?? "" : "",
+			headingPath: "",
+			selectionIdentity,
 			providerName: request.metadata.providerName,
 			model,
 			workflowId: request.metadata.workflowId,

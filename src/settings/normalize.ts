@@ -42,7 +42,7 @@ import {
 	WORKFLOW_ACCENTS
 } from "./constants";
 import { DEFAULT_SETTINGS } from "./defaults";
-import type { ApiEndpoint, ApplyApprovalMode, ApplyScope, AskMateSettings, BatchWorkflowOutputMode, BudgetEnforcementMode, ComposerLayout, ContextBudgetMode, ContextSource, CustomWorkflow, EffectiveApplyScope, FrontmatterApplyPolicy, ImagePromptPlanningProviderId, NoteHistoryStore, NoteHistoryTurn, OperationKind, OperationStatus, OutputMode, ProviderRoleSettings, ProviderSettings, ReasoningEffort, RequestIntentKind, RequestPrivacyOptions, ReviewQueueItem, ReviewQueueStatus, SendShortcut, TextProviderId, TextProviderSettings, TokenUsageRecord, TokenUsageStats, TokenUsageSummary, WorkflowAccent, WorkflowDisplayPreference } from "../shared/types";
+import type { ApiEndpoint, ApplyApprovalMode, ApplyScope, AskMateSettings, BatchWorkflowOutputMode, BudgetEnforcementMode, ComposerLayout, ContextBudgetMode, ContextSource, CustomWorkflow, EffectiveApplyScope, FrontmatterApplyPolicy, ImagePromptPlanningProviderId, NoteHistoryStore, NoteHistoryTurn, OperationKind, OperationStatus, OutputMode, ProviderRoleSettings, ProviderSettings, ReasoningEffort, RequestIntentKind, RequestPrivacyOptions, ReviewQueueItem, ReviewQueueStatus, SelectionIdentity, SendShortcut, TextProviderId, TextProviderSettings, TokenUsageRecord, TokenUsageStats, TokenUsageSummary, WorkflowAccent, WorkflowDisplayPreference } from "../shared/types";
 
 export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
 	if (typeof value !== "string") {
@@ -224,6 +224,23 @@ export function normalizeNoteHistoryStore(value: unknown): NoteHistoryStore {
 	};
 }
 
+export function normalizeSelectionIdentity(value: unknown): SelectionIdentity | null {
+	if (!value || typeof value !== "object") {
+		return null;
+	}
+	const identity = value as Partial<SelectionIdentity>;
+	const text = typeof identity.text === "string" ? stripNullCharacters(identity.text) : "";
+	const startOffset = getNonNegativeInteger(identity.startOffset);
+	const endOffset = getNonNegativeInteger(identity.endOffset);
+	const prefix = typeof identity.prefix === "string" ? stripNullCharacters(identity.prefix).slice(-96) : "";
+	const suffix = typeof identity.suffix === "string" ? stripNullCharacters(identity.suffix).slice(0, 96) : "";
+	const sourcePath = typeof identity.sourcePath === "string" ? stripNullCharacters(identity.sourcePath).trim().slice(0, 240) : "";
+	if (!text || startOffset === null || endOffset !== startOffset + text.length) {
+		return null;
+	}
+	return { text, startOffset, endOffset, prefix, suffix, sourcePath };
+}
+
 export function normalizeReviewQueueItems(value: unknown, maxItems = DEFAULT_REVIEW_QUEUE_MAX_ITEMS): ReviewQueueItem[] {
 	if (!Array.isArray(value)) {
 		return [];
@@ -254,6 +271,7 @@ export function normalizeReviewQueueItems(value: unknown, maxItems = DEFAULT_REV
 				beforeText: typeof item.beforeText === "string" ? stripNullCharacters(item.beforeText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS) : "",
 				scope: normalizeApplyScope(item.scope),
 				headingPath: typeof item.headingPath === "string" ? item.headingPath.trim().slice(0, 240) : "",
+				selectionIdentity: normalizeSelectionIdentity(item.selectionIdentity),
 				providerName: typeof item.providerName === "string" ? item.providerName.trim().slice(0, 80) : "AskMate",
 				model: typeof item.model === "string" ? item.model.trim().slice(0, 120) : "",
 				workflowId: typeof item.workflowId === "string" ? item.workflowId.trim().slice(0, 120) : null,
@@ -934,6 +952,7 @@ export function normalizeAskMateSettings(
 	settings.customWorkflows = normalizeCustomWorkflows(settings.customWorkflows);
 	settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(settings.requestPrivacyDefaults);
 	settings.contextBudgetMode = normalizeContextBudgetMode(settings.contextBudgetMode);
+	settings.outputMode = normalizeOutputMode(settings.outputMode);
 	settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(settings.workflowDisplayPreferences);
 	if (mode === "load") {
 		settings.showRequestPreview = settings.showRequestPreview !== false;

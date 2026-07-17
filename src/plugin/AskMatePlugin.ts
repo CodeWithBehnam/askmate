@@ -32,11 +32,15 @@ import {
 	ImageAskMateResult,
 	ImagePromptPlan,
 	appendMarkdownBlockToContent,
+	appliedMutation,
+	awaitWithAbortAndTimeout,
+	cancelledMutation,
 	normalizeAskMateSettings,
 	createAbortError,
 	isAbortError,
 	isGpt55Model,
 	ModelCapability,
+	MutationOutcome,
 	normalizeApplyApprovalMode,
 	normalizeApplyScope,
 	normalizeCustomWorkflow,
@@ -49,7 +53,6 @@ import {
 	normalizeWorkflowDisplayPreferences,
 	NoteContext,
 	NoteHistoryTurn,
-	offsetToEditorPosition,
 	OpenAITokenUsage,
 	OperationKind,
 	OperationStatus,
@@ -59,6 +62,7 @@ import {
 	ReasoningEffort,
 	RequestIntentKind,
 	ReviewQueueItem,
+	resolveSelectionIdentity,
 	TextApplyPreviewScope,
 	TextProviderId,
 	TokenUsageRecord,
@@ -97,6 +101,7 @@ export class AskMatePlugin extends Plugin {
 	private historyService!: HistoryService;
 	private contextService!: ContextService;
 	private requestRunner!: RequestRunner;
+	private reviewQueueMutationActive = false;
 
 	private getProviderRuntime(): ProviderRuntime {
 		return {
@@ -307,7 +312,6 @@ export class AskMatePlugin extends Plugin {
 		options: ProviderRequestOptions = {}
 	): Promise<AskMateHttpResponse<T>> {
 		this.throwIfAborted(options.abortSignal);
-		let timer: number | null = null;
 		const request = requestUrl({
 			url,
 			method: options.method ?? "GET",
@@ -315,42 +319,26 @@ export class AskMatePlugin extends Plugin {
 			body: options.body,
 			throw: false
 		});
-		const timedRequest = options.timeoutMs
-			? Promise.race([
-				request,
-				new Promise<never>((_resolve, reject) => {
-					timer = window.setTimeout(() => reject(new Error(options.timeoutMessage ?? "Request timed out.")), options.timeoutMs);
-				})
-			])
-			: request;
+		const response = await awaitWithAbortAndTimeout(request, options);
+		const text = typeof response.text === "string" ? response.text : "";
+		let body: T | null = null;
 
-		try {
-			const response = await timedRequest;
-			this.throwIfAborted(options.abortSignal);
-			const text = typeof response.text === "string" ? response.text : "";
-			let body: T | null = null;
-
-			if (response.json && typeof response.json === "object") {
-				body = response.json as T;
-			} else if (text.trim()) {
-				try {
-					body = JSON.parse(text) as T;
-				} catch {
-					body = null;
-				}
-			}
-
-			return {
-				status: response.status,
-				ok: response.status >= 200 && response.status < 300,
-				body,
-				text
-			};
-		} finally {
-			if (timer !== null) {
-				window.clearTimeout(timer);
+		if (response.json && typeof response.json === "object") {
+			body = response.json as T;
+		} else if (text.trim()) {
+			try {
+				body = JSON.parse(text) as T;
+			} catch {
+				body = null;
 			}
 		}
+
+		return {
+			status: response.status,
+			ok: response.status >= 200 && response.status < 300,
+			body,
+			text
+		};
 	}
 
 	async askOpenAI(request: AskRequest): Promise<string> {
@@ -648,7 +636,11 @@ export class AskMatePlugin extends Plugin {
 		return file;
 	}
 
-	async applyImageToContext(request: AskRequest, result: ImageAskMateResult): Promise<string> {
+	async applyImageToContext(request: AskRequest, result: ImageAskMateResult): Promise<MutationOutcome> {
+		return await this.applyImageToContextOutcome(request, result);
+	}
+
+	private async applyImageToContextOutcome(request: AskRequest, result: ImageAskMateResult): Promise<MutationOutcome> {
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const targetView = request.context.file
 			? this.getOpenMarkdownViewForFile(request.context.file)
@@ -657,45 +649,82 @@ export class AskMatePlugin extends Plugin {
 		if (targetView) {
 			const editor = targetView.editor;
 			const file = targetView.file ?? request.context.file;
-			const selectedText = editor.getSelection().trim();
+			const identity = request.context.selectionIdentity;
+			const initialValue = editor.getValue();
+			const resolution = identity ? resolveSelectionIdentity(initialValue, identity) : null;
 
-			if (request.context.source === "Selected text" && !selectedText) {
-				throw new Error("AskMate could not find the original selection to place the image after. Select the text again, then insert the image.");
+			if (request.context.source === "Selected text" && (!identity || file?.path !== identity.sourcePath || resolution?.endOffset === null)) {
+				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
 			}
 
 			const targetLabel = file?.path ?? "the current note";
 			if (!(await askMateConfirm(this.app, `Insert the generated image into "${targetLabel}"?`))) {
-				return "Image insert cancelled. No note was changed.";
+				return cancelledMutation("Image insert cancelled. No note was changed.");
 			}
 			const imageFile = await this.saveGeneratedImage(request, result);
 			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
+			const latestValue = editor.getValue();
+			const latestResolution = identity ? resolveSelectionIdentity(latestValue, identity) : null;
 
 			if (request.context.source === "Selected text") {
-				editor.replaceRange(insertion, editor.getCursor("to"));
+				if (latestResolution?.endOffset === null || latestResolution?.endOffset === undefined) {
+					return {
+						status: "partial",
+						message: `Saved image ${imageFile.path}, but the original selection changed before insertion.`,
+						targetPath: targetLabel,
+						artifactPaths: [imageFile.path]
+					};
+				}
+				editor.replaceRange(insertion, editor.offsetToPos(latestResolution.endOffset));
 			} else {
 				editor.replaceRange(insertion, editor.getCursor());
 			}
 
 			this.rememberEditorContext(editor, file ?? null);
-			return `Inserted image in ${targetLabel}. Use Obsidian undo immediately if needed.`;
-		}
-
-		if (request.context.source === "Selected text") {
-			throw new Error("AskMate could not find the original selection to place the image after. Select the text again, then insert the image.");
+			return appliedMutation(`Inserted image in ${targetLabel}. Use Obsidian undo immediately if needed.`, targetLabel);
 		}
 
 		const file = request.context.file ?? this.contextService.getLastMarkdownFile();
+		if (request.context.source === "Selected text") {
+			const identity = request.context.selectionIdentity;
+			if (!file || !identity || identity.sourcePath !== file.path) {
+				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
+			}
+			const content = await this.app.vault.cachedRead(file);
+			const resolution = resolveSelectionIdentity(content, identity);
+			if (resolution.endOffset === null) {
+				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
+			}
+			if (!(await askMateConfirm(this.app, `Insert the generated image into "${file.path}" after the original selection?`))) {
+				return cancelledMutation("Image insert cancelled. No note was changed.");
+			}
+			const imageFile = await this.saveGeneratedImage(request, result);
+			const latest = await this.app.vault.cachedRead(file);
+			const latestResolution = resolveSelectionIdentity(latest, identity);
+			if (latestResolution.endOffset === null) {
+				return {
+					status: "partial",
+					message: `Saved image ${imageFile.path}, but the original selection changed before insertion.`,
+					targetPath: file.path,
+					artifactPaths: [imageFile.path]
+				};
+			}
+			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
+			await this.app.vault.modify(file, `${latest.slice(0, latestResolution.endOffset)}${insertion}${latest.slice(latestResolution.endOffset)}`);
+			this.rememberMarkdownFile(file);
+			return appliedMutation(`Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`, file.path);
+		}
 
 		if (file?.extension === "md") {
 			if (!(await askMateConfirm(this.app, `Insert the generated image into "${file.path}"?`))) {
-				return "Image insert cancelled. No note was changed.";
+				return cancelledMutation("Image insert cancelled. No note was changed.");
 			}
 			const imageFile = await this.saveGeneratedImage(request, result);
 			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
 			const content = await this.app.vault.cachedRead(file);
 			await this.app.vault.modify(file, `${content.trimEnd()}${insertion}`);
 			this.rememberMarkdownFile(file);
-			return `Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`;
+			return appliedMutation(`Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`, file.path);
 		}
 
 		throw new Error("Open a Markdown note before inserting an image.");
@@ -824,7 +853,14 @@ export class AskMatePlugin extends Plugin {
 		throw new Error("Open the original Markdown note before appending changes.");
 	}
 
-	async applyResponseToContext(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<string> {
+	async applyResponseToContext(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<MutationOutcome> {
+		const message = await this.applyResponseToContextMessage(request, responseText, options);
+		return message.startsWith("Apply cancelled")
+			? cancelledMutation(message)
+			: appliedMutation(message, request.context.file?.path);
+	}
+
+	private async applyResponseToContextMessage(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<string> {
 		const output = responseText.trim();
 
 		if (!output) {
@@ -848,7 +884,11 @@ export class AskMatePlugin extends Plugin {
 		const file = targetView?.file ?? request.context.file ?? null;
 
 		if (request.context.source === "Selected text" && scope !== "full-note") {
-			const originalText = request.context.content.trim();
+			const identity = request.context.selectionIdentity;
+			const originalText = identity?.text ?? request.context.content.trim();
+			if (identity?.sourcePath && file?.path !== identity.sourcePath) {
+				throw new Error("The original selected-text note is no longer the Apply target. Select the text again, then apply.");
+			}
 
 			if (!originalText) {
 				throw new Error("AskMate could not find the original selected text. Select the text again, then apply.");
@@ -857,8 +897,10 @@ export class AskMatePlugin extends Plugin {
 			if (targetView) {
 				const editor = targetView.editor;
 				const selectedText = editor.getSelection().trim();
+				const currentValue = editor.getValue();
+				const captured = identity ? resolveSelectionIdentity(currentValue, identity) : null;
 
-				if (selectedText === originalText) {
+				if (!identity && selectedText === originalText) {
 					if (!(await this.confirmTextApplyPreview({
 						scope: "selected-text",
 						targetLabel: file?.path ?? "the current note",
@@ -875,8 +917,10 @@ export class AskMatePlugin extends Plugin {
 					return `Applied to selected text in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
 				}
 
-				const value = editor.getValue();
-				const occurrences = findExactOccurrences(value, originalText);
+				const value = currentValue;
+				const occurrences = identity
+					? captured?.startOffset !== null && captured?.startOffset !== undefined ? [captured.startOffset] : []
+					: findExactOccurrences(value, originalText);
 
 				if (occurrences.length === 1) {
 					const start = occurrences[0];
@@ -889,15 +933,18 @@ export class AskMatePlugin extends Plugin {
 						return "Apply cancelled. No note was changed.";
 					}
 					const latestValue = editor.getValue();
-					const latestOccurrences = findExactOccurrences(latestValue, originalText);
+					const latestResolution = identity ? resolveSelectionIdentity(latestValue, identity) : null;
+					const latestOccurrences = identity
+						? latestResolution?.startOffset !== null && latestResolution?.startOffset !== undefined ? [latestResolution.startOffset] : []
+						: findExactOccurrences(latestValue, originalText);
 					if (latestOccurrences.length !== 1) {
 						throw new Error("Note changed while the Apply preview was open. Select the text again, then apply.");
 					}
 					const latestStart = latestOccurrences[0];
 					editor.replaceRange(
 						output,
-						offsetToEditorPosition(latestValue, latestStart),
-						offsetToEditorPosition(latestValue, latestStart + originalText.length)
+						editor.offsetToPos(latestStart),
+						editor.offsetToPos(latestStart + originalText.length)
 					);
 					this.rememberEditorContext(editor, file);
 					return `Applied to selected text in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
@@ -908,7 +955,10 @@ export class AskMatePlugin extends Plugin {
 
 			if (file?.extension === "md") {
 				const content = await this.app.vault.cachedRead(file);
-				const occurrences = findExactOccurrences(content, originalText);
+				const resolution = identity ? resolveSelectionIdentity(content, identity) : null;
+				const occurrences = identity
+					? resolution?.startOffset !== null && resolution?.startOffset !== undefined ? [resolution.startOffset] : []
+					: findExactOccurrences(content, originalText);
 
 				if (occurrences.length === 1) {
 					const start = occurrences[0];
@@ -921,7 +971,10 @@ export class AskMatePlugin extends Plugin {
 						return "Apply cancelled. No note was changed.";
 					}
 					const latest = await this.app.vault.cachedRead(file);
-					const latestOccurrences = findExactOccurrences(latest, originalText);
+					const latestResolution = identity ? resolveSelectionIdentity(latest, identity) : null;
+					const latestOccurrences = identity
+						? latestResolution?.startOffset !== null && latestResolution?.startOffset !== undefined ? [latestResolution.startOffset] : []
+						: findExactOccurrences(latest, originalText);
 					if (latestOccurrences.length !== 1) {
 						throw new Error("Note changed while the Apply preview was open. Select the text again, then apply.");
 					}
@@ -1104,6 +1157,7 @@ export class AskMatePlugin extends Plugin {
 		const input = shouldGenerateImage ? buildImagePromptPlanningInput(request) : buildPrompt(request);
 		const secondaryInput = shouldGenerateImage ? buildImagePrompt(request) : "";
 		const estimatedInputTokens = estimateTokenCount([instructions, input, secondaryInput].filter(Boolean).join("\n\n"));
+		const guardrails = this.usageService.evaluateUsageGuardrails(request, estimatedInputTokens);
 		return {
 			request,
 			providerName: shouldGenerateImage ? this.getImagePlanningProviderRef().providerName : request.metadata.providerName,
@@ -1113,7 +1167,8 @@ export class AskMatePlugin extends Plugin {
 			input,
 			secondaryInput,
 			estimatedInputTokens,
-			warnings: this.evaluateUsageGuardrails(request, estimatedInputTokens).warnings
+			warnings: guardrails.warnings,
+			blockers: guardrails.blockers
 		};
 	}
 
@@ -1196,67 +1251,94 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	async applyReviewQueueItem(id: string): Promise<string> {
-		const items = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
-		const item = items.find((candidate) => candidate.id === id);
-		if (!item) {
-			throw new Error("Review queue item was not found.");
+		if (this.reviewQueueMutationActive) {
+			throw new Error("Another review queue action is already running.");
 		}
-		const file = this.app.vault.getAbstractFileByPath(item.sourcePath);
-		if (!(file instanceof TFile) || file.extension !== "md") {
-			throw new Error("Review queue source note was not found.");
-		}
-		const content = await this.app.vault.cachedRead(file);
-		let nextContent = content;
-		let previewScope: "selected-text" | "append" | "heading-section" | "full-note" = "full-note";
-		if (item.scope === "selected-block") {
-			const occurrences = findExactOccurrences(content, item.beforeText);
-			if (occurrences.length !== 1) {
-				throw new Error("AskMate could not safely find the original queued text in the current note.");
+		this.reviewQueueMutationActive = true;
+		try {
+			const items = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
+			const item = items.find((candidate) => candidate.id === id);
+			if (!item) {
+				throw new Error("Review queue item was not found.");
 			}
-			const start = occurrences[0];
-			nextContent = `${content.slice(0, start)}${item.proposedText}${content.slice(start + item.beforeText.length)}`;
-			previewScope = "selected-text";
-		} else if (item.scope === "append") {
-			// Append is non-destructive: recompute against the latest note body.
-			nextContent = appendMarkdownBlockToContent(content, item.proposedText);
-			previewScope = "append";
-		} else {
-			if (content !== item.beforeText) {
-				throw new Error("The source note changed since this review item was queued. Re-run or requeue the suggestion before applying it.");
+			if (item.status !== "pending") {
+				throw new Error("Review queue item is no longer pending.");
 			}
-			const prepared = await this.prepareFrontmatterAwareApply(content, item.proposedText);
-			if (prepared.cancelled) {
+			if (item.scope === "heading-section" || item.scope === "auto") {
+				throw new Error("This queued review target cannot be applied safely. Re-run or requeue the suggestion.");
+			}
+			const file = this.app.vault.getAbstractFileByPath(item.sourcePath);
+			if (!(file instanceof TFile) || file.extension !== "md") {
+				throw new Error("Review queue source note was not found.");
+			}
+			const content = await this.app.vault.cachedRead(file);
+			let nextContent = content;
+			let previewScope: "selected-text" | "append" | "full-note" = "full-note";
+			if (item.scope === "selected-block") {
+				const resolution = item.selectionIdentity ? resolveSelectionIdentity(content, item.selectionIdentity) : null;
+				if (!resolution || resolution.startOffset === null) {
+					throw new Error("AskMate could not safely find the original queued text in the current note.");
+				}
+				nextContent = `${content.slice(0, resolution.startOffset)}${item.proposedText}${content.slice(resolution.endOffset ?? resolution.startOffset)}`;
+				previewScope = "selected-text";
+			} else if (item.scope === "append") {
+				nextContent = appendMarkdownBlockToContent(content, item.proposedText);
+				previewScope = "append";
+			} else {
+				if (content !== item.beforeText) {
+					throw new Error("The source note changed since this review item was queued. Re-run or requeue the suggestion before applying it.");
+				}
+				const prepared = await this.prepareFrontmatterAwareApply(content, item.proposedText);
+				if (prepared.cancelled) {
+					return "Review item apply cancelled. No note was changed.";
+				}
+				nextContent = prepared.text;
+			}
+			if (!(await this.confirmTextApplyPreview({ scope: previewScope, targetLabel: file.path, before: content, after: nextContent }))) {
 				return "Review item apply cancelled. No note was changed.";
 			}
-			nextContent = prepared.text;
-			previewScope = item.scope === "heading-section" ? "heading-section" : "full-note";
-		}
-		if (!(await this.confirmTextApplyPreview({ scope: previewScope, targetLabel: file.path, before: content, after: nextContent }))) {
-			return "Review item apply cancelled. No note was changed.";
-		}
-		const latest = await this.app.vault.cachedRead(file);
-		if (item.scope === "append") {
-			nextContent = appendMarkdownBlockToContent(latest, item.proposedText);
-		} else if (item.scope === "selected-block") {
-			const latestOccurrences = findExactOccurrences(latest, item.beforeText);
-			if (latestOccurrences.length !== 1) {
-				throw new Error("Note changed while the Apply preview was open. Re-queue or select the text again.");
+			const currentItem = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).find((candidate) => candidate.id === id);
+			if (currentItem?.status !== "pending") {
+				throw new Error("Review queue item changed while the Apply preview was open.");
 			}
-			const latestStart = latestOccurrences[0];
-			nextContent = `${latest.slice(0, latestStart)}${item.proposedText}${latest.slice(latestStart + item.beforeText.length)}`;
-		} else {
-			this.throwIfNoteChangedDuringPreview(content, latest, file.path);
+			const latest = await this.app.vault.cachedRead(file);
+			if (item.scope === "append") {
+				nextContent = appendMarkdownBlockToContent(latest, item.proposedText);
+			} else if (item.scope === "selected-block") {
+				const latestResolution = item.selectionIdentity ? resolveSelectionIdentity(latest, item.selectionIdentity) : null;
+				if (!latestResolution || latestResolution.startOffset === null) {
+					throw new Error("Note changed while the Apply preview was open. Re-queue or select the text again.");
+				}
+				nextContent = `${latest.slice(0, latestResolution.startOffset)}${item.proposedText}${latest.slice(latestResolution.endOffset ?? latestResolution.startOffset)}`;
+			} else {
+				this.throwIfNoteChangedDuringPreview(content, latest, file.path);
+			}
+			await this.app.vault.modify(file, nextContent);
+			item.status = "applied";
+			item.updatedAt = new Date().toISOString();
+			this.settings.reviewQueue = items;
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				console.warn("AskMate applied a review item but could not save its queue status.", error);
+				return `Applied queued AskMate change to ${file.path}, but could not update the review queue status.`;
+			}
+			return `Applied queued AskMate change to ${file.path}.`;
+		} finally {
+			this.reviewQueueMutationActive = false;
 		}
-		await this.app.vault.modify(file, nextContent);
-		item.status = "applied";
-		item.updatedAt = new Date().toISOString();
-		this.settings.reviewQueue = items;
-		await this.saveSettings();
-		return `Applied queued AskMate change to ${file.path}.`;
 	}
 
 	async dismissReviewQueueItem(id: string): Promise<void> {
-		await this.historyService.dismissReviewQueueItem(id);
+		if (this.reviewQueueMutationActive) {
+			throw new Error("Another review queue action is already running.");
+		}
+		this.reviewQueueMutationActive = true;
+		try {
+			await this.historyService.dismissReviewQueueItem(id);
+		} finally {
+			this.reviewQueueMutationActive = false;
+		}
 	}
 
 	private getResultNoteFolder(request: AskRequest): string {

@@ -1,5 +1,6 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
+	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getNonNegativeInteger,
 	OpenAIModelListBody,
 	OpenAITokenUsage,
@@ -115,6 +116,8 @@ export async function completeChatCompletionsText(
 		method: "POST",
 		headers,
 		abortSignal,
+		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+		timeoutMessage: `${providerRef.providerName} generation timed out after 2 minutes.`,
 		body: JSON.stringify({
 			model: providerRef.model,
 			messages: [

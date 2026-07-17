@@ -33,6 +33,9 @@ export type BatchWorkflowOutputMode = "note" | "review-queue";
 export type BudgetEnforcementMode = "warn" | "block";
 export type ReviewQueueStatus = "pending" | "applied" | "dismissed";
 export type MarkdownDiffLineKind = "context" | "added" | "removed";
+export type RunPhase = "building" | "confirming" | "generating" | "post-processing";
+export type SelectionResolutionStatus = "exact" | "relocated" | "missing" | "ambiguous";
+export type MutationOutcomeStatus = "applied" | "cancelled" | "partial";
 
 export interface ProviderSettings {
 	apiKeySecretName: string;
@@ -154,6 +157,28 @@ export interface ImageReferenceInfo {
 	line: string;
 }
 
+export interface SelectionIdentity {
+	text: string;
+	startOffset: number;
+	endOffset: number;
+	prefix: string;
+	suffix: string;
+	sourcePath: string;
+}
+
+export interface SelectionResolution {
+	status: SelectionResolutionStatus;
+	startOffset: number | null;
+	endOffset: number | null;
+}
+
+export interface MutationOutcome {
+	status: MutationOutcomeStatus;
+	message: string;
+	targetPath?: string;
+	artifactPaths?: string[];
+}
+
 export interface NoteContext {
 	content: string;
 	file: TFile | null;
@@ -161,6 +186,7 @@ export interface NoteContext {
 	activeHeadingPath?: string | null;
 	selectionStartLine?: number | null;
 	selectionEndLine?: number | null;
+	selectionIdentity?: SelectionIdentity | null;
 	attachments?: ContextAttachment[];
 }
 
@@ -239,22 +265,33 @@ export interface FolderContextOptions {
 	maxCharacters: number;
 }
 
-export interface RetryRequestSnapshot {
+export interface DraftRetrySnapshot {
+	kind: "draft";
 	question: string;
 	title: string;
 	options: RunRequestOptions;
 	createdAt: string;
 }
 
+export interface BuiltRetrySnapshot {
+	kind: "built";
+	request: AskRequest;
+	createdAt: string;
+}
+
+export type RetryRequestSnapshot = DraftRetrySnapshot | BuiltRetrySnapshot;
+
 export interface ActiveRun {
 	id: number;
 	abortController: AbortController;
 	intentKind: RequestIntentKind;
+	phase: RunPhase;
 	startedAt: string;
 }
 
 export interface MessageActionOptions {
 	requiresIdle?: boolean;
+	lockKey?: string;
 }
 
 export interface ImagePromptExtraction {
@@ -541,6 +578,7 @@ export interface PromptInspection {
 	secondaryInput: string;
 	estimatedInputTokens: number;
 	warnings: string[];
+	blockers: string[];
 }
 
 export interface NoteHistoryTurn {
@@ -572,6 +610,7 @@ export interface ReviewQueueItem {
 	beforeText: string;
 	scope: ApplyScope;
 	headingPath: string;
+	selectionIdentity: SelectionIdentity | null;
 	providerName: string;
 	model: string;
 	workflowId: string | null;

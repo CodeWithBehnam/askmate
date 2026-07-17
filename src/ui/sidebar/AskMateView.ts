@@ -7,7 +7,10 @@ import {
 	ChatImagePreview,
 	ChatMessage,
 	ChatRole,
+	canRunContinue,
 	CONTEXT_BUDGET_OPTIONS,
+	createBuiltRetrySnapshot,
+	createDraftRetrySnapshot,
 	ContextBudgetMode,
 	DEFAULT_FOLDER_CONTEXT_MAX_FILES,
 	DEFAULT_IMAGE_PROMPT,
@@ -28,6 +31,7 @@ import {
 	normalizeComposerLayout,
 	normalizeContextBudgetMode,
 	normalizeContextPathList,
+	normalizeOutputMode,
 	normalizeRequestPrivacyOptions,
 	OutputMode,
 	REASONING_EFFORT_OPTIONS,
@@ -70,10 +74,15 @@ export class AskMateView extends ItemView {
 	private privacyOptions: RequestPrivacyOptions = DEFAULT_REQUEST_PRIVACY_OPTIONS;
 	private contextBudgetMode: ContextBudgetMode = "expanded";
 	private requestPreviewRefreshId = 0;
+	private requestPreviewTimer: number | null = null;
+	private composerEl: HTMLElement | null = null;
+	private readinessEl: HTMLElement | null = null;
+	private statusEl: HTMLElement | null = null;
 	private additionalContextPaths: string[] = [];
 	private folderContextEnabled = false;
 	private folderContextPath = "";
 	private folderContextMaxFiles = DEFAULT_FOLDER_CONTEXT_MAX_FILES;
+	private readonly activeActionKeys = new Set<string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: AskMatePlugin) {
 		super(leaf);
@@ -124,6 +133,12 @@ export class AskMateView extends ItemView {
 		this.plugin.rememberActiveMarkdownContext();
 
 		this.messagesEl = container.createDiv({ cls: "askmate-messages" });
+		this.messagesEl.setAttribute("role", "log");
+		this.messagesEl.setAttribute("aria-live", "polite");
+		this.messagesEl.setAttribute("aria-relevant", "additions text");
+		this.statusEl = container.createDiv({ cls: "askmate-visually-hidden" });
+		this.statusEl.setAttribute("role", "status");
+		this.statusEl.setAttribute("aria-live", "polite");
 		this.shouldFollowMessages = true;
 		this.registerDomEvent(this.messagesEl, "scroll", () => {
 			this.shouldFollowMessages = this.isScrolledNearBottom();
@@ -170,6 +185,21 @@ export class AskMateView extends ItemView {
 		this.applyComposerLayoutClass();
 		this.renderOnboardingTips();
 		this.refreshWorkflowGrid();
+		this.refreshOutputToggle();
+		this.refreshReasoningSelector();
+		this.updateModelLabel();
+		if (this.questionEl) {
+			this.questionEl.placeholder = this.getComposerPlaceholder();
+			this.questionEl.setAttribute("aria-label", `Ask AskMate. ${this.getSendShortcutLabel()} sends.`);
+		}
+		if (this.sendButton) {
+			const label = `Send (${this.getSendShortcutLabel()})`;
+			this.sendButton.setAttribute("aria-label", label);
+			this.sendButton.setAttribute("title", label);
+		}
+		this.syncRequestPreviewFromSettings();
+		void this.refreshReadiness();
+		void this.refreshRequestPreview();
 	}
 
 	private applyComposerLayoutClass(): void {
@@ -195,9 +225,9 @@ export class AskMateView extends ItemView {
 		message.wrapper.addClass("askmate-onboarding-message");
 		message.body.empty();
 		const card = message.body.createDiv({ cls: "askmate-onboarding-card" });
-		card.createEl("strong", { text: "AskMate! tips" });
+		card.createEl("h3", { text: "AskMate tips" });
 		card.createEl("p", {
-			text: "Ask about the open note, use /image for generated images, choose quick workflows, or switch output to Note or Apply before sending."
+			text: "Configure a provider in AskMate settings, then ask about the captured note, generate an image, choose a workflow, or select a safe output mode before sending."
 		});
 		const dismiss = card.createEl("button", { text: "Dismiss tips" });
 		dismiss.type = "button";
@@ -268,14 +298,13 @@ export class AskMateView extends ItemView {
 
 	private renderComposer(container: HTMLElement): void {
 		const composer = container.createDiv({ cls: "askmate-composer" });
+		this.composerEl = composer;
 		const header = composer.createDiv({ cls: "askmate-composer-header" });
 		const headerLeft = header.createDiv({ cls: "askmate-composer-header-left" });
-		const brand = headerLeft.createDiv({ cls: "askmate-composer-brand", text: "AskMate!" });
-		void this.plugin.isSelectedProviderConfigured().then((isReady) => {
-			brand.classList.toggle("is-api-key-set", isReady);
-			brand.setAttribute("title", isReady ? "AskMate is ready" : "Configure the selected AskMate provider in settings");
-		});
-		this.contextEl = this.createActionButton(headerLeft, "file-text", "Show selected note", "askmate-context-button");
+		const brand = headerLeft.createDiv({ cls: "askmate-composer-brand", text: "AskMate" });
+		this.readinessEl = brand;
+		void this.refreshReadiness();
+		this.contextEl = this.createActionButton(headerLeft, "file-text", "Show request context", "askmate-context-button");
 		this.contextEl.addEventListener("click", () => {
 			void this.showContextNotice();
 		});
@@ -292,7 +321,8 @@ export class AskMateView extends ItemView {
 			cls: "askmate-question",
 			attr: {
 				placeholder: this.getComposerPlaceholder(),
-				rows: "4"
+				rows: "4",
+				"aria-label": `Ask AskMate. ${this.getSendShortcutLabel()} sends.`
 			}
 		});
 		this.questionEl.addEventListener("keydown", (event) => {
@@ -304,7 +334,7 @@ export class AskMateView extends ItemView {
 			void this.submitQuestion();
 		});
 		this.questionEl.addEventListener("input", () => {
-			void this.refreshRequestPreview();
+			this.scheduleRequestPreviewRefresh();
 		});
 
 		this.sendButton = this.createActionButton(inputShell, "send", `Send (${this.getSendShortcutLabel()})`, "askmate-send-button mod-cta");
@@ -316,7 +346,7 @@ export class AskMateView extends ItemView {
 
 		const footer = composer.createDiv({ cls: "askmate-composer-footer" });
 		const actions = footer.createDiv({ cls: "askmate-actions" });
-		const imageButton = this.createActionButton(actions, "image-plus", "Image", "askmate-image-button");
+		const imageButton = this.createActionButton(actions, "image-plus", "Generate image", "askmate-image-button");
 		this.imageButton = imageButton;
 		imageButton.addEventListener("click", () => {
 			void this.submitImageQuestion();
@@ -332,7 +362,7 @@ export class AskMateView extends ItemView {
 			this.stopActiveRun();
 		});
 
-		const clearButton = this.createActionButton(actions, "trash-2", "Clear", "askmate-clear-button");
+		const clearButton = this.createActionButton(actions, "trash-2", "Clear chat", "askmate-clear-button");
 		this.clearButton = clearButton;
 		clearButton.addEventListener("click", () => {
 			if (this.activeRun) {
@@ -358,8 +388,8 @@ export class AskMateView extends ItemView {
 		this.requestPreviewEl = preview;
 		preview.createDiv({ cls: "askmate-request-preview-summary", text: "Request preview loading..." });
 		const controls = preview.createDiv({ cls: "askmate-request-preview-controls" });
-		this.createPrivacyToggle(controls, "includeNoteContext", "Send note context");
-		this.createPrivacyToggle(controls, "includeImageReferences", "Send image references");
+		this.createPrivacyToggle(controls, "includeNoteContext", "Send note and attached context");
+		this.createPrivacyToggle(controls, "includeImageReferences", "Include image links");
 		this.createContextBudgetSelector(controls);
 		const inspectButton = controls.createEl("button", { cls: "askmate-request-preview-button", text: "Inspect prompt" });
 		inspectButton.type = "button";
@@ -419,7 +449,7 @@ export class AskMateView extends ItemView {
 		const details = parent.createEl("details", { cls: "askmate-extra-context-controls" });
 		details.createEl("summary", { text: "Extra context" });
 		const body = details.createDiv({ cls: "askmate-extra-context-body" });
-		body.createEl("label", { text: "Additional note paths, one per line" });
+		const notesLabel = body.createEl("label", { text: "Additional note paths, one per line" });
 		const notes = body.createEl("textarea", {
 			cls: "askmate-extra-context-textarea",
 			attr: {
@@ -427,6 +457,8 @@ export class AskMateView extends ItemView {
 				"data-askmate-preview-control": "true"
 			}
 		});
+		notes.id = "askmate-additional-note-paths";
+		notesLabel.htmlFor = notes.id;
 		notes.value = this.additionalContextPaths.join("\n");
 		notes.addEventListener("input", () => {
 			this.additionalContextPaths = normalizeContextPathList(notes.value);
@@ -452,7 +484,8 @@ export class AskMateView extends ItemView {
 			attr: {
 				type: "text",
 				placeholder: "Folder path",
-				"data-askmate-preview-control": "true"
+				"data-askmate-preview-control": "true",
+				"aria-label": "Folder context path"
 			}
 		});
 		folderInput.value = this.folderContextPath;
@@ -478,6 +511,29 @@ export class AskMateView extends ItemView {
 		});
 	}
 
+	private scheduleRequestPreviewRefresh(): void {
+		if (this.requestPreviewTimer !== null) {
+			window.clearTimeout(this.requestPreviewTimer);
+		}
+		this.requestPreviewTimer = window.setTimeout(() => {
+			this.requestPreviewTimer = null;
+			void this.refreshRequestPreview();
+		}, 200);
+	}
+
+	private getRequestDraftOptions(forceImage = false): RunRequestOptions {
+		return {
+			forceImage,
+			outputMode: normalizeOutputMode(this.plugin.settings.outputMode),
+			privacy: { ...this.privacyOptions },
+			contextBudgetMode: this.contextBudgetMode,
+			additionalContextPaths: [...this.additionalContextPaths],
+			folderContext: this.getFolderContextOptions(),
+			threadMessages: this.getThreadMessagesForNextRequest(),
+			includeThreadHistory: this.plugin.settings.threadedChatEnabled
+		};
+	}
+
 	private async refreshRequestPreview(): Promise<void> {
 		if (!this.requestPreviewEl) {
 			return;
@@ -485,50 +541,47 @@ export class AskMateView extends ItemView {
 
 		const refreshId = ++this.requestPreviewRefreshId;
 		const summary = this.requestPreviewEl.querySelector<HTMLElement>(".askmate-request-preview-summary");
-
 		if (!summary) {
 			return;
 		}
 
 		try {
-			const context = await this.plugin.getNoteContext();
+			const raw = this.questionEl?.value.trim() || "Preview request";
+			const command = this.parseComposerCommand(raw);
+			const inspection = await this.plugin.inspectFinalPrompt(
+				command.question,
+				command.forceImage ? "AskMate Image" : "AskMate Answer",
+				this.getRequestDraftOptions(command.forceImage)
+			);
 			if (refreshId !== this.requestPreviewRefreshId || !this.requestPreviewEl) {
 				return;
 			}
 
-			const provider = this.plugin.getSelectedProviderModelRef();
-			const source = context.file?.path ?? "unsaved note";
-			const budget = getContextBudgetOption(this.contextBudgetMode);
-			const promptCharacters = this.privacyOptions.includeNoteContext
-				? budget.maxCharacters === null ? context.content.length : Math.min(context.content.length, budget.maxCharacters)
-				: 0;
-			const budgetLabel = `${budget.label}${budget.maxCharacters !== null && context.content.length > budget.maxCharacters ? `, sends ${promptCharacters.toLocaleString()} of ${context.content.length.toLocaleString()} chars` : ""}`;
-			const tokenEstimate = estimateTokenCount(this.privacyOptions.includeNoteContext ? context.content.slice(0, promptCharacters) : "");
-			const extras = [
-				this.plugin.settings.threadedChatEnabled ? `thread ${this.plugin.settings.threadedChatMaxTurns} turns` : "",
-				this.plugin.settings.noteHistoryIncludeInContext ? "note history" : "",
-				this.additionalContextPaths.length > 0 ? `${this.additionalContextPaths.length} extra notes` : "",
-				this.folderContextEnabled && this.folderContextPath ? `folder ${this.folderContextMaxFiles} files` : "",
-				this.plugin.settings.includeStyleGuideContext ? "style guide" : "",
-				this.plugin.settings.includeGlossaryContext ? "glossary" : "",
-				this.plugin.settings.includeExcalidrawSummaries ? "Excalidraw summaries" : "",
-				this.plugin.settings.includeImageManifests && this.privacyOptions.includeImageReferences ? "image manifest" : ""
-			].filter(Boolean).join(", ");
-			const previewParts = [
-				`${context.source}: ${source}`,
-				`Primary: ${promptCharacters.toLocaleString()} chars, about ${tokenEstimate.toLocaleString()} tokens`,
-				`Context: ${budgetLabel}`,
-				extras ? `Extra: ${extras}` : "",
-				`${provider.providerName}: ${provider.model}`,
-				formatOutputMode(this.plugin.settings.outputMode)
-			];
-			if (this.plugin.settings.usageGuardrailsEnabled && this.plugin.settings.usagePerRequestWarningTokens > 0 && tokenEstimate >= this.plugin.settings.usagePerRequestWarningTokens) {
-				previewParts.push(`Budget warning: about ${tokenEstimate.toLocaleString()} tokens`);
-			}
-			summary.setText(previewParts.filter(Boolean).join(" · "));
-		} catch {
+			const request = inspection.request;
+			const source = request.context.file?.path ?? "unsaved note";
+			const attachmentLabel = request.metadata.contextAttachmentCount > 0
+				? `${request.metadata.contextAttachmentCount} attachment${request.metadata.contextAttachmentCount === 1 ? "" : "s"}`
+				: "no attachments";
+			const contextLabel = request.metadata.privacy.includeNoteContext
+				? request.metadata.contextTruncated
+					? `${request.metadata.promptContextCharacters.toLocaleString()} of ${request.metadata.contextCharacters.toLocaleString()} context chars`
+					: `${request.metadata.promptContextCharacters.toLocaleString()} context chars`
+				: "note-derived context off";
+			const alerts = [...inspection.blockers, ...inspection.warnings];
+			summary.setText([
+				`${request.context.source}: ${source}`,
+				`${inspection.providerName}: ${inspection.model}`,
+				formatOutputMode(request.metadata.outputMode),
+				`about ${inspection.estimatedInputTokens.toLocaleString()} input tokens`,
+				contextLabel,
+				attachmentLabel,
+				alerts.join(" ")
+			].filter(Boolean).join("\n"));
+			summary.classList.toggle("has-blocker", inspection.blockers.length > 0);
+		} catch (error) {
 			if (refreshId === this.requestPreviewRefreshId) {
-				summary.setText("Open a Markdown note or select text before sending.");
+				summary.setText(this.plugin.getErrorMessage(error));
+				summary.addClass("has-blocker");
 			}
 		}
 	}
@@ -741,8 +794,13 @@ export class AskMateView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.isClosed = true;
-		this.stopActiveRun();
+		this.stopActiveRun(false);
 		this.activeRun = null;
+		this.activeActionKeys.clear();
+		if (this.requestPreviewTimer !== null) {
+			window.clearTimeout(this.requestPreviewTimer);
+			this.requestPreviewTimer = null;
+		}
 		this.messages = [];
 		for (const timer of this.pendingMarkdownTimerIds) {
 			window.clearTimeout(timer);
@@ -752,11 +810,13 @@ export class AskMateView extends ItemView {
 	}
 
 	private ensureIdleForNewRequest(): boolean {
-		if (!this.activeRun) {
+		if (!this.activeRun && this.activeActionKeys.size === 0) {
 			return true;
 		}
 
-		new Notice("AskMate is already working. Stop the current request before starting another.");
+		new Notice(this.activeRun
+			? "AskMate is already working. Stop the current request before starting another."
+			: "Wait for the current AskMate action to finish before starting another request.");
 		return false;
 	}
 
@@ -769,6 +829,7 @@ export class AskMateView extends ItemView {
 			id: ++this.nextRunId,
 			abortController: new AbortController(),
 			intentKind,
+			phase: "building",
 			startedAt: new Date().toISOString()
 		};
 
@@ -778,15 +839,32 @@ export class AskMateView extends ItemView {
 	}
 
 	private isRunActive(run: ActiveRun): boolean {
-		return !this.isClosed && this.activeRun?.id === run.id;
+		return canRunContinue(this.activeRun, run, this.isClosed);
 	}
 
-	private stopActiveRun(): void {
-		this.activeRun?.abortController.abort();
+	private stopActiveRun(notify = true): void {
+		const run = this.activeRun;
+		if (!run) {
+			return;
+		}
+		run.abortController.abort();
+		this.activeRun = null;
+		this.setLoading(false);
+		if (notify && !this.isClosed) {
+			this.addMessage("system", "AskMate stopped waiting for this request. The provider may still finish it in the background.");
+			this.statusEl?.setText("AskMate request stopped locally.");
+			new Notice("AskMate stopped waiting for this request.");
+		}
+	}
+
+	private setRunPhase(run: ActiveRun, phase: ActiveRun["phase"]): void {
+		if (this.activeRun?.id === run.id) {
+			run.phase = phase;
+		}
 	}
 
 	private finishRun(run: ActiveRun): void {
-		if (!this.isRunActive(run)) {
+		if (this.activeRun?.id !== run.id) {
 			return;
 		}
 
@@ -800,27 +878,35 @@ export class AskMateView extends ItemView {
 		}
 
 		const rawQuestion = this.questionEl.value.trim();
-
 		if (!rawQuestion) {
 			new Notice("Type a question first.");
+			return;
+		}
+		if (!(await this.plugin.isSelectedProviderConfigured())) {
+			await this.refreshReadiness();
+			new Notice("Configure the selected AskMate provider in settings before sending.");
+			this.questionEl.focus();
 			return;
 		}
 
 		const command = this.parseComposerCommand(rawQuestion);
 		this.questionEl.value = "";
-		await this.runRequest(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", {
-			forceImage: command.forceImage
-		});
+		await this.runRequest(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", this.getRequestDraftOptions(command.forceImage));
 	}
 
 	private async submitImageQuestion(): Promise<void> {
 		if (!this.ensureIdleForNewRequest()) {
 			return;
 		}
+		if (!(await this.plugin.isSelectedProviderConfigured())) {
+			await this.refreshReadiness();
+			new Notice("Configure the selected AskMate provider in settings before generating an image.");
+			return;
+		}
 
 		const question = this.questionEl.value.trim() || DEFAULT_IMAGE_PROMPT;
 		this.questionEl.value = "";
-		await this.runRequest(question, "AskMate Image", { forceImage: true });
+		await this.runRequest(question, "AskMate Image", this.getRequestDraftOptions(true));
 	}
 
 	private parseComposerCommand(value: string): { question: string; forceImage: boolean } {
@@ -874,11 +960,12 @@ export class AskMateView extends ItemView {
 	private async runRequest(
 		question: string,
 		title: string,
-		options: RunRequestOptions = {}
+		options: RunRequestOptions = {},
+		builtRequest?: AskRequest
 	): Promise<void> {
 		const intentKind = this.plugin.classifyRequestIntent(question, options);
 		const willGenerateImage = intentKind === "explicit_image" || intentKind === "auto_image" || this.plugin.getSelectedProviderModelRef().capability === "image";
-		const threadMessages = this.getThreadMessagesForNextRequest();
+		const threadMessages = options.threadMessages ?? this.getThreadMessagesForNextRequest();
 		const run = this.beginRun(intentKind);
 
 		if (!run) {
@@ -893,28 +980,22 @@ export class AskMateView extends ItemView {
 		this.addMessage("user", displayedQuestion, isUserPrompt ? question : undefined);
 		let assistantMessage: MessageElements | null = null;
 		let responseText = "";
-		let outputSideEffectStarted = false;
-		const retrySnapshot: RetryRequestSnapshot = {
-			question,
-			title: requestTitle,
-			options: {
-				...options,
-					outputMode: options.outputMode ?? this.plugin.settings.outputMode,
-					privacy: options.privacy ?? this.privacyOptions,
-					contextBudgetMode: options.contextBudgetMode ?? this.contextBudgetMode,
-					additionalContextPaths: options.additionalContextPaths ?? this.additionalContextPaths,
-					folderContext: options.folderContext ?? this.getFolderContextOptions(),
-					threadMessages,
-					includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
-				},
-				createdAt: new Date().toISOString()
-			};
+		let retrySnapshot: RetryRequestSnapshot = createDraftRetrySnapshot(question, requestTitle, {
+			...options,
+			outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
+			privacy: { ...(options.privacy ?? this.privacyOptions) },
+			contextBudgetMode: options.contextBudgetMode ?? this.contextBudgetMode,
+			additionalContextPaths: [...(options.additionalContextPaths ?? this.additionalContextPaths)],
+			folderContext: { ...(options.folderContext ?? this.getFolderContextOptions()) },
+			threadMessages: threadMessages.map((message) => ({ ...message })),
+			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
+		});
 
 		try {
-			const request = await this.plugin.buildRequest(question, requestTitle, {
+			const request = builtRequest ?? await this.plugin.buildRequest(question, requestTitle, {
 				...options,
 				intentKind,
-				outputMode: options.outputMode ?? this.plugin.settings.outputMode,
+				outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
 				privacy: options.privacy ?? this.privacyOptions,
 				contextBudgetMode: options.contextBudgetMode ?? this.contextBudgetMode,
 				additionalContextPaths: options.additionalContextPaths ?? this.additionalContextPaths,
@@ -922,17 +1003,20 @@ export class AskMateView extends ItemView {
 				threadMessages,
 				includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
 			});
+			retrySnapshot = createBuiltRetrySnapshot(request);
 
 			if (!this.isRunActive(run)) {
 				return;
 			}
 
+			this.setRunPhase(run, "confirming");
 			await this.plugin.confirmUsageGuardrails(request);
 
 			if (!this.isRunActive(run)) {
 				return;
 			}
 
+			this.setRunPhase(run, "generating");
 			const shouldGenerateImage = request.metadata.forceImage
 				|| request.metadata.autoImage
 				|| request.metadata.modelCapability === "image";
@@ -963,6 +1047,7 @@ export class AskMateView extends ItemView {
 			if (!this.isRunActive(run)) {
 				return;
 			}
+			this.setRunPhase(run, "post-processing");
 
 			if (result.kind === "text") {
 				responseText = result.text.trim() || responseText.trim() || "OpenAI returned no text.";
@@ -972,16 +1057,24 @@ export class AskMateView extends ItemView {
 					this.messages.push({ role: "assistant", text: responseText });
 				}
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
+				if (!this.isRunActive(run)) {
+					return;
+				}
 
-				if (request.metadata.outputMode === "note") {
-					outputSideEffectStarted = true;
-					const file = await this.plugin.createResultNote(request, responseText, { model: result.model });
-					// Always surface success if the vault write landed, even if Stop/close raced.
-					this.notifySideEffect(`Created note: ${file.path}`, `AskMate created ${file.path}`);
-				} else if (request.metadata.outputMode === "apply") {
-					outputSideEffectStarted = true;
-					const message = await this.plugin.applyResponseToContext(request, responseText);
-					this.notifySideEffect(message, message);
+				try {
+					if (request.metadata.outputMode === "note") {
+						const file = await this.plugin.createResultNote(request, responseText, { model: result.model });
+						this.notifySideEffect(`Created note: ${file.path}`, `AskMate created ${file.path}`);
+					} else if (request.metadata.outputMode === "apply") {
+						const outcome = await this.plugin.applyResponseToContext(request, responseText);
+						this.notifySideEffect(outcome.message, outcome.message);
+					}
+				} catch (error) {
+					if (this.activeRun?.id === run.id && !this.isClosed) {
+						const message = this.plugin.getErrorMessage(error);
+						this.addMessage("system", `Generated reply preserved. Output action failed: ${message}`);
+						new Notice(message);
+					}
 				}
 				return;
 			}
@@ -992,37 +1085,45 @@ export class AskMateView extends ItemView {
 				this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
 			}
 			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
+			if (!this.isRunActive(run)) {
+				return;
+			}
 
-			if (request.metadata.outputMode === "note") {
-				outputSideEffectStarted = true;
-				const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, result);
-				this.notifySideEffect(
-					`Created note: ${noteFile.path} and image: ${imageFile.path}`,
-					`AskMate created ${noteFile.path}`
-				);
-			} else if (request.metadata.outputMode === "apply") {
-				outputSideEffectStarted = true;
-				const message = await this.plugin.applyImageToContext(request, result);
-				this.notifySideEffect(message, message);
+			try {
+				if (request.metadata.outputMode === "note") {
+					const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, result);
+					this.notifySideEffect(
+						`Created note: ${noteFile.path} and image: ${imageFile.path}`,
+						`AskMate created ${noteFile.path}`
+					);
+				} else if (request.metadata.outputMode === "apply") {
+					const outcome = await this.plugin.applyImageToContext(request, result);
+					this.notifySideEffect(outcome.message, outcome.message);
+				}
+			} catch (error) {
+				if (this.activeRun?.id === run.id && !this.isClosed) {
+					const message = this.plugin.getErrorMessage(error);
+					this.addMessage("system", `Generated image preserved. Output action failed: ${message}`);
+					new Notice(message);
+				}
 			}
 		} catch (error) {
-			if (this.isClosed) {
+			if (this.isClosed || this.activeRun?.id !== run.id || run.abortController.signal.aborted) {
 				return;
 			}
 
 			const message = isAbortError(error) ? "AskMate request stopped." : this.plugin.getErrorMessage(error);
-			// If a vault side effect already completed, do not paint a failure over success.
-			if (outputSideEffectStarted && !isAbortError(error)) {
-				new Notice(message);
-				return;
-			}
 			if (!assistantMessage) {
 				assistantMessage = this.createMessageEl("assistant", "", false);
 			}
 			assistantMessage.body.setText(message);
-			if (!isAbortError(error) && !outputSideEffectStarted) {
+			if (!isAbortError(error)) {
 				this.createMessageAction(assistantMessage.actions, "rotate-ccw", "Retry request", () => {
-					void this.runRequest(retrySnapshot.question, retrySnapshot.title, retrySnapshot.options);
+					if (retrySnapshot.kind === "built") {
+						void this.runRequest(retrySnapshot.request.question, retrySnapshot.request.title, {}, retrySnapshot.request);
+					} else {
+						void this.runRequest(retrySnapshot.question, retrySnapshot.title, retrySnapshot.options);
+					}
 				}, { requiresIdle: true });
 			}
 			this.messages.push({ role: "assistant", text: message });
@@ -1248,43 +1349,43 @@ export class AskMateView extends ItemView {
 		this.createMessageAction(parent, "inbox", "Queue for review", async () => {
 			const item = await this.plugin.queueReviewItemFromRequest(request, getText(), model);
 			new Notice(`Queued AskMate review for ${item.sourcePath}.`);
-		}, { requiresIdle: true });
+		}, { requiresIdle: true, lockKey: `review:${request.context.file?.path ?? "global"}` });
 		this.createMessageAction(parent, "file-plus", "New note", async () => {
 			const file = await this.plugin.createResultNote(request, getText(), { model });
 			this.addMessage("system", `Created note: ${file.path}`);
 			new Notice(`AskMate created ${file.path}`);
-		}, { requiresIdle: true });
+		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		this.createMessageAction(parent, "pencil", "Apply reply", async () => {
-			const message = await this.plugin.applyResponseToContext(request, getText());
-			this.addMessage("system", message);
-			new Notice(message);
-		}, { requiresIdle: true });
+			const outcome = await this.plugin.applyResponseToContext(request, getText());
+			this.addMessage("system", outcome.message);
+			new Notice(outcome.message);
+		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		if (request.context.source === "Current note") {
 			this.createMessageAction(parent, "file-text", "Replace full note", async () => {
-				const message = await this.plugin.applyResponseToContext(request, getText(), { scope: "full-note" });
-				this.addMessage("system", message);
-				new Notice(message);
-			}, { requiresIdle: true });
+				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "full-note" });
+				this.addMessage("system", outcome.message);
+				new Notice(outcome.message);
+			}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		}
 		if (request.context.source === "Selected text") {
 			this.createMessageAction(parent, "text-cursor-input", "Apply selected block", async () => {
-				const message = await this.plugin.applyResponseToContext(request, getText(), { scope: "selected-block" });
-				this.addMessage("system", message);
-				new Notice(message);
-			}, { requiresIdle: true });
+				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "selected-block" });
+				this.addMessage("system", outcome.message);
+				new Notice(outcome.message);
+			}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		}
 		this.createMessageAction(parent, "heading-1", "Apply to heading", async () => {
 			const heading = await askMatePrompt(this.app, "Heading title or path to replace, for example Project Plan > Risks", request.context.activeHeadingPath ?? "");
 			if (heading === null) {
 				return;
 			}
-			const message = await this.plugin.applyResponseToContext(request, getText(), {
+			const outcome = await this.plugin.applyResponseToContext(request, getText(), {
 				scope: "heading-section",
 				headingPath: heading
 			});
-			this.addMessage("system", message);
-			new Notice(message);
-		}, { requiresIdle: true });
+			this.addMessage("system", outcome.message);
+			new Notice(outcome.message);
+		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 	}
 
 	private renderGeneratedImage(body: HTMLElement, result: ImageAskMateResult): void {
@@ -1332,12 +1433,12 @@ export class AskMateView extends ItemView {
 			const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, getResult());
 			this.addMessage("system", `Created note: ${noteFile.path} and image: ${imageFile.path}`);
 			new Notice(`AskMate created ${noteFile.path}`);
-		}, { requiresIdle: true });
+		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		this.createMessageAction(parent, "image-plus", "Insert image", async () => {
-			const message = await this.plugin.applyImageToContext(request, getResult());
-			this.addMessage("system", message);
-			new Notice(message);
-		}, { requiresIdle: true });
+			const outcome = await this.plugin.applyImageToContext(request, getResult());
+			this.addMessage("system", outcome.message);
+			new Notice(outcome.message);
+		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 	}
 
 	private createMessageAction(
@@ -1367,9 +1468,22 @@ export class AskMateView extends ItemView {
 				new Notice("Wait for the current AskMate request to finish, or stop it first.");
 				return;
 			}
+			const lockKey = options.lockKey ?? (options.requiresIdle ? label : "");
+			if (lockKey && this.activeActionKeys.has(lockKey)) {
+				return;
+			}
+			if (lockKey) {
+				this.activeActionKeys.add(lockKey);
+				button.disabled = true;
+			}
 
 			void Promise.resolve(onClick()).catch((error) => {
 				new Notice(this.plugin.getErrorMessage(error));
+			}).finally(() => {
+				if (lockKey) {
+					this.activeActionKeys.delete(lockKey);
+					button.disabled = options.requiresIdle ? Boolean(this.activeRun) : false;
+				}
 			});
 		});
 		return button;
@@ -1505,6 +1619,42 @@ export class AskMateView extends ItemView {
 		return "Status";
 	}
 
+	private async refreshReadiness(): Promise<void> {
+		if (!this.readinessEl) {
+			return;
+		}
+		const isReady = await this.plugin.isSelectedProviderConfigured();
+		if (this.isClosed || !this.readinessEl) {
+			return;
+		}
+		const label = isReady ? "AskMate · Ready" : "AskMate · Setup needed";
+		this.readinessEl.setText(label);
+		this.readinessEl.classList.toggle("is-api-key-set", isReady);
+		this.readinessEl.classList.toggle("is-not-ready", !isReady);
+		this.readinessEl.setAttribute("role", "status");
+		this.readinessEl.setAttribute("aria-label", label);
+		this.readinessEl.setAttribute("title", isReady ? "AskMate is ready" : "Configure the selected provider in AskMate settings");
+	}
+
+	private syncRequestPreviewFromSettings(): void {
+		this.privacyOptions = normalizeRequestPrivacyOptions(this.plugin.settings.requestPrivacyDefaults);
+		this.contextBudgetMode = normalizeContextBudgetMode(this.plugin.settings.contextBudgetMode);
+		this.additionalContextPaths = [...this.plugin.settings.additionalContextPaths];
+		this.folderContextEnabled = this.plugin.settings.folderContextEnabled;
+		this.folderContextPath = this.plugin.settings.folderContextPath;
+		this.folderContextMaxFiles = this.plugin.settings.folderContextMaxFiles;
+		if (!this.composerEl) {
+			return;
+		}
+		const existing = this.composerEl.querySelector(".askmate-request-preview");
+		if (!this.plugin.settings.showRequestPreview) {
+			existing?.remove();
+			this.requestPreviewEl = null;
+		} else if (!existing) {
+			this.renderRequestPreview(this.composerEl);
+		}
+	}
+
 	private updateModelLabel(): void {
 		if (!this.modelEl) {
 			return;
@@ -1577,6 +1727,10 @@ export class AskMateView extends ItemView {
 
 	private setLoading(isLoading: boolean): void {
 		this.rootEl?.classList.toggle("is-loading", isLoading);
+		this.messagesEl?.setAttribute("aria-busy", String(isLoading));
+		if (this.statusEl) {
+			this.statusEl.setText(isLoading ? "AskMate is working." : "AskMate is ready for another request.");
+		}
 		this.imageButton?.toggleAttribute("disabled", isLoading);
 		this.clearButton?.toggleAttribute("disabled", isLoading);
 		this.workflowToggleButton?.toggleAttribute("disabled", isLoading);

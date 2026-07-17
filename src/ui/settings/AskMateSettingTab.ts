@@ -84,6 +84,13 @@ export class AskMateSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	private async saveUiSetting(refreshViews = true): Promise<void> {
+		await this.plugin.saveSettings();
+		if (refreshViews) {
+			this.plugin.refreshOpenAskMateViews();
+		}
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
@@ -274,7 +281,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 						const providerId = normalizeTextProviderId(value);
 						this.plugin.settings.providerRoles.chatProviderId = providerId;
 						this.plugin.settings.selectedTextProvider = providerId;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 						this.display();
 					});
 			});
@@ -291,7 +298,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.providerRoles.imagePromptPlanningProviderId)
 					.onChange(async (value) => {
 						this.plugin.settings.providerRoles.imagePromptPlanningProviderId = normalizeImagePromptPlanningProviderId(value);
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 						this.display();
 					});
 			});
@@ -310,7 +317,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(selectedProvider.apiKeySecretName)
 					.onChange(async (value) => {
 						selectedProvider.apiKeySecretName = value;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -344,7 +351,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 								new Notice(this.plugin.getErrorMessage(error));
 								return;
 							}
-							await this.plugin.saveSettings();
+							await this.saveUiSetting();
 						});
 				});
 		}
@@ -413,7 +420,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.getSelectedModel())
 					.onChange(async (value) => {
 						selectedProvider.model = value;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -427,17 +434,18 @@ export class AskMateSettingTab extends PluginSettingTab {
 			.addText((text) => {
 				text
 					.setPlaceholder(selectedProviderId === "azure-openai" ? "my-gpt-deployment" : DEFAULT_PROVIDER_SETTINGS[selectedProviderId].model)
-					.setValue(selectedProvider.model)
-					.onChange(async (value) => {
-						const model = value.trim();
-						if (!model) {
-							return;
-						}
-
-						selectedProvider.model = model;
-						selectedProvider.modelOptions = normalizeProviderModelOptions(selectedProvider.modelOptions, DEFAULT_PROVIDER_SETTINGS[selectedProviderId].modelOptions, model);
-						await this.plugin.saveSettings();
-					});
+					.setValue(selectedProvider.model);
+				const commitModel = async (): Promise<void> => {
+					const model = text.getValue().trim();
+					if (!model || model === selectedProvider.model) return;
+					selectedProvider.model = model;
+					selectedProvider.modelOptions = normalizeProviderModelOptions(selectedProvider.modelOptions, DEFAULT_PROVIDER_SETTINGS[selectedProviderId].modelOptions, model);
+					await this.saveUiSetting();
+				};
+				text.inputEl.addEventListener("blur", () => void commitModel());
+				text.inputEl.addEventListener("keydown", (event) => {
+					if (event.key === "Enter") { event.preventDefault(); void commitModel(); }
+				});
 			});
 
 		if (selectedProviderId !== "openai") {
@@ -449,7 +457,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.getProviderSettings("openai").apiKeySecretName)
 						.onChange(async (value) => {
 							this.plugin.getProviderSettings("openai").apiKeySecretName = value;
-							await this.plugin.saveSettings();
+							await this.saveUiSetting();
 						});
 				});
 		}
@@ -482,7 +490,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.sendShortcut)
 					.onChange(async (value) => {
 						this.plugin.settings.sendShortcut = normalizeSendShortcut(value);
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -510,11 +518,11 @@ export class AskMateSettingTab extends PluginSettingTab {
 				dropdown
 					.addOption("chat", "Show in sidebar chat")
 					.addOption("note", "Create new note")
-					.addOption("apply", "Apply to active note")
+					.addOption("apply", "Apply to captured note or selection")
 					.setValue(this.plugin.settings.outputMode)
 					.onChange(async (value) => {
 						this.plugin.settings.outputMode = value as OutputMode;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -565,19 +573,19 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.showRequestPreview)
 					.onChange(async (value) => {
 						this.plugin.settings.showRequestPreview = value;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
 		new Setting(containerEl)
-			.setName("Default note context privacy")
-			.setDesc("Controls whether new requests include the captured note context by default. You can override this per request in the sidebar preview.")
+			.setName("Include note and attached context by default")
+			.setDesc("Controls whether new requests include the captured note and note-derived attachments. You can override this per request.")
 			.addToggle((toggle) => {
 				toggle
 					.setValue(this.plugin.settings.requestPrivacyDefaults.includeNoteContext)
 					.onChange(async (value) => {
 						this.plugin.settings.requestPrivacyDefaults.includeNoteContext = value;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -589,7 +597,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.requestPrivacyDefaults.includeImageReferences)
 					.onChange(async (value) => {
 						this.plugin.settings.requestPrivacyDefaults.includeImageReferences = value;
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 
@@ -604,7 +612,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.contextBudgetMode)
 					.onChange(async (value) => {
 						this.plugin.settings.contextBudgetMode = normalizeContextBudgetMode(value);
-						await this.plugin.saveSettings();
+						await this.saveUiSetting();
 					});
 			});
 	}
@@ -995,15 +1003,27 @@ export class AskMateSettingTab extends PluginSettingTab {
 			const apply = actions.createEl("button", { cls: "mod-cta", text: "Apply" });
 			apply.type = "button";
 			apply.addEventListener("click", () => {
+				apply.disabled = true;
+				dismiss.disabled = true;
 				void this.plugin.applyReviewQueueItem(item.id).then((message) => {
 					new Notice(message);
 					this.display();
-				}).catch((error) => new Notice(this.plugin.getErrorMessage(error)));
+				}).catch((error) => new Notice(this.plugin.getErrorMessage(error))).finally(() => {
+					apply.disabled = false;
+					dismiss.disabled = false;
+				});
 			});
 			const dismiss = actions.createEl("button", { text: "Dismiss" });
 			dismiss.type = "button";
 			dismiss.addEventListener("click", () => {
-				void this.plugin.dismissReviewQueueItem(item.id).then(() => this.display());
+				apply.disabled = true;
+				dismiss.disabled = true;
+				void this.plugin.dismissReviewQueueItem(item.id).then(() => this.display()).catch((error) => {
+					new Notice(this.plugin.getErrorMessage(error));
+				}).finally(() => {
+					apply.disabled = false;
+					dismiss.disabled = false;
+				});
 			});
 			const showProposal = actions.createEl("button", { text: "Show proposal" });
 			showProposal.type = "button";
@@ -1569,10 +1589,19 @@ export class AskMateSettingTab extends PluginSettingTab {
 
 	private createChartSvg(parent: HTMLElement, width: number, height: number, label: string): SVGSVGElement {
 		const svg = activeDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+		const id = `askmate-chart-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 		svg.setAttribute("class", "askmate-chart-svg");
 		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 		svg.setAttribute("role", "img");
-		svg.setAttribute("aria-label", label);
+		svg.setAttribute("aria-labelledby", `${id}-title ${id}-desc`);
+		const title = activeDocument.createElementNS("http://www.w3.org/2000/svg", "title");
+		title.id = `${id}-title`;
+		title.textContent = label;
+		svg.appendChild(title);
+		const description = activeDocument.createElementNS("http://www.w3.org/2000/svg", "desc");
+		description.id = `${id}-desc`;
+		description.textContent = `${label}. Detailed operation data is available in the recent operations table below.`;
+		svg.appendChild(description);
 		parent.appendChild(svg);
 		return svg;
 	}

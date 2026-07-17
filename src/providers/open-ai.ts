@@ -1,6 +1,8 @@
 import {
+	DEFAULT_IMAGE_GENERATION_TIMEOUT_MS,
 	DEFAULT_MODEL_OPTIONS,
 	DEFAULT_PROVIDER_SETTINGS,
+	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getProviderLabel,
 	OpenAIImageGenerationBody,
 	OpenAIResponseBody,
@@ -70,6 +72,8 @@ export async function requestOpenAIResponses(
 			"Content-Type": "application/json"
 		},
 		abortSignal,
+		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+		timeoutMessage: "OpenAI generation timed out after 2 minutes.",
 		body: JSON.stringify({
 			model,
 			instructions,
@@ -103,6 +107,8 @@ export async function requestOpenAIImageGeneration(
 			"Content-Type": "application/json"
 		},
 		abortSignal,
+		timeoutMs: DEFAULT_IMAGE_GENERATION_TIMEOUT_MS,
+		timeoutMessage: "OpenAI image generation timed out after 5 minutes.",
 		body: JSON.stringify({
 			model,
 			prompt

@@ -6,6 +6,7 @@ import {
 	ChatMessage,
 	ContextAttachment,
 	ContextAttachmentKind,
+	createSelectionIdentity,
 	DEFAULT_BATCH_WORKFLOW_MAX_FILES,
 	DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS,
 	DEFAULT_FOLDER_CONTEXT_MAX_FILES,
@@ -128,19 +129,23 @@ export class ContextService {
 	}
 
 	tryCreateNoteContext(editor: Editor | undefined, file: TFile | null): NoteContext | null {
-		const selectedText = editor?.getSelection().trim() ?? "";
+		const rawSelection = editor?.getSelection() ?? "";
+		const selectedText = rawSelection.trim();
 
 		if (selectedText.length > 0) {
 			const fullValue = editor?.getValue() ?? "";
 			const from = editor?.getCursor("from");
 			const to = editor?.getCursor("to");
+			const startOffset = from && editor ? editor.posToOffset(from) : 0;
+			const endOffset = to && editor ? editor.posToOffset(to) : startOffset + rawSelection.length;
 			return {
 				content: selectedText,
 				file,
 				source: "Selected text",
 				activeHeadingPath: editor ? this.getActiveHeadingPath(fullValue, editor.getCursor().line) : null,
 				selectionStartLine: from ? from.line + 1 : null,
-				selectionEndLine: to ? to.line + 1 : null
+				selectionEndLine: to ? to.line + 1 : null,
+				selectionIdentity: createSelectionIdentity(rawSelection, startOffset, endOffset, file?.path ?? "", fullValue)
 			};
 		}
 
@@ -157,7 +162,8 @@ export class ContextService {
 				source: "Current note",
 				activeHeadingPath: this.getActiveHeadingPath(editor.getValue(), editor.getCursor().line),
 				selectionStartLine: null,
-				selectionEndLine: null
+				selectionEndLine: null,
+				selectionIdentity: null
 			};
 		}
 
@@ -179,7 +185,8 @@ export class ContextService {
 			file,
 			source: "Current note",
 			selectionStartLine: null,
-			selectionEndLine: null
+			selectionEndLine: null,
+			selectionIdentity: null
 		};
 	}
 

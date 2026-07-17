@@ -1,5 +1,6 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
+	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getNonNegativeInteger,
 	getProviderLabel,
 	OpenAITokenUsage,
@@ -35,6 +36,8 @@ export async function completeAnthropicText(
 			"Content-Type": "application/json"
 		},
 		abortSignal,
+		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+		timeoutMessage: "Anthropic generation timed out after 2 minutes.",
 		body: JSON.stringify({
 			model: providerRef.model,
 			system: instructions,

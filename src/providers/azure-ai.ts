@@ -1,5 +1,6 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
+	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getProviderLabel,
 	ProviderModelRef,
 	ProviderSettings,
@@ -72,8 +73,8 @@ export async function completeAzureAIText(
 			method: "POST",
 			headers: getAzureAIHeaders(apiKey),
 			abortSignal,
-			timeoutMs: options.timeoutMs,
-			timeoutMessage: options.timeoutMessage,
+			timeoutMs: options.timeoutMs ?? DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+			timeoutMessage: options.timeoutMessage ?? "Azure AI Foundry generation timed out after 2 minutes.",
 			body: JSON.stringify({
 				model: providerRef.model,
 				messages: [
