@@ -10,6 +10,9 @@ import {
 import { extractProviderError, fetchModelList, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
+/** Named default so long-note workflows are not silently capped without intent. */
+export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
+
 export async function completeAnthropicText(
 	runtime: ProviderRuntime,
 	providerRef: ProviderModelRef,
@@ -35,7 +38,7 @@ export async function completeAnthropicText(
 		body: JSON.stringify({
 			model: providerRef.model,
 			system: instructions,
-			max_tokens: 4096,
+			max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
 			messages: [
 				{ role: "user", content: input }
 			]

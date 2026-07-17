@@ -17,57 +17,6 @@
 	padding: 8px;
 }
 
-.askmate-hero {
-	align-items: center;
-	background: color-mix(in srgb, var(--background-primary) 86%, var(--interactive-accent) 14%);
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border));
-	border-radius: var(--askmate-radius-md);
-	box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
-	display: flex;
-	flex: 0 0 auto;
-	flex-direction: row;
-	gap: 6px;
-	overflow: hidden;
-	padding: 5px 6px;
-	position: relative;
-}
-
-.askmate-logo {
-	align-items: center;
-	background: linear-gradient(135deg, var(--interactive-accent), color-mix(in srgb, var(--interactive-accent) 55%, #ffffff));
-	border-radius: 8px;
-	box-shadow: 0 3px 9px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
-	color: var(--text-on-accent);
-	display: inline-flex;
-	flex: 0 0 22px;
-	height: 22px;
-	justify-content: center;
-	width: 22px;
-}
-
-.askmate-logo svg {
-	height: 12px;
-	width: 12px;
-}
-
-.askmate-context,
-.askmate-context-chip {
-	background: color-mix(in srgb, var(--background-secondary) 72%, var(--interactive-accent) 28%);
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, transparent);
-	border-radius: 999px;
-	color: var(--text-muted);
-	flex: 1 1 auto;
-	font-size: var(--font-ui-smaller);
-	line-height: 1.2;
-	min-width: 0;
-	overflow: hidden;
-	padding: 3px 7px;
-	position: relative;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	z-index: 1;
-}
-
 .askmate-model-chip {
 	background: color-mix(in srgb, var(--background-secondary) 84%, var(--interactive-accent) 16%);
 	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, transparent);
@@ -913,8 +862,7 @@
 .askmate-reasoning-icon svg,
 .askmate-action-icon svg,
 .askmate-message-action-icon svg,
-.askmate-workflow-icon svg,
-.askmate-logo svg {
+.askmate-workflow-icon svg {
 	display: block;
 	flex: 0 0 auto;
 	margin: 0;
@@ -1091,7 +1039,6 @@
 	opacity: 0.55;
 }
 
-.askmate-sidebar.is-loading .askmate-logo,
 .askmate-sidebar.is-loading .askmate-avatar-assistant {
 	animation: askmate-pulse 1.4s ease-in-out infinite;
 }

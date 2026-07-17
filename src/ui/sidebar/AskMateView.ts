@@ -100,6 +100,8 @@ export class AskMateView extends ItemView {
 		this.applyComposerLayoutClass();
 		this.isClosed = false;
 		this.activeRun = null;
+		// Keep DOM and logical transcript aligned: reopening rebuilds an empty message pane.
+		this.messages = [];
 		this.outputButtons = {};
 		this.workflowButtons = [];
 		this.modelEl = null;
@@ -741,6 +743,7 @@ export class AskMateView extends ItemView {
 		this.isClosed = true;
 		this.stopActiveRun();
 		this.activeRun = null;
+		this.messages = [];
 		for (const timer of this.pendingMarkdownTimerIds) {
 			window.clearTimeout(timer);
 		}
@@ -963,67 +966,56 @@ export class AskMateView extends ItemView {
 
 			if (result.kind === "text") {
 				responseText = result.text.trim() || responseText.trim() || "OpenAI returned no text.";
-				this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
-				this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model);
-				this.messages.push({ role: "assistant", text: responseText });
+				if (!this.isClosed) {
+					this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
+					this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model);
+					this.messages.push({ role: "assistant", text: responseText });
+				}
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 
 				if (request.metadata.outputMode === "note") {
 					outputSideEffectStarted = true;
 					const file = await this.plugin.createResultNote(request, responseText, { model: result.model });
-
-					if (!this.isRunActive(run)) {
-						return;
-					}
-
-					this.addMessage("system", `Created note: ${file.path}`);
-					new Notice(`AskMate created ${file.path}`);
+					// Always surface success if the vault write landed, even if Stop/close raced.
+					this.notifySideEffect(`Created note: ${file.path}`, `AskMate created ${file.path}`);
 				} else if (request.metadata.outputMode === "apply") {
 					outputSideEffectStarted = true;
 					const message = await this.plugin.applyResponseToContext(request, responseText);
-
-					if (!this.isRunActive(run)) {
-						return;
-					}
-
-					this.addMessage("system", message);
-					new Notice(message);
+					this.notifySideEffect(message, message);
 				}
 				return;
 			}
 
-			this.renderGeneratedImage(activeAssistantMessage.body, result);
-			this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
-			this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
+			if (!this.isClosed) {
+				this.renderGeneratedImage(activeAssistantMessage.body, result);
+				this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
+				this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
+			}
 			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
 
 			if (request.metadata.outputMode === "note") {
 				outputSideEffectStarted = true;
 				const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, result);
-
-				if (!this.isRunActive(run)) {
-					return;
-				}
-
-				this.addMessage("system", `Created note: ${noteFile.path} and image: ${imageFile.path}`);
-				new Notice(`AskMate created ${noteFile.path}`);
+				this.notifySideEffect(
+					`Created note: ${noteFile.path} and image: ${imageFile.path}`,
+					`AskMate created ${noteFile.path}`
+				);
 			} else if (request.metadata.outputMode === "apply") {
 				outputSideEffectStarted = true;
 				const message = await this.plugin.applyImageToContext(request, result);
-
-				if (!this.isRunActive(run)) {
-					return;
-				}
-
-				this.addMessage("system", message);
-				new Notice(message);
+				this.notifySideEffect(message, message);
 			}
 		} catch (error) {
-			if (!this.isRunActive(run)) {
+			if (this.isClosed) {
 				return;
 			}
 
 			const message = isAbortError(error) ? "AskMate request stopped." : this.plugin.getErrorMessage(error);
+			// If a vault side effect already completed, do not paint a failure over success.
+			if (outputSideEffectStarted && !isAbortError(error)) {
+				new Notice(message);
+				return;
+			}
 			if (!assistantMessage) {
 				assistantMessage = this.createMessageEl("assistant", "", false);
 			}
@@ -1038,6 +1030,14 @@ export class AskMateView extends ItemView {
 		} finally {
 			this.finishRun(run);
 		}
+	}
+
+	/** System chat line + Notice for vault mutations that already succeeded. */
+	private notifySideEffect(systemMessage: string, noticeMessage: string): void {
+		if (!this.isClosed) {
+			this.addMessage("system", systemMessage);
+		}
+		new Notice(noticeMessage);
 	}
 
 	private addMessage(role: ChatRole, text: string, editableText?: string): void {

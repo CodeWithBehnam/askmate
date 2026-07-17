@@ -11,6 +11,9 @@ import {
 import { extractProviderError, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
+/** Default max output tokens for generateContent (API default can be too low for note workflows). */
+export const GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
 export async function completeGeminiText(
 	runtime: ProviderRuntime,
 	providerRef: ProviderModelRef,
@@ -26,10 +29,12 @@ export async function completeGeminiText(
 
 	const baseUrl = getGeminiBaseUrl(runtime);
 	const model = encodeURIComponent(providerRef.model);
-	const response = await runtime.requestJson<Record<string, unknown>>(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+	// Prefer header auth so the API key is not embedded in the request URL (logs/proxies).
+	const response = await runtime.requestJson<Record<string, unknown>>(`${baseUrl}/models/${model}:generateContent`, {
 		method: "POST",
 		headers: {
-			"Content-Type": "application/json"
+			"Content-Type": "application/json",
+			"x-goog-api-key": apiKey
 		},
 		abortSignal,
 		body: JSON.stringify({
@@ -41,7 +46,10 @@ export async function completeGeminiText(
 					role: "user",
 					parts: [{ text: input }]
 				}
-			]
+			],
+			generationConfig: {
+				maxOutputTokens: GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
+			}
 		})
 	});
 	const body = response.body;
@@ -67,8 +75,11 @@ export async function fetchGeminiModels(runtime: ProviderRuntime): Promise<strin
 
 	const baseUrl = getGeminiBaseUrl(runtime);
 	const response = await runtime.requestJson<GeminiModelListBody>(
-		`${baseUrl}/models?key=${encodeURIComponent(apiKey)}`,
+		`${baseUrl}/models`,
 		{
+			headers: {
+				"x-goog-api-key": apiKey
+			},
 			timeoutMs: 10000,
 			timeoutMessage: "Google Gemini model refresh timed out after 10 seconds."
 		}

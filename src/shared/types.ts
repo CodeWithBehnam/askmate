@@ -24,7 +24,9 @@ export type ContextAttachmentKind =
 	| "glossary"
 	| "excalidraw_summary"
 	| "image_manifest";
-export type ApplyScope = "auto" | "selected-block" | "heading-section" | "full-note";
+export type ApplyScope = "auto" | "selected-block" | "heading-section" | "full-note" | "append";
+/** Resolved Apply target after expanding `auto` against note/selection context. */
+export type EffectiveApplyScope = Exclude<ApplyScope, "auto">;
 export type ApplyApprovalMode = "auto-approve" | "full" | "manual";
 export type FrontmatterApplyPolicy = "preserve" | "confirm" | "replace";
 export type BatchWorkflowOutputMode = "note" | "review-queue";

@@ -12,93 +12,40 @@ import {
 	BatchWorkflowRunOptions,
 	BatchWorkflowSummary,
 	BuildRequestOptions,
-	ChatMessage,
-	ContextAttachment,
-	ContextAttachmentKind,
-	ContextBudgetMode,
 	CustomWorkflow,
-	DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS,
-	DEFAULT_BATCH_WORKFLOW_MAX_FILES,
-	DEFAULT_EVIDENCE_MAX_SOURCES,
-	DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS,
-	DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS,
-	DEFAULT_FOLDER_CONTEXT_MAX_FILES,
-	DEFAULT_IMAGE_FILE_NAME_TEMPLATE,
-	DEFAULT_IMAGE_FOLDER_TEMPLATE,
 	DEFAULT_IMAGE_PROMPT,
 	DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE,
-	DEFAULT_MODEL_OPTIONS,
-	DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE,
 	DEFAULT_PROVIDER_SETTINGS,
 	DEFAULT_RESULT_NOTE_TEMPLATE,
-	DEFAULT_REVIEW_QUEUE_MAX_ITEMS,
-	DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS,
-	DEFAULT_SETTINGS,
-	DEFAULT_THREADED_CHAT_MAX_TURNS,
-	DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS,
 	estimateTokenCount,
 	EvidenceCitation,
 	EvidenceSource,
 	findExactOccurrences,
-	FolderContextOptions,
 	formatOperationStatus,
 	formatOutputMode,
 	formatRequestIntent,
-	formatTokenCount,
 	FrontmatterApplyResult,
-	FrontmatterBlock,
 	getContextBudgetOption,
 	getModelCapability,
-	getNonNegativeInteger,
 	getProviderLabel,
-	GPT_IMAGE_2_MODEL_ID,
-	IMAGE_FILE_EXTENSIONS,
-	IMAGE_MIME_TYPE,
 	IMAGE_WORKFLOW_MESSAGE,
 	ImageAskMateResult,
-	ImagePromptExtraction,
 	ImagePromptPlan,
-	ImageReferenceInfo,
+	appendMarkdownBlockToContent,
+	normalizeAskMateSettings,
+	createAbortError,
 	isAbortError,
 	isGpt55Model,
-	isImageReferencePath,
-	MarkdownHeadingSection,
-	MAX_CONTEXT_IMAGE_PREVIEWS,
-	MAX_CONTEXT_PATH_LENGTH,
-	MAX_NOTE_HISTORY_ANSWER_CHARACTERS,
-	MAX_NOTE_HISTORY_QUESTION_CHARACTERS,
-	MAX_NOTE_HISTORY_TURNS,
-	MAX_REVIEW_QUEUE_TEXT_CHARACTERS,
-	MAX_TOKEN_USAGE_RECORDS,
-	MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH,
 	ModelCapability,
 	normalizeApplyApprovalMode,
 	normalizeApplyScope,
-	normalizeBatchWorkflowOutputMode,
-	normalizeBoolean,
-	normalizeBoundedInteger,
-	normalizeBudgetEnforcementMode,
-	normalizeComposerLayout,
-	normalizeContextBudgetMode,
-	normalizeContextPathList,
 	normalizeCustomWorkflow,
 	normalizeCustomWorkflows,
-	normalizeFrontmatterApplyPolicy,
-	normalizeNoteHistoryStore,
-	normalizeNullableIsoDate,
-	normalizeOptionalString,
-	normalizePlannedPrompt,
 	normalizeProviderModelOptions,
 	normalizeProviderRoleSettings,
-	normalizeProviderSettings,
 	normalizeReasoningEffort,
-	normalizeRequestPrivacyOptions,
 	normalizeReviewQueueItems,
-	normalizeSendShortcut,
-	normalizeTemplateString,
 	normalizeTextProviderId,
-	normalizeTokenUsageStats,
-	normalizeTranslationTargetLanguage,
 	normalizeWorkflowDisplayPreferences,
 	NoteContext,
 	NoteHistoryTurn,
@@ -106,15 +53,12 @@ import {
 	OpenAITokenUsage,
 	OperationKind,
 	OperationStatus,
-	PromptContextResult,
 	PromptInspection,
 	ProviderModelRef,
 	ProviderSettings,
 	ReasoningEffort,
 	RequestIntentKind,
-	RequestPrivacyOptions,
 	ReviewQueueItem,
-	summarizeTokenUsage,
 	TextApplyPreviewScope,
 	TextProviderId,
 	TokenUsageRecord,
@@ -126,26 +70,33 @@ import {
 	WORKFLOWS
 } from "../shared/core";
 import {
-	completeProviderTextRequest,
-	extractOpenAIText,
 	fetchProviderModels,
-	formatProviderHttpError,
-	getProviderTextEndpoint,
 	normalizeOpenAIModelOptions,
-	requestOpenAIImageGeneration,
-	requestOpenAIResponses,
 	testProviderConnection as testProviderConnectionWithProvider
 } from "../providers";
 import type { ProviderRequestOptions, ProviderRuntime } from "../providers";
+import { UsageService } from "../usage";
+import { HistoryService } from "../history";
+import { ContextService, cleanFolderPath } from "../context";
+import { RequestRunner } from "../requests";
+import {
+	buildImagePrompt,
+	buildImagePromptPlanningInput,
+	buildImagePromptPlanningInstructions,
+	buildPrompt,
+	buildTextInstructions
+} from "../requests/requestBuilders";
+import { parseMarkdownHeadingSections, splitMarkdownFrontmatter } from "../output";
 import { askMateConfirm, askMateDiffConfirm } from "../ui/modals/modals";
 import { AskMateView } from "../ui/sidebar/AskMateView";
 import { AskMateSettingTab } from "../ui/settings/AskMateSettingTab";
 
 export class AskMatePlugin extends Plugin {
 	settings: AskMateSettings;
-	private lastMarkdownView: MarkdownView | null = null;
-	private lastMarkdownFile: TFile | null = null;
-	private lastNoteContext: NoteContext | null = null;
+	private usageService!: UsageService;
+	private historyService!: HistoryService;
+	private contextService!: ContextService;
+	private requestRunner!: RequestRunner;
 
 	private getProviderRuntime(): ProviderRuntime {
 		return {
@@ -157,6 +108,45 @@ export class AskMatePlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.usageService = new UsageService({
+			getSettings: () => this.settings,
+			saveSettings: () => this.saveSettings()
+		});
+		this.historyService = new HistoryService({
+			getSettings: () => this.settings,
+			saveSettings: () => this.saveSettings(),
+			readFileText: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile) || file.extension !== "md") {
+					throw new Error(`AskMate could not read ${path}.`);
+				}
+				return await this.app.vault.cachedRead(file);
+			}
+		});
+
+		this.contextService = new ContextService({
+			app: this.app,
+			getSettings: () => this.settings,
+			getNoteHistoryForPath: (path) => this.getNoteHistoryForPath(path)
+		});
+		this.requestRunner = new RequestRunner({
+			getSettings: () => this.settings,
+			getProviderRuntime: () => this.getProviderRuntime(),
+			getOpenAiApiKey: () => this.getOpenAiApiKey(),
+			getSelectedProviderModelRef: () => this.getSelectedProviderModelRef(),
+			getSelectedReasoningEffort: () => this.getSelectedReasoningEffort(),
+			getImagePlanningProviderRef: () => this.getImagePlanningProviderRef(),
+			getImagePlanningModel: () => this.getImagePlanningModel(),
+			shouldGenerateImageFromQuestion: (question) => this.shouldGenerateImageFromQuestion(question),
+			recordOperationUsage: (params) => this.recordOperationUsage(params),
+			getErrorMessage: (error) => this.getErrorMessage(error),
+			expandWorkflowPrompt: (workflow, context, sanitized) => this.expandWorkflowPrompt(workflow, context, sanitized),
+			getNoteContext: (editor, file) => this.getNoteContext(editor, file),
+			getFileNoteContext: (file) => this.getFileNoteContext(file),
+			buildContextAttachments: (context, options, privacy) => this.contextService.buildContextAttachments(context, options, privacy),
+			throwIfAborted: (abortSignal) => this.throwIfAborted(abortSignal),
+			decodeBase64Image: (base64) => this.decodeBase64Image(base64)
+		});
 
 		this.registerView(ASKMATE_VIEW_TYPE, (leaf) => new AskMateView(leaf, this));
 		this.registerEvent(
@@ -218,6 +208,7 @@ export class AskMatePlugin extends Plugin {
 				}
 			});
 		}
+		this.registerCustomWorkflowCommands();
 
 		this.addCommand({
 			id: "test-provider-connection",
@@ -237,149 +228,11 @@ export class AskMatePlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		const raw = await this.loadData() as Partial<AskMateSettings> | null;
-		const loaded = Object.assign({}, DEFAULT_SETTINGS, raw) as AskMateSettings;
-		const legacy = {
-			openAiApiKeySecretName: typeof loaded.openAiApiKeySecretName === "string" ? loaded.openAiApiKeySecretName : "",
-			model: typeof loaded.model === "string" ? loaded.model : DEFAULT_SETTINGS.model,
-			modelOptions: Array.isArray(loaded.modelOptions) ? loaded.modelOptions : DEFAULT_MODEL_OPTIONS
-		};
-		this.settings = loaded;
-		this.settings.selectedTextProvider = normalizeTextProviderId(loaded.selectedTextProvider);
-		this.settings.providerRoles = normalizeProviderRoleSettings(raw?.providerRoles, raw?.selectedTextProvider ?? this.settings.selectedTextProvider);
-		this.settings.selectedTextProvider = this.settings.providerRoles.chatProviderId;
-		this.settings.providers = normalizeProviderSettings(loaded.providers, legacy);
-		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
-		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = normalizeOpenAIModelOptions(
-			this.settings.providers.openai.modelOptions,
-			DEFAULT_MODEL_OPTIONS,
-			this.settings.providers.openai.model
-		);
-		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
-		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
-		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
-		this.settings.contextBudgetMode = normalizeContextBudgetMode(this.settings.contextBudgetMode);
-		this.settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(this.settings.workflowDisplayPreferences);
-		this.settings.showRequestPreview = this.settings.showRequestPreview !== false;
-		this.settings.applyApprovalMode = normalizeApplyApprovalMode(raw?.applyApprovalMode, raw?.showApplyPreview);
-		this.settings.showApplyPreview = this.settings.applyApprovalMode === "manual";
-		this.settings.reasoningEffort = normalizeReasoningEffort(this.settings.reasoningEffort);
-		this.settings.sendShortcut = normalizeSendShortcut(this.settings.sendShortcut);
-		this.settings.translationTargetLanguage = normalizeTranslationTargetLanguage(this.settings.translationTargetLanguage);
-		this.settings.workflowCustomInstructions = normalizeOptionalString(this.settings.workflowCustomInstructions, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
-		this.settings.resultNoteTemplate = normalizeTemplateString(this.settings.resultNoteTemplate, DEFAULT_RESULT_NOTE_TEMPLATE);
-		this.settings.imageResultNoteTemplate = normalizeTemplateString(this.settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
-		this.settings.imageFolderTemplate = normalizeTemplateString(this.settings.imageFolderTemplate, DEFAULT_IMAGE_FOLDER_TEMPLATE);
-		this.settings.imageFileNameTemplate = normalizeTemplateString(this.settings.imageFileNameTemplate, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
-		this.settings.composerLayout = normalizeComposerLayout(this.settings.composerLayout);
-		this.settings.showOnboardingTips = this.settings.showOnboardingTips !== false;
-		this.settings.onboardingTipsDismissedAt = normalizeNullableIsoDate(this.settings.onboardingTipsDismissedAt);
-		this.settings.threadedChatEnabled = normalizeBoolean(this.settings.threadedChatEnabled, false);
-		this.settings.threadedChatMaxTurns = normalizeBoundedInteger(this.settings.threadedChatMaxTurns, DEFAULT_THREADED_CHAT_MAX_TURNS, 1, 12);
-		this.settings.additionalContextPaths = normalizeContextPathList(this.settings.additionalContextPaths);
-		this.settings.additionalContextMaxCharacters = normalizeBoundedInteger(this.settings.additionalContextMaxCharacters, DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.folderContextEnabled = normalizeBoolean(this.settings.folderContextEnabled, false);
-		this.settings.folderContextPath = normalizeOptionalString(this.settings.folderContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.folderContextMaxFiles = normalizeBoundedInteger(this.settings.folderContextMaxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
-		this.settings.folderContextMaxCharacters = normalizeBoundedInteger(this.settings.folderContextMaxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
-		this.settings.includeExcalidrawSummaries = normalizeBoolean(this.settings.includeExcalidrawSummaries, false);
-		this.settings.excalidrawSummaryMaxCharacters = normalizeBoundedInteger(this.settings.excalidrawSummaryMaxCharacters, DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS, 1000, 100000);
-		this.settings.includeImageManifests = normalizeBoolean(this.settings.includeImageManifests, false);
-		this.settings.partialApplyDefaultScope = normalizeApplyScope(this.settings.partialApplyDefaultScope);
-		this.settings.evidenceLinkedAnswersEnabled = normalizeBoolean(this.settings.evidenceLinkedAnswersEnabled, true);
-		this.settings.evidenceMaxSources = normalizeBoundedInteger(this.settings.evidenceMaxSources, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
-		this.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(this.settings.frontmatterApplyPolicy);
-		this.settings.batchWorkflowFolderPath = normalizeOptionalString(this.settings.batchWorkflowFolderPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.batchWorkflowId = normalizeOptionalString(this.settings.batchWorkflowId, 120) || "study-summary";
-		this.settings.batchWorkflowMaxFiles = normalizeBoundedInteger(this.settings.batchWorkflowMaxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
-		this.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(this.settings.batchWorkflowOutputMode);
-		this.settings.noteHistoryEnabled = normalizeBoolean(this.settings.noteHistoryEnabled, true);
-		this.settings.noteHistoryIncludeInContext = normalizeBoolean(this.settings.noteHistoryIncludeInContext, false);
-		this.settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(this.settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
-		this.settings.noteHistoryStore = normalizeNoteHistoryStore(this.settings.noteHistoryStore);
-		this.settings.includeStyleGuideContext = normalizeBoolean(this.settings.includeStyleGuideContext, false);
-		this.settings.styleGuideContextPath = normalizeOptionalString(this.settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.styleGuideMaxCharacters = normalizeBoundedInteger(this.settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.includeGlossaryContext = normalizeBoolean(this.settings.includeGlossaryContext, false);
-		this.settings.glossaryContextPath = normalizeOptionalString(this.settings.glossaryContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.glossaryMaxCharacters = normalizeBoundedInteger(this.settings.glossaryMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.reviewQueueMaxItems = normalizeBoundedInteger(this.settings.reviewQueueMaxItems, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
-		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
-		this.settings.smartResultPlacementEnabled = normalizeBoolean(this.settings.smartResultPlacementEnabled, false);
-		this.settings.appendResultBacklinkToSource = normalizeBoolean(this.settings.appendResultBacklinkToSource, false);
-		this.settings.usageGuardrailsEnabled = normalizeBoolean(this.settings.usageGuardrailsEnabled, false);
-		this.settings.usageDailyTokenBudget = normalizeBoundedInteger(this.settings.usageDailyTokenBudget, 0, 0, 10000000);
-		this.settings.usageMonthlyTokenBudget = normalizeBoundedInteger(this.settings.usageMonthlyTokenBudget, 0, 0, 100000000);
-		this.settings.usagePerRequestWarningTokens = normalizeBoundedInteger(this.settings.usagePerRequestWarningTokens, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
-		this.settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(this.settings.usagePerRequestHardLimitTokens, 0, 0, 10000000);
-		this.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(this.settings.usageBudgetEnforcement);
-		this.settings.tokenUsageStats = normalizeTokenUsageStats(this.settings.tokenUsageStats);
+		this.settings = normalizeAskMateSettings(raw, "load");
 	}
 
 	async saveSettings(): Promise<void> {
-		this.settings.providerRoles = normalizeProviderRoleSettings(this.settings.providerRoles, this.settings.selectedTextProvider);
-		this.settings.selectedTextProvider = this.settings.providerRoles.chatProviderId;
-		this.settings.openAiApiKeySecretName = this.settings.providers.openai.apiKeySecretName;
-		this.settings.model = this.settings.providers.openai.model;
-		this.settings.modelOptions = normalizeOpenAIModelOptions(
-			this.settings.providers.openai.modelOptions,
-			[],
-			this.settings.providers.openai.model
-		);
-		this.settings.providers.openai.modelOptions = this.settings.modelOptions;
-		this.settings.customWorkflows = normalizeCustomWorkflows(this.settings.customWorkflows);
-		this.settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(this.settings.requestPrivacyDefaults);
-		this.settings.contextBudgetMode = normalizeContextBudgetMode(this.settings.contextBudgetMode);
-		this.settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(this.settings.workflowDisplayPreferences);
-		this.settings.applyApprovalMode = normalizeApplyApprovalMode(this.settings.applyApprovalMode, this.settings.showApplyPreview);
-		this.settings.showApplyPreview = this.settings.applyApprovalMode === "manual";
-		this.settings.workflowCustomInstructions = normalizeOptionalString(this.settings.workflowCustomInstructions, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
-		this.settings.resultNoteTemplate = normalizeTemplateString(this.settings.resultNoteTemplate, DEFAULT_RESULT_NOTE_TEMPLATE);
-		this.settings.imageResultNoteTemplate = normalizeTemplateString(this.settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
-		this.settings.imageFolderTemplate = normalizeTemplateString(this.settings.imageFolderTemplate, DEFAULT_IMAGE_FOLDER_TEMPLATE);
-		this.settings.imageFileNameTemplate = normalizeTemplateString(this.settings.imageFileNameTemplate, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
-		this.settings.composerLayout = normalizeComposerLayout(this.settings.composerLayout);
-		this.settings.onboardingTipsDismissedAt = normalizeNullableIsoDate(this.settings.onboardingTipsDismissedAt);
-		this.settings.threadedChatEnabled = normalizeBoolean(this.settings.threadedChatEnabled, false);
-		this.settings.threadedChatMaxTurns = normalizeBoundedInteger(this.settings.threadedChatMaxTurns, DEFAULT_THREADED_CHAT_MAX_TURNS, 1, 12);
-		this.settings.additionalContextPaths = normalizeContextPathList(this.settings.additionalContextPaths);
-		this.settings.additionalContextMaxCharacters = normalizeBoundedInteger(this.settings.additionalContextMaxCharacters, DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.folderContextEnabled = normalizeBoolean(this.settings.folderContextEnabled, false);
-		this.settings.folderContextPath = normalizeOptionalString(this.settings.folderContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.folderContextMaxFiles = normalizeBoundedInteger(this.settings.folderContextMaxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
-		this.settings.folderContextMaxCharacters = normalizeBoundedInteger(this.settings.folderContextMaxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
-		this.settings.includeExcalidrawSummaries = normalizeBoolean(this.settings.includeExcalidrawSummaries, false);
-		this.settings.excalidrawSummaryMaxCharacters = normalizeBoundedInteger(this.settings.excalidrawSummaryMaxCharacters, DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS, 1000, 100000);
-		this.settings.includeImageManifests = normalizeBoolean(this.settings.includeImageManifests, false);
-		this.settings.partialApplyDefaultScope = normalizeApplyScope(this.settings.partialApplyDefaultScope);
-		this.settings.evidenceLinkedAnswersEnabled = normalizeBoolean(this.settings.evidenceLinkedAnswersEnabled, true);
-		this.settings.evidenceMaxSources = normalizeBoundedInteger(this.settings.evidenceMaxSources, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
-		this.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(this.settings.frontmatterApplyPolicy);
-		this.settings.batchWorkflowFolderPath = normalizeOptionalString(this.settings.batchWorkflowFolderPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.batchWorkflowId = normalizeOptionalString(this.settings.batchWorkflowId, 120) || "study-summary";
-		this.settings.batchWorkflowMaxFiles = normalizeBoundedInteger(this.settings.batchWorkflowMaxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
-		this.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(this.settings.batchWorkflowOutputMode);
-		this.settings.noteHistoryEnabled = normalizeBoolean(this.settings.noteHistoryEnabled, true);
-		this.settings.noteHistoryIncludeInContext = normalizeBoolean(this.settings.noteHistoryIncludeInContext, false);
-		this.settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(this.settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
-		this.settings.noteHistoryStore = normalizeNoteHistoryStore(this.settings.noteHistoryStore);
-		this.settings.includeStyleGuideContext = normalizeBoolean(this.settings.includeStyleGuideContext, false);
-		this.settings.styleGuideContextPath = normalizeOptionalString(this.settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.styleGuideMaxCharacters = normalizeBoundedInteger(this.settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.includeGlossaryContext = normalizeBoolean(this.settings.includeGlossaryContext, false);
-		this.settings.glossaryContextPath = normalizeOptionalString(this.settings.glossaryContextPath, MAX_CONTEXT_PATH_LENGTH);
-		this.settings.glossaryMaxCharacters = normalizeBoundedInteger(this.settings.glossaryMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		this.settings.reviewQueueMaxItems = normalizeBoundedInteger(this.settings.reviewQueueMaxItems, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
-		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems);
-		this.settings.smartResultPlacementEnabled = normalizeBoolean(this.settings.smartResultPlacementEnabled, false);
-		this.settings.appendResultBacklinkToSource = normalizeBoolean(this.settings.appendResultBacklinkToSource, false);
-		this.settings.usageGuardrailsEnabled = normalizeBoolean(this.settings.usageGuardrailsEnabled, false);
-		this.settings.usageDailyTokenBudget = normalizeBoundedInteger(this.settings.usageDailyTokenBudget, 0, 0, 10000000);
-		this.settings.usageMonthlyTokenBudget = normalizeBoundedInteger(this.settings.usageMonthlyTokenBudget, 0, 0, 100000000);
-		this.settings.usagePerRequestWarningTokens = normalizeBoundedInteger(this.settings.usagePerRequestWarningTokens, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
-		this.settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(this.settings.usagePerRequestHardLimitTokens, 0, 0, 10000000);
-		this.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(this.settings.usageBudgetEnforcement);
-		this.settings.tokenUsageStats = normalizeTokenUsageStats(this.settings.tokenUsageStats);
+		this.settings = normalizeAskMateSettings(this.settings, "save");
 		await this.saveData(this.settings);
 	}
 
@@ -408,201 +261,35 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	rememberActiveMarkdownContext(): void {
-		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-		this.rememberMarkdownFile(this.app.workspace.getActiveFile());
-
-		if (!activeView) {
-			return;
-		}
-
-		this.lastMarkdownView = activeView;
-		this.rememberEditorContext(activeView.editor, activeView.file ?? null);
+		this.contextService.rememberActiveMarkdownContext();
 	}
 
 	async getNoteContext(editor?: Editor, file?: TFile | null): Promise<NoteContext> {
-		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-
-		if (editor) {
-			const context = this.tryCreateNoteContext(editor, file ?? activeView?.file ?? null);
-
-			if (context) {
-				this.rememberEditorContext(editor, context.file);
-				return context;
-			}
-
-			this.lastNoteContext = null;
-		}
-
-		if (activeView) {
-			const context = this.tryCreateNoteContext(activeView.editor, activeView.file ?? null);
-			this.lastMarkdownView = activeView;
-			this.rememberMarkdownFile(activeView.file ?? null);
-			this.lastNoteContext = context;
-
-			if (context) {
-				return context;
-			}
-		}
-
-		const lastOpenView = this.getLastOpenMarkdownView();
-
-		if (
-			this.lastNoteContext?.source === "Selected text" &&
-			(!lastOpenView || this.lastNoteContext.file === lastOpenView.file)
-		) {
-			return this.lastNoteContext;
-		}
-
-		if (lastOpenView) {
-			const context = this.tryCreateNoteContext(lastOpenView.editor, lastOpenView.file ?? null);
-			this.lastNoteContext = context;
-
-			if (context) {
-				return context;
-			}
-		}
-
-		const fileContext = await this.tryCreateFileContext(file ?? lastOpenView?.file ?? this.lastMarkdownFile);
-
-		if (fileContext) {
-			this.lastNoteContext = fileContext;
-			return fileContext;
-		}
-
-		throw new Error("Open a Markdown note or select text before using AskMate.");
+		return await this.contextService.getNoteContext(editor, file);
 	}
 
-	private rememberEditorContext(editor: Editor, file: TFile | null): void {
-		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-
-		if (activeView?.editor === editor) {
-			this.lastMarkdownView = activeView;
-		}
-
-		this.rememberMarkdownFile(file);
-		this.lastNoteContext = this.tryCreateNoteContext(editor, file);
+	rememberEditorContext(editor: Editor, file: TFile | null): void {
+		this.contextService.rememberEditorContext(editor, file);
 	}
 
-	private rememberMarkdownFile(file: TFile | null): void {
-		if (file?.extension === "md") {
-			this.lastMarkdownFile = file;
-		}
+	rememberMarkdownFile(file: TFile | null): void {
+		this.contextService.rememberMarkdownFile(file);
 	}
 
-	private tryCreateNoteContext(editor: Editor | undefined, file: TFile | null): NoteContext | null {
-		const selectedText = editor?.getSelection().trim() ?? "";
-
-		if (selectedText.length > 0) {
-			const fullValue = editor?.getValue() ?? "";
-			const from = editor?.getCursor("from");
-			const to = editor?.getCursor("to");
-			return {
-				content: selectedText,
-				file,
-				source: "Selected text",
-				activeHeadingPath: editor ? this.getActiveHeadingPath(fullValue, editor.getCursor().line) : null,
-				selectionStartLine: from ? from.line + 1 : null,
-				selectionEndLine: to ? to.line + 1 : null
-			};
-		}
-
-		if (!editor) {
-			return null;
-		}
-
-		const fullNote = editor.getValue().trim();
-
-		if (fullNote.length > 0 || file?.extension === "md") {
-			return {
-				content: fullNote,
-				file,
-				source: "Current note",
-				activeHeadingPath: this.getActiveHeadingPath(editor.getValue(), editor.getCursor().line),
-				selectionStartLine: null,
-				selectionEndLine: null
-			};
-		}
-
-		return null;
+	async getFileNoteContext(file: TFile): Promise<NoteContext> {
+		return await this.contextService.getFileNoteContext(file);
 	}
 
-	private async tryCreateFileContext(file: TFile | null | undefined): Promise<NoteContext | null> {
-		if (!file || file.extension !== "md") {
-			return null;
-		}
-
-		return await this.getFileNoteContext(file);
+	getLastOpenMarkdownView(): MarkdownView | null {
+		return this.contextService.getLastOpenMarkdownView();
 	}
 
-	private async getFileNoteContext(file: TFile): Promise<NoteContext> {
-		const content = (await this.app.vault.cachedRead(file)).trim();
-		return {
-			content,
-			file,
-			source: "Current note",
-			selectionStartLine: null,
-			selectionEndLine: null
-		};
-	}
-
-	private getLastOpenMarkdownView(): MarkdownView | null {
-		if (!this.lastMarkdownView) {
-			return null;
-		}
-
-		const isStillOpen = this.app.workspace
-			.getLeavesOfType("markdown")
-			.some((leaf) => leaf.view === this.lastMarkdownView);
-
-		if (!isStillOpen) {
-			this.lastMarkdownView = null;
-			this.lastNoteContext = null;
-			return null;
-		}
-
-		return this.lastMarkdownView;
-	}
-
-	private getOpenMarkdownViewForFile(file: TFile | null | undefined): MarkdownView | null {
-		if (!file) {
-			return null;
-		}
-
-		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-			if (leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) {
-				return leaf.view;
-			}
-		}
-
-		return null;
-	}
-
-	private getActiveHeadingPath(markdown: string, cursorLine: number): string | null {
-		const sections = this.parseMarkdownHeadingSections(markdown);
-		const active = sections
-			.filter((section) => section.headingLine <= cursorLine)
-			.sort((a, b) => b.headingLine - a.headingLine)[0];
-		return active?.path ?? null;
+	getOpenMarkdownViewForFile(file: TFile | null | undefined): MarkdownView | null {
+		return this.contextService.getOpenMarkdownViewForFile(file);
 	}
 
 	classifyRequestIntent(question: string, options: Pick<BuildRequestOptions, "forceImage" | "workflow" | "intentKind" | "autoImage"> = {}): RequestIntentKind {
-		if (options.intentKind) {
-			return options.intentKind;
-		}
-
-		if (options.workflow) {
-			return "workflow";
-		}
-
-		if (options.forceImage === true || this.getSelectedProviderModelRef().capability === "image") {
-			return "explicit_image";
-		}
-
-		if (options.autoImage === true || this.shouldGenerateImageFromQuestion(question)) {
-			return "auto_image";
-		}
-
-		return "freeform_text";
+		return this.requestRunner.classifyRequestIntent(question, options);
 	}
 
 	private formatSourceLink(file: TFile | null): string {
@@ -611,7 +298,7 @@ export class AskMatePlugin extends Plugin {
 
 	private throwIfAborted(abortSignal?: AbortSignal): void {
 		if (abortSignal?.aborted) {
-			throw new Error("Request was stopped.");
+			throw createAbortError("Request was stopped.");
 		}
 	}
 
@@ -687,43 +374,7 @@ export class AskMatePlugin extends Plugin {
 			forceImage?: boolean;
 		} = {}
 	): Promise<AskMateResult> {
-		const model = request.metadata.selectedModel;
-		const shouldGenerateImage = options.forceImage === true
-			|| request.metadata.forceImage
-			|| request.metadata.autoImage
-			|| request.metadata.modelCapability === "image";
-
-		if (shouldGenerateImage) {
-			if (!(await this.getOpenAiApiKey())) {
-				throw new Error("Add an OpenAI API key in AskMate settings before generating an image with gpt-image-2.");
-			}
-			const imagePromptPlan = await this.prepareImagePrompt(request, options.abortSignal);
-			return await this.generateOpenAIImage(request, options.abortSignal, imagePromptPlan);
-		}
-
-		const onDelta = options.onTextDelta ?? (() => undefined);
-		const providerId = normalizeTextProviderId(request.metadata.providerId);
-		const text = providerId === "openai"
-			? await this.streamOpenAI(request, onDelta, options.abortSignal)
-			: await this.completeProviderText(
-				request,
-				{
-					providerId,
-					providerName: getProviderLabel(providerId),
-					model,
-					capability: "text"
-				},
-				this.buildTextInstructions(),
-				this.buildPrompt(request),
-				"text_response",
-				options.abortSignal,
-				onDelta
-			);
-		return {
-			kind: "text",
-			model,
-			text
-		};
+		return await this.requestRunner.runOpenAIRequest(request, options);
 	}
 
 	async streamOpenAI(
@@ -731,235 +382,7 @@ export class AskMatePlugin extends Plugin {
 		onDelta: (delta: string) => void,
 		abortSignal?: AbortSignal
 	): Promise<string> {
-		const apiKey = await this.getOpenAiApiKey();
-
-		if (!apiKey) {
-			throw new Error("Add an OpenAI API key in AskMate settings before asking a question.");
-		}
-
-		const model = request.metadata.selectedModel;
-
-		if (getModelCapability(model) !== "text") {
-			throw new Error("gpt-image-2 generates images and does not support AskMate text streaming.");
-		}
-
-		const reasoningEffort = request.metadata.reasoningEffort;
-		const instructions = this.buildTextInstructions();
-		const input = this.buildPrompt(request);
-		const startedAt = new Date();
-		let answer = "";
-		let usageRecorded = false;
-
-		try {
-			const response = await requestOpenAIResponses(this.getProviderRuntime(), {
-				apiKey,
-				model,
-				instructions,
-				input,
-				reasoningEffort,
-				abortSignal,
-			});
-			const body = response.body;
-
-			if (!response.ok) {
-				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
-				await this.recordOperationUsage({
-					request,
-					operationKind: "text_response",
-					endpoint: "responses",
-					status: "failed",
-					model,
-					instructions,
-					input,
-					responseText: "",
-					usage: body?.usage ?? null,
-					startedAt,
-					errorMessage: message
-				});
-				usageRecorded = true;
-				throw new Error(message);
-			}
-
-			answer = extractOpenAIText(body);
-
-			if (!answer) {
-				throw new Error("OpenAI returned a response, but no text output was found.");
-			}
-
-			onDelta(answer);
-			await this.recordOperationUsage({
-				request,
-				operationKind: "text_response",
-				endpoint: "responses",
-				status: "completed",
-				model,
-				instructions,
-				input,
-				responseText: answer,
-				usage: body?.usage ?? null,
-				startedAt
-			});
-			usageRecorded = true;
-			return answer.trim();
-		} catch (error) {
-			if (!usageRecorded) {
-				const status: OperationStatus = isAbortError(error) ? "aborted" : "failed";
-				await this.recordOperationUsage({
-					request,
-					operationKind: "text_response",
-					endpoint: "responses",
-					status,
-					model,
-					instructions,
-					input,
-					responseText: answer,
-					usage: null,
-					startedAt,
-					errorMessage: this.getErrorMessage(error)
-				});
-			}
-
-			throw error;
-		}
-	}
-
-	private async completeProviderText(
-		request: AskRequest,
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		operationKind: OperationKind,
-		abortSignal: AbortSignal | undefined,
-		onDelta: (delta: string) => void = () => undefined
-	): Promise<string> {
-		const startedAt = new Date();
-		let answer = "";
-		let usage: OpenAITokenUsage | null = null;
-		let endpoint: ApiEndpoint = "chat_completions";
-		let usageRecorded = false;
-
-		try {
-			const result = await completeProviderTextRequest(this.getProviderRuntime(), providerRef, instructions, input, abortSignal);
-			answer = result.text;
-			usage = result.usage;
-			endpoint = result.endpoint;
-
-			if (!answer.trim() && operationKind !== "image_prompt_planning") {
-				throw new Error(`${providerRef.providerName} returned a response, but no text output was found.`);
-			}
-
-			onDelta(answer);
-			if (operationKind !== "image_prompt_planning") {
-				await this.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind,
-					endpoint,
-					status: "completed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: answer,
-					usage,
-					startedAt
-				});
-				usageRecorded = true;
-			}
-			return answer.trim();
-		} catch (error) {
-			if (!usageRecorded) {
-				await this.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind,
-					endpoint,
-					status: isAbortError(error) ? "aborted" : "failed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: answer,
-					usage,
-					startedAt,
-					errorMessage: this.getErrorMessage(error)
-				});
-			}
-
-			throw error;
-		}
-	}
-
-	private async completeOpenAIPlanningText(
-		request: AskRequest,
-		providerRef: ProviderModelRef,
-		instructions: string,
-		input: string,
-		abortSignal?: AbortSignal
-	): Promise<string> {
-		const apiKey = await this.getOpenAiApiKey();
-
-		if (!apiKey) {
-			throw new Error("Add an OpenAI API key in AskMate settings before generating an image.");
-		}
-
-		const startedAt = new Date();
-		let usageRecorded = false;
-
-		try {
-			const response = await requestOpenAIResponses(this.getProviderRuntime(), {
-				apiKey,
-				model: providerRef.model,
-				instructions,
-				input,
-				reasoningEffort: request.metadata.reasoningEffort,
-				abortSignal,
-			});
-			const body = response.body;
-
-			if (!response.ok) {
-				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
-				await this.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind: "image_prompt_planning",
-					endpoint: "responses",
-					status: "failed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: "",
-					usage: body?.usage ?? null,
-					startedAt,
-					errorMessage: message
-				});
-				usageRecorded = true;
-				throw new Error(message);
-			}
-
-			return extractOpenAIText(body);
-		} catch (error) {
-			if (!usageRecorded) {
-				await this.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind: "image_prompt_planning",
-					endpoint: "responses",
-					status: isAbortError(error) ? "aborted" : "failed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: "",
-					usage: null,
-					startedAt,
-					errorMessage: this.getErrorMessage(error)
-				});
-			}
-
-			throw error;
-		}
+		return await this.requestRunner.streamOpenAI(request, onDelta, abortSignal);
 	}
 
 	async generateOpenAIImage(
@@ -967,252 +390,11 @@ export class AskMatePlugin extends Plugin {
 		abortSignal?: AbortSignal,
 		imagePromptPlan?: ImagePromptPlan
 	): Promise<ImageAskMateResult> {
-		const apiKey = await this.getOpenAiApiKey();
-
-		if (!apiKey) {
-			throw new Error("Add an OpenAI API key in AskMate settings before generating an image.");
-		}
-
-		const model = GPT_IMAGE_2_MODEL_ID;
-		const promptPlan = imagePromptPlan ?? {
-			prompt: this.buildImagePrompt(request),
-			planningModel: this.getImagePlanningModel(),
-			status: "fallback" as const,
-			fallbackReason: "Image prompt planning was not available."
-		};
-		const prompt = promptPlan.prompt.trim() || this.buildImagePrompt(request);
-		const startedAt = new Date();
-		let usageRecorded = false;
-
-		try {
-			const response = await requestOpenAIImageGeneration(this.getProviderRuntime(), {
-				apiKey,
-				model,
-				prompt,
-				abortSignal
-			});
-			const body = response.body;
-
-			if (!response.ok) {
-				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
-				await this.recordOperationUsage({
-					request,
-					providerId: "openai",
-					providerName: getProviderLabel("openai"),
-					operationKind: "image_generation",
-					endpoint: "images_generations",
-					status: "failed",
-					model,
-					instructions: "OpenAI Images API generation",
-					input: prompt,
-					responseText: "",
-					usage: null,
-					startedAt,
-					errorMessage: message
-				});
-				usageRecorded = true;
-				throw new Error(message);
-			}
-
-			const image = body?.data?.find((item) => typeof item.b64_json === "string" && item.b64_json.trim());
-			const base64 = image?.b64_json?.trim() ?? "";
-
-			if (!base64) {
-				throw new Error("OpenAI returned an image response, but no base64 image data was found.");
-			}
-
-			this.decodeBase64Image(base64);
-			await this.recordOperationUsage({
-				request,
-				providerId: "openai",
-				providerName: getProviderLabel("openai"),
-				operationKind: "image_generation",
-				endpoint: "images_generations",
-				status: "completed",
-				model,
-				instructions: "OpenAI Images API generation",
-				input: prompt,
-				responseText: image?.revised_prompt?.trim() ?? "",
-				usage: null,
-				startedAt
-			});
-			usageRecorded = true;
-
-			return {
-				kind: "image",
-				model,
-				promptPlan,
-				image: {
-					mimeType: IMAGE_MIME_TYPE,
-					base64,
-					prompt,
-					revisedPrompt: image?.revised_prompt?.trim() || null,
-					createdAt: new Date().toISOString(),
-					savedImagePath: null
-				}
-			};
-		} catch (error) {
-			if (!usageRecorded) {
-				await this.recordOperationUsage({
-					request,
-					providerId: "openai",
-					providerName: getProviderLabel("openai"),
-					operationKind: "image_generation",
-					endpoint: "images_generations",
-					status: isAbortError(error) ? "aborted" : "failed",
-					model,
-					instructions: "OpenAI Images API generation",
-					input: prompt,
-					responseText: "",
-					usage: null,
-					startedAt,
-					errorMessage: this.getErrorMessage(error)
-				});
-			}
-
-			throw error;
-		}
+		return await this.requestRunner.generateOpenAIImage(request, abortSignal, imagePromptPlan);
 	}
 
 	async prepareImagePrompt(request: AskRequest, abortSignal?: AbortSignal): Promise<ImagePromptPlan> {
-		const providerRef = this.getImagePlanningProviderRef();
-		const instructions = this.buildImagePromptPlanningInstructions();
-		const input = this.buildImagePromptPlanningInput(request);
-		const startedAt = new Date();
-		const endpoint: ApiEndpoint = getProviderTextEndpoint(providerRef.providerId);
-
-		try {
-			const plannedText = providerRef.providerId === "openai"
-				? await this.completeOpenAIPlanningText(request, providerRef, instructions, input, abortSignal)
-				: await this.completeProviderText(request, providerRef, instructions, input, "image_prompt_planning", abortSignal);
-			const extraction = this.extractPlannedImagePrompt(plannedText);
-			const prompt = extraction.prompt || this.buildImagePrompt(request);
-			const status: OperationStatus = extraction.prompt ? "completed" : "fallback";
-			await this.recordOperationUsage({
-				request,
-				providerId: providerRef.providerId,
-				providerName: providerRef.providerName,
-				operationKind: "image_prompt_planning",
-				endpoint,
-				status,
-				model: providerRef.model,
-				instructions,
-				input,
-				responseText: plannedText,
-				usage: null,
-				startedAt,
-				errorMessage: extraction.fallbackReason ?? ""
-			});
-
-			return {
-				prompt,
-				planningModel: `${providerRef.providerName}: ${providerRef.model}`,
-				status: extraction.prompt ? "completed" : "fallback",
-				fallbackReason: extraction.fallbackReason
-			};
-		} catch (error) {
-			if (isAbortError(error)) {
-				throw error;
-			}
-
-			console.warn("AskMate image prompt planning failed. Falling back to the direct image prompt.", error);
-			return {
-				prompt: this.buildImagePrompt(request),
-				planningModel: `${providerRef.providerName}: ${providerRef.model}`,
-				status: "fallback",
-				fallbackReason: this.getErrorMessage(error)
-			};
-		}
-	}
-
-	private buildImagePromptPlanningInput(request: AskRequest): string {
-		const sourcePath = request.context.file?.path ?? "Untitled or unsaved note";
-		const promptContext = this.getPromptContextContent(request);
-
-		return [
-			`Prompt version: ${request.metadata.promptVersion}`,
-			`Intent: ${formatRequestIntent(request.metadata.intentKind)}`,
-			`Workflow: ${request.metadata.workflowName ?? "None"}`,
-			`Source: ${sourcePath}`,
-			`Context type: ${request.context.source}`,
-			"",
-			"<note_context>",
-			promptContext,
-			"</note_context>",
-			"",
-			"<user_request>",
-			request.question,
-			"</user_request>"
-		].join("\n");
-	}
-
-	private extractPlannedImagePrompt(text: string): ImagePromptExtraction {
-		const value = text.trim();
-
-		if (!value) {
-			return {
-				prompt: "",
-				fallbackReason: "The planning response was empty."
-			};
-		}
-
-		const jsonMatch = value.match(/^```json\s*([\s\S]*?)```$/i) ?? value.match(/^```\s*([\s\S]*?)```$/i);
-		const candidate = jsonMatch?.[1]?.trim() ?? value;
-
-		try {
-			const parsed = JSON.parse(candidate) as { prompt?: unknown };
-			const prompt = typeof parsed.prompt === "string" ? normalizePlannedPrompt(parsed.prompt) : "";
-
-			if (!prompt) {
-				return {
-					prompt: "",
-					fallbackReason: "The planning JSON did not include a non-empty prompt string."
-				};
-			}
-
-			return {
-				prompt,
-				fallbackReason: null
-			};
-		} catch {
-			return {
-				prompt: "",
-				fallbackReason: "The planning response was not valid JSON."
-			};
-		}
-	}
-
-	private buildImagePrompt(request: AskRequest): string {
-		const sourcePath = request.context.file?.path ?? "Untitled or unsaved note";
-		const promptContext = this.getPromptContextContent(request);
-
-		return [
-			"Goal: Generate one image that satisfies the user request, using the note context as source material and inspiration.",
-			"",
-			"Success criteria:",
-			"- Match the user's visual request directly.",
-			"- Preserve source-backed names, dates, numbers, terminology, and visual constraints when they appear in the note context.",
-			"- Use generic visual placeholders when evidence is insufficient for exact real-world details.",
-			"- Make the image useful for an Obsidian note.",
-			"",
-			"Constraints: Do not invent logos, exact portraits, private details, metrics, dates, or product claims that are not present in the note context or user request.",
-			"",
-			"Output: Return only the generated image.",
-			"",
-			`Prompt version: ${request.metadata.promptVersion}`,
-			`Intent: ${formatRequestIntent(request.metadata.intentKind)}`,
-			`Workflow: ${request.metadata.workflowName ?? "None"}`,
-			`Source: ${sourcePath}`,
-			`Context type: ${request.context.source}`,
-			"",
-			"<note_context>",
-			promptContext,
-			"</note_context>",
-			"",
-			"<image_request>",
-			request.question,
-			"</image_request>"
-		].join("\n");
+		return await this.requestRunner.prepareImagePrompt(request, abortSignal);
 	}
 
 	async refreshOpenAIModels(): Promise<string[]> {
@@ -1333,7 +515,7 @@ export class AskMatePlugin extends Plugin {
 			currentDate: values.date ?? this.formatDate(now),
 			currentDateTime: values.dateTime ?? now.toISOString(),
 			customInstructions: this.settings.workflowCustomInstructions.trim(),
-			resultFolder: this.cleanFolderPath(this.settings.resultFolder)
+			resultFolder: cleanFolderPath(this.settings.resultFolder)
 		};
 	}
 
@@ -1481,6 +663,10 @@ export class AskMatePlugin extends Plugin {
 				throw new Error("AskMate could not find the original selection to place the image after. Select the text again, then insert the image.");
 			}
 
+			const targetLabel = file?.path ?? "the current note";
+			if (!(await askMateConfirm(this.app, `Insert the generated image into "${targetLabel}"?`))) {
+				return "Image insert cancelled. No note was changed.";
+			}
 			const imageFile = await this.saveGeneratedImage(request, result);
 			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
 
@@ -1491,16 +677,19 @@ export class AskMatePlugin extends Plugin {
 			}
 
 			this.rememberEditorContext(editor, file ?? null);
-			return `Inserted image in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
+			return `Inserted image in ${targetLabel}. Use Obsidian undo immediately if needed.`;
 		}
 
 		if (request.context.source === "Selected text") {
 			throw new Error("AskMate could not find the original selection to place the image after. Select the text again, then insert the image.");
 		}
 
-		const file = request.context.file ?? this.lastMarkdownFile;
+		const file = request.context.file ?? this.contextService.getLastMarkdownFile();
 
 		if (file?.extension === "md") {
+			if (!(await askMateConfirm(this.app, `Insert the generated image into "${file.path}"?`))) {
+				return "Image insert cancelled. No note was changed.";
+			}
 			const imageFile = await this.saveGeneratedImage(request, result);
 			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
 			const content = await this.app.vault.cachedRead(file);
@@ -1512,41 +701,6 @@ export class AskMatePlugin extends Plugin {
 		throw new Error("Open a Markdown note before inserting an image.");
 	}
 
-	private parseMarkdownHeadingSections(markdown: string): MarkdownHeadingSection[] {
-		const lines = markdown.split(/\r?\n/);
-		const sections: MarkdownHeadingSection[] = [];
-		const stack: MarkdownHeadingSection[] = [];
-
-		for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-			const match = lines[lineIndex].match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
-			if (!match) {
-				continue;
-			}
-
-			const level = match[1].length;
-			const title = match[2].trim();
-			while (stack.length > 0 && stack[stack.length - 1].level >= level) {
-				const completed = stack.pop();
-				if (completed) {
-					completed.endLineExclusive = lineIndex;
-				}
-			}
-
-			const path = [...stack.map((section) => section.title), title].join(" > ");
-			const section: MarkdownHeadingSection = {
-				level,
-				title,
-				path,
-				headingLine: lineIndex,
-				bodyStartLine: lineIndex + 1,
-				endLineExclusive: lines.length
-			};
-			sections.push(section);
-			stack.push(section);
-		}
-
-		return sections;
-	}
 
 	private async applyResponseToHeadingSection(request: AskRequest, output: string, headingPath: string): Promise<string> {
 		const target = headingPath.trim();
@@ -1565,7 +719,7 @@ export class AskMatePlugin extends Plugin {
 			throw new Error("Open the original Markdown note before applying to a heading.");
 		}
 
-		const sections = this.parseMarkdownHeadingSections(content);
+		const sections = parseMarkdownHeadingSections(content);
 		const matches = sections.filter((section) => section.path === target || section.title === target);
 
 		if (matches.length === 0) {
@@ -1593,6 +747,9 @@ export class AskMatePlugin extends Plugin {
 			return "Apply cancelled. No note was changed.";
 		}
 
+		const latestContent = targetView ? targetView.editor.getValue() : await this.app.vault.cachedRead(file);
+		this.throwIfNoteChangedDuringPreview(content, latestContent, file.path);
+
 		const replacementLines = output.split(/\r?\n/);
 		const nextLines = [
 			...lines.slice(0, section.bodyStartLine),
@@ -1612,17 +769,12 @@ export class AskMatePlugin extends Plugin {
 		return `Applied to heading "${section.path}" in ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 	}
 
-	private appendMarkdownBlockToContent(existing: string, block: string): string {
-		const cleanBlock = block.trim();
-		const newline = existing.includes("\r\n") ? "\r\n" : "\n";
-
-		if (!existing) {
-			return `${cleanBlock}${newline}`;
+	private throwIfNoteChangedDuringPreview(expected: string, actual: string, targetLabel: string): void {
+		if (expected !== actual) {
+			throw new Error(
+				`Note "${targetLabel}" changed while the Apply preview was open. AskMate cancelled the write to avoid overwriting concurrent edits. Try Apply again.`
+			);
 		}
-
-		const trailingLineBreaks = existing.match(/(?:\r\n|\n|\r)+$/u)?.[0].match(/\r\n|\n|\r/gu)?.length ?? 0;
-		const separator = trailingLineBreaks >= 2 ? "" : trailingLineBreaks === 1 ? newline : `${newline}${newline}`;
-		return `${existing}${separator}${cleanBlock}${newline}`;
 	}
 
 	private async appendResponseToCapturedNote(request: AskRequest, output: string, targetView: MarkdownView | null, file: TFile | null): Promise<string> {
@@ -1630,7 +782,7 @@ export class AskMatePlugin extends Plugin {
 			const editor = targetView.editor;
 			const targetLabel = file?.path ?? "the current note";
 			const before = editor.getValue();
-			const after = this.appendMarkdownBlockToContent(before, output);
+			const after = appendMarkdownBlockToContent(before, output);
 
 			if (!(await this.confirmTextApplyPreview({
 				scope: "append",
@@ -1641,14 +793,17 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			editor.setValue(after);
+			// Recompute against the latest note body so concurrent edits are not clobbered.
+			const latest = editor.getValue();
+			const next = latest === before ? after : appendMarkdownBlockToContent(latest, output);
+			editor.setValue(next);
 			this.rememberEditorContext(editor, file);
 			return `Appended to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
 		}
 
 		if (file?.extension === "md") {
 			const content = await this.app.vault.cachedRead(file);
-			const after = this.appendMarkdownBlockToContent(content, output);
+			const after = appendMarkdownBlockToContent(content, output);
 
 			if (!(await this.confirmTextApplyPreview({
 				scope: "append",
@@ -1659,7 +814,9 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			await this.app.vault.modify(file, after);
+			const latest = await this.app.vault.cachedRead(file);
+			const next = latest === content ? after : appendMarkdownBlockToContent(latest, output);
+			await this.app.vault.modify(file, next);
 			this.rememberMarkdownFile(file);
 			return `Appended to ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 		}
@@ -1710,6 +867,9 @@ export class AskMatePlugin extends Plugin {
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
+					if (editor.getSelection().trim() !== originalText) {
+						throw new Error("Selection changed while the Apply preview was open. Select the text again, then apply.");
+					}
 					editor.replaceSelection(output);
 					this.rememberEditorContext(editor, file);
 					return `Applied to selected text in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
@@ -1728,10 +888,16 @@ export class AskMatePlugin extends Plugin {
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
+					const latestValue = editor.getValue();
+					const latestOccurrences = findExactOccurrences(latestValue, originalText);
+					if (latestOccurrences.length !== 1) {
+						throw new Error("Note changed while the Apply preview was open. Select the text again, then apply.");
+					}
+					const latestStart = latestOccurrences[0];
 					editor.replaceRange(
 						output,
-						offsetToEditorPosition(value, start),
-						offsetToEditorPosition(value, start + originalText.length)
+						offsetToEditorPosition(latestValue, latestStart),
+						offsetToEditorPosition(latestValue, latestStart + originalText.length)
 					);
 					this.rememberEditorContext(editor, file);
 					return `Applied to selected text in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
@@ -1754,7 +920,13 @@ export class AskMatePlugin extends Plugin {
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
-					await this.app.vault.modify(file, `${content.slice(0, start)}${output}${content.slice(start + originalText.length)}`);
+					const latest = await this.app.vault.cachedRead(file);
+					const latestOccurrences = findExactOccurrences(latest, originalText);
+					if (latestOccurrences.length !== 1) {
+						throw new Error("Note changed while the Apply preview was open. Select the text again, then apply.");
+					}
+					const latestStart = latestOccurrences[0];
+					await this.app.vault.modify(file, `${latest.slice(0, latestStart)}${output}${latest.slice(latestStart + originalText.length)}`);
 					this.rememberMarkdownFile(file);
 					return `Applied to selected text in ${file.path}. Use Obsidian undo immediately if needed.`;
 				}
@@ -1791,6 +963,7 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
+			this.throwIfNoteChangedDuringPreview(before, editor.getValue(), targetLabel);
 			editor.setValue(prepared.text);
 			this.rememberEditorContext(editor, file);
 			return `Applied to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
@@ -1817,6 +990,8 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
+			const latest = await this.app.vault.cachedRead(file);
+			this.throwIfNoteChangedDuringPreview(content, latest, file.path);
 			await this.app.vault.modify(file, prepared.text);
 			this.rememberMarkdownFile(file);
 			return `Applied to ${file.path}. Use Obsidian undo or file history immediately if needed.`;
@@ -1887,28 +1062,10 @@ export class AskMatePlugin extends Plugin {
 	}
 
 
-	private splitMarkdownFrontmatter(markdown: string): FrontmatterBlock {
-		const lines = markdown.split(/\r?\n/);
-		if (lines[0]?.trim() !== "---") {
-			return { exists: false, malformed: false, frontmatter: "", body: markdown, endLineExclusive: 0 };
-		}
-		for (let index = 1; index < lines.length; index += 1) {
-			if (lines[index].trim() === "---") {
-				return {
-					exists: true,
-					malformed: false,
-					frontmatter: lines.slice(0, index + 1).join("\n"),
-					body: lines.slice(index + 1).join("\n").replace(/^\n+/, ""),
-					endLineExclusive: index + 1
-				};
-			}
-		}
-		return { exists: true, malformed: true, frontmatter: markdown, body: "", endLineExclusive: lines.length };
-	}
 
 	private async prepareFrontmatterAwareApply(before: string, proposed: string): Promise<FrontmatterApplyResult> {
-		const beforeBlock = this.splitMarkdownFrontmatter(before);
-		const proposedBlock = this.splitMarkdownFrontmatter(proposed);
+		const beforeBlock = splitMarkdownFrontmatter(before);
+		const proposedBlock = splitMarkdownFrontmatter(proposed);
 		if (!beforeBlock.exists && !proposedBlock.exists) {
 			return { text: proposed, warning: "", cancelled: false };
 		}
@@ -1943,9 +1100,9 @@ export class AskMatePlugin extends Plugin {
 
 	buildPromptInspectionForRequest(request: AskRequest): PromptInspection {
 		const shouldGenerateImage = request.metadata.forceImage || request.metadata.autoImage || request.metadata.modelCapability === "image";
-		const instructions = shouldGenerateImage ? this.buildImagePromptPlanningInstructions() : this.buildTextInstructions();
-		const input = shouldGenerateImage ? this.buildImagePromptPlanningInput(request) : this.buildPrompt(request);
-		const secondaryInput = shouldGenerateImage ? this.buildImagePrompt(request) : "";
+		const instructions = shouldGenerateImage ? buildImagePromptPlanningInstructions() : buildTextInstructions();
+		const input = shouldGenerateImage ? buildImagePromptPlanningInput(request) : buildPrompt(request);
+		const secondaryInput = shouldGenerateImage ? buildImagePrompt(request) : "";
 		const estimatedInputTokens = estimateTokenCount([instructions, input, secondaryInput].filter(Boolean).join("\n\n"));
 		return {
 			request,
@@ -1965,52 +1122,9 @@ export class AskMatePlugin extends Plugin {
 		return this.buildPromptInspectionForRequest(request);
 	}
 
-	private buildImagePromptPlanningInstructions(): string {
-		return [
-			"Role: You prepare high-quality prompts for an image generation model inside Obsidian.",
-			"",
-			"Goal: Analyze the user request and note context, then produce one concise image prompt suitable for gpt-image-2.",
-			"",
-			"Success criteria: Preserve source-backed details, infer a clear visual composition, specify style only when helpful, and avoid unsupported exact claims, logos, private details, dates, numbers, or identities.",
-			"",
-			"Constraints: Treat the note context and user request as source material. Do not answer the user in prose. Do not include Markdown. If the request is sparse, create a useful visual direction from the note context.",
-			"",
-			"Output: Return JSON only with this shape: {\"prompt\":\"...\"}. Stop after the JSON object."
-		].join("\n");
-	}
-
 	evaluateUsageGuardrails(request: AskRequest, estimatedInputTokens?: number): UsageGuardrailResult {
 		const estimate = estimatedInputTokens ?? this.buildPromptInspectionForRequest(request).estimatedInputTokens;
-		const now = new Date();
-		const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-		const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-		const dayUsedTokens = this.getUsageTokensSince(dayStart);
-		const monthUsedTokens = this.getUsageTokensSince(monthStart);
-		const warnings: string[] = [];
-		const blockers: string[] = [];
-		if (!this.settings.usageGuardrailsEnabled) {
-			return { estimatedInputTokens: estimate, dayUsedTokens, monthUsedTokens, warnings, blockers };
-		}
-		if (this.settings.usagePerRequestWarningTokens > 0 && estimate >= this.settings.usagePerRequestWarningTokens) {
-			warnings.push(`This request is estimated at ${formatTokenCount(estimate)} input tokens.`);
-		}
-		if (this.settings.usagePerRequestHardLimitTokens > 0 && estimate >= this.settings.usagePerRequestHardLimitTokens) {
-			blockers.push(`Request estimate exceeds the hard limit of ${formatTokenCount(this.settings.usagePerRequestHardLimitTokens)} tokens.`);
-		}
-		const addBudgetMessage = (label: string, used: number, budget: number): void => {
-			if (budget <= 0 || used + estimate <= budget) {
-				return;
-			}
-			const message = `${label} budget would exceed ${formatTokenCount(budget)} tokens. Used: ${formatTokenCount(used)}, estimate: ${formatTokenCount(estimate)}.`;
-			if (this.settings.usageBudgetEnforcement === "block") {
-				blockers.push(message);
-			} else {
-				warnings.push(message);
-			}
-		};
-		addBudgetMessage("Daily", dayUsedTokens, this.settings.usageDailyTokenBudget);
-		addBudgetMessage("Monthly", monthUsedTokens, this.settings.usageMonthlyTokenBudget);
-		return { estimatedInputTokens: estimate, dayUsedTokens, monthUsedTokens, warnings, blockers };
+		return this.usageService.evaluateUsageGuardrails(request, estimate);
 	}
 
 	async confirmUsageGuardrails(request: AskRequest): Promise<void> {
@@ -2022,13 +1136,6 @@ export class AskMatePlugin extends Plugin {
 		if (guardrails.warnings.length > 0 && !(await askMateConfirm(this.app, `${guardrails.warnings.join("\n\n")}\n\nContinue with this AskMate request?`))) {
 			throw new Error("AskMate request cancelled by usage guardrails.");
 		}
-	}
-
-	private getUsageTokensSince(startIso: string): number {
-		const startMs = Date.parse(startIso);
-		return this.getTokenUsageRecords()
-			.filter((record) => Date.parse(record.timestamp) >= startMs)
-			.reduce((sum, record) => sum + record.totalTokens, 0);
 	}
 
 	extractEvidenceCitations(responseText: string, sources: EvidenceSource[]): EvidenceCitation[] {
@@ -2069,77 +1176,23 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	async recordNoteHistoryTurn(request: AskRequest, answer: string, model: string): Promise<void> {
-		if (!this.settings.noteHistoryEnabled || !request.context.file?.path) {
-			return;
-		}
-		const turn: NoteHistoryTurn = {
-			id: `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-			sourcePath: request.context.file.path,
-			createdAt: new Date().toISOString(),
-			title: request.title,
-			question: request.question.slice(0, MAX_NOTE_HISTORY_QUESTION_CHARACTERS),
-			answer: answer.slice(0, MAX_NOTE_HISTORY_ANSWER_CHARACTERS),
-			providerName: request.metadata.providerName,
-			model,
-			outputMode: request.metadata.outputMode,
-			intentKind: request.metadata.intentKind
-		};
-		const existing = normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((item) => item.sourcePath !== turn.sourcePath);
-		const forNote = this.getNoteHistoryForPath(turn.sourcePath).concat(turn).slice(-this.settings.noteHistoryMaxTurnsPerNote);
-		this.settings.noteHistoryStore = { turns: [...existing, ...forNote].slice(-MAX_NOTE_HISTORY_TURNS) };
-		await this.saveSettings();
+		await this.historyService.recordNoteHistoryTurn(request, answer, model);
 	}
 
 	getNoteHistoryForPath(sourcePath: string): NoteHistoryTurn[] {
-		if (!sourcePath) {
-			return [];
-		}
-		return normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((turn) => turn.sourcePath === sourcePath);
+		return this.historyService.getNoteHistoryForPath(sourcePath);
 	}
 
 	async clearNoteHistoryForPath(sourcePath: string): Promise<void> {
-		this.settings.noteHistoryStore = {
-			turns: normalizeNoteHistoryStore(this.settings.noteHistoryStore).turns.filter((turn) => turn.sourcePath !== sourcePath)
-		};
-		await this.saveSettings();
+		await this.historyService.clearNoteHistoryForPath(sourcePath);
 	}
 
 	async queueReviewItemFromRequest(request: AskRequest, proposedText: string, model: string, scope: ApplyScope = "auto"): Promise<ReviewQueueItem> {
-		const file = request.context.file;
-		if (!file || file.extension !== "md") {
-			throw new Error("Review queue requires a source Markdown note.");
-		}
-		const normalizedScope = scope === "auto" ? request.context.source === "Selected text" ? "selected-block" : "full-note" : normalizeApplyScope(scope);
-		const currentContent = await this.app.vault.cachedRead(file);
-		const beforeText = normalizedScope === "selected-block" ? request.context.content : currentContent;
-		if (proposedText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS || beforeText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS) {
-			throw new Error("Review queue item is too large. Apply it directly or reduce the output size.");
-		}
-		const now = new Date().toISOString();
-		const item: ReviewQueueItem = {
-			id: `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-			createdAt: now,
-			updatedAt: now,
-			status: "pending",
-			sourcePath: file.path,
-			title: request.title,
-			question: request.question.slice(0, 2000),
-			proposedText: proposedText.trim(),
-			beforeText,
-			scope: normalizedScope,
-			headingPath: normalizedScope === "heading-section" ? request.context.activeHeadingPath ?? "" : "",
-			providerName: request.metadata.providerName,
-			model,
-			workflowId: request.metadata.workflowId,
-			workflowName: request.metadata.workflowName
-		};
-		this.settings.reviewQueue = normalizeReviewQueueItems([...this.settings.reviewQueue, item], this.settings.reviewQueueMaxItems);
-		await this.saveSettings();
-		return item;
+		return await this.historyService.queueReviewItemFromRequest(request, proposedText, model, scope);
 	}
 
 	getPendingReviewQueueItems(): ReviewQueueItem[] {
-		return normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).filter((item) => item.status === "pending");
+		return this.historyService.getPendingReviewQueueItems();
 	}
 
 	async applyReviewQueueItem(id: string): Promise<string> {
@@ -2154,6 +1207,7 @@ export class AskMatePlugin extends Plugin {
 		}
 		const content = await this.app.vault.cachedRead(file);
 		let nextContent = content;
+		let previewScope: "selected-text" | "append" | "heading-section" | "full-note" = "full-note";
 		if (item.scope === "selected-block") {
 			const occurrences = findExactOccurrences(content, item.beforeText);
 			if (occurrences.length !== 1) {
@@ -2161,6 +1215,11 @@ export class AskMatePlugin extends Plugin {
 			}
 			const start = occurrences[0];
 			nextContent = `${content.slice(0, start)}${item.proposedText}${content.slice(start + item.beforeText.length)}`;
+			previewScope = "selected-text";
+		} else if (item.scope === "append") {
+			// Append is non-destructive: recompute against the latest note body.
+			nextContent = appendMarkdownBlockToContent(content, item.proposedText);
+			previewScope = "append";
 		} else {
 			if (content !== item.beforeText) {
 				throw new Error("The source note changed since this review item was queued. Re-run or requeue the suggestion before applying it.");
@@ -2170,9 +1229,23 @@ export class AskMatePlugin extends Plugin {
 				return "Review item apply cancelled. No note was changed.";
 			}
 			nextContent = prepared.text;
+			previewScope = item.scope === "heading-section" ? "heading-section" : "full-note";
 		}
-		if (!(await this.confirmTextApplyPreview({ scope: item.scope === "selected-block" ? "selected-text" : "full-note", targetLabel: file.path, before: content, after: nextContent }))) {
+		if (!(await this.confirmTextApplyPreview({ scope: previewScope, targetLabel: file.path, before: content, after: nextContent }))) {
 			return "Review item apply cancelled. No note was changed.";
+		}
+		const latest = await this.app.vault.cachedRead(file);
+		if (item.scope === "append") {
+			nextContent = appendMarkdownBlockToContent(latest, item.proposedText);
+		} else if (item.scope === "selected-block") {
+			const latestOccurrences = findExactOccurrences(latest, item.beforeText);
+			if (latestOccurrences.length !== 1) {
+				throw new Error("Note changed while the Apply preview was open. Re-queue or select the text again.");
+			}
+			const latestStart = latestOccurrences[0];
+			nextContent = `${latest.slice(0, latestStart)}${item.proposedText}${latest.slice(latestStart + item.beforeText.length)}`;
+		} else {
+			this.throwIfNoteChangedDuringPreview(content, latest, file.path);
 		}
 		await this.app.vault.modify(file, nextContent);
 		item.status = "applied";
@@ -2183,16 +1256,15 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	async dismissReviewQueueItem(id: string): Promise<void> {
-		this.settings.reviewQueue = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).map((item) => item.id === id ? { ...item, status: "dismissed", updatedAt: new Date().toISOString() } : item);
-		await this.saveSettings();
+		await this.historyService.dismissReviewQueueItem(id);
 	}
 
 	private getResultNoteFolder(request: AskRequest): string {
 		if (this.settings.smartResultPlacementEnabled && request.context.file?.parent?.path) {
 			const parentPath = request.context.file.parent.path === "/" ? "" : request.context.file.parent.path;
-			return this.cleanFolderPath(parentPath ? `${parentPath}/AskMate` : "AskMate");
+			return cleanFolderPath(parentPath ? `${parentPath}/AskMate` : "AskMate");
 		}
-		return this.cleanFolderPath(this.settings.resultFolder);
+		return cleanFolderPath(this.settings.resultFolder);
 	}
 
 	private async maybeAppendResultBacklinkToSource(request: AskRequest, resultFile: TFile): Promise<void> {
@@ -2212,60 +1284,8 @@ export class AskMatePlugin extends Plugin {
 		await this.app.vault.modify(sourceFile, next);
 	}
 
-	private isVisibleMarkdownPath(path: string): boolean {
-		return path.endsWith(".md")
-			&& !path.startsWith(`${this.app.vault.configDir}/`)
-			&& !path.startsWith(".trash/")
-			&& !path.includes("/.");
-	}
-
-	private async listMarkdownFilesInFolder(folderPath: string, maxFiles: number, excludePath = ""): Promise<TFile[]> {
-		const folder = this.cleanFolderPath(folderPath);
-		if (!folder) {
-			return [];
-		}
-
-		const limit = normalizeBoundedInteger(maxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
-		const paths: string[] = [];
-
-		const visit = async (currentFolder: string): Promise<void> => {
-			if (paths.length >= limit) {
-				return;
-			}
-
-			let listed: { files: string[]; folders: string[] };
-			try {
-				listed = await this.app.vault.adapter.list(currentFolder);
-			} catch {
-				return;
-			}
-
-			for (const path of listed.files.slice().sort((a, b) => a.localeCompare(b))) {
-				const normalizedPath = normalizePath(path);
-				if (paths.length >= limit) {
-					return;
-				}
-				if (normalizedPath !== excludePath && this.isVisibleMarkdownPath(normalizedPath)) {
-					paths.push(normalizedPath);
-				}
-			}
-
-			for (const path of listed.folders.slice().sort((a, b) => a.localeCompare(b))) {
-				await visit(normalizePath(path));
-				if (paths.length >= limit) {
-					return;
-				}
-			}
-		};
-
-		await visit(folder);
-		return paths
-			.map((path) => this.app.vault.getAbstractFileByPath(path))
-			.filter((file): file is TFile => file instanceof TFile && file.extension === "md");
-	}
-
 	async getBatchWorkflowTargetFiles(folderPath: string, maxFiles: number): Promise<TFile[]> {
-		return await this.listMarkdownFilesInFolder(folderPath, maxFiles);
+		return await this.contextService.listMarkdownFilesInFolder(folderPath, maxFiles);
 	}
 
 	async runBatchWorkflow(
@@ -2680,6 +1700,7 @@ export class AskMatePlugin extends Plugin {
 			}
 		];
 		await this.saveSettings();
+		this.registerCustomWorkflowCommands();
 		this.refreshOpenAskMateViews();
 	}
 
@@ -2699,17 +1720,45 @@ export class AskMatePlugin extends Plugin {
 			};
 		}));
 		await this.saveSettings();
+		this.registerCustomWorkflowCommands();
 		this.refreshOpenAskMateViews();
 	}
 
 	async deleteCustomWorkflow(id: string): Promise<void> {
 		this.settings.customWorkflows = this.settings.customWorkflows.filter((workflow) => workflow.id !== id);
 		await this.saveSettings();
+		this.registerCustomWorkflowCommands();
 		this.refreshOpenAskMateViews();
 	}
 
 	getSidebarWorkflowOrderForSettings(): Workflow[] {
 		return this.sortWorkflowsForSidebar(this.getAllWorkflows());
+	}
+
+
+	private registeredCustomWorkflowCommandIds = new Set<string>();
+
+	private registerCustomWorkflowCommands(): void {
+		// Obsidian has no removeCommand API; only register each custom id once per session.
+		for (const workflow of this.getAllWorkflows()) {
+			if (!workflow.isCustom || this.registeredCustomWorkflowCommandIds.has(workflow.commandId)) {
+				continue;
+			}
+			this.registeredCustomWorkflowCommandIds.add(workflow.commandId);
+			const workflowId = workflow.id;
+			this.addCommand({
+				id: workflow.commandId,
+				name: workflow.name,
+				editorCallback: async (editor, ctx) => {
+					const current = this.getAllWorkflows().find((item) => item.id === workflowId);
+					if (!current) {
+						new Notice("That custom workflow no longer exists.");
+						return;
+					}
+					await this.runWorkflowFromCommand(current, editor, ctx.file ?? null);
+				}
+			});
+		}
 	}
 
 	refreshOpenAskMateViews(): void {
@@ -2720,675 +1769,11 @@ export class AskMatePlugin extends Plugin {
 		}
 	}
 
-	private async buildContextAttachments(
-		context: NoteContext,
-		options: BuildRequestOptions,
-		privacy: RequestPrivacyOptions
-	): Promise<ContextAttachment[]> {
-		const attachments: ContextAttachment[] = [];
-
-		if (options.includeThreadHistory && options.threadMessages?.length) {
-			const thread = this.buildThreadHistoryAttachment(options.threadMessages, this.settings.threadedChatMaxTurns);
-			if (thread) {
-				attachments.push(thread);
-			}
-		}
-
-		const noteHistory = this.buildNoteHistoryAttachment(context.file?.path ?? "");
-		if (noteHistory) {
-			attachments.push(noteHistory);
-		}
-
-		const additionalPaths = options.additionalContextPaths ?? this.settings.additionalContextPaths;
-		attachments.push(...await this.buildAdditionalNoteAttachments(
-			additionalPaths,
-			context.file?.path ?? "",
-			this.settings.additionalContextMaxCharacters
-		));
-
-		const folderContext = options.folderContext ?? {
-			enabled: this.settings.folderContextEnabled,
-			path: this.settings.folderContextPath,
-			maxFiles: this.settings.folderContextMaxFiles,
-			maxCharacters: this.settings.folderContextMaxCharacters
-		};
-		attachments.push(...await this.buildFolderContextAttachments(folderContext, context.file?.path ?? ""));
-
-		const styleGuide = this.settings.includeStyleGuideContext
-			? await this.buildRoleContextAttachment("style_guide", this.settings.styleGuideContextPath, context.file?.path ?? "", this.settings.styleGuideMaxCharacters)
-			: null;
-		if (styleGuide) {
-			attachments.push(styleGuide);
-		}
-		const glossary = this.settings.includeGlossaryContext
-			? await this.buildRoleContextAttachment("glossary", this.settings.glossaryContextPath, context.file?.path ?? "", this.settings.glossaryMaxCharacters)
-			: null;
-		if (glossary) {
-			attachments.push(glossary);
-		}
-
-		if (this.settings.includeExcalidrawSummaries) {
-			attachments.push(...await this.buildExcalidrawSummaryAttachments(context));
-		}
-
-		if (privacy.includeImageReferences && this.settings.includeImageManifests) {
-			attachments.push(...this.buildImageManifestAttachments(context));
-		}
-
-		return attachments;
-	}
-
-	private buildThreadHistoryAttachment(messages: ChatMessage[], maxTurns: number): ContextAttachment | null {
-		const maxMessages = Math.max(2, maxTurns * 2);
-		const history = messages
-			.filter((message) => (message.role === "user" || message.role === "assistant") && message.text.trim())
-			.slice(-maxMessages);
-
-		if (history.length === 0) {
-			return null;
-		}
-
-		const content = [
-			"Chat history included by AskMate threaded mode.",
-			"Use this only to clarify follow-up requests. Keep factual claims grounded in the note and attached context.",
-			"",
-			...history.map((message) => `${message.role === "user" ? "User" : "AskMate"}: ${message.text.trim()}`)
-		].join("\n");
-		return this.createContextAttachment("thread_history", "Threaded chat history", "AskMate chat", content, content.length);
-	}
-
-	private buildNoteHistoryAttachment(sourcePath: string): ContextAttachment | null {
-		if (!this.settings.noteHistoryEnabled || !this.settings.noteHistoryIncludeInContext || !sourcePath) {
-			return null;
-		}
-		const turns = this.getNoteHistoryForPath(sourcePath).slice(-this.settings.noteHistoryMaxTurnsPerNote);
-		if (turns.length === 0) {
-			return null;
-		}
-		const content = [
-			"Prior AskMate history for this same note. Use it as conversation memory, not as primary factual evidence.",
-			"",
-			...turns.map((turn) => [`User: ${turn.question}`, `AskMate: ${turn.answer}`].join("\n"))
-		].join("\n\n");
-		return this.createContextAttachment("note_history", "AskMate note history", sourcePath, content, content.length);
-	}
-
-	private async buildRoleContextAttachment(
-		kind: "style_guide" | "glossary",
-		path: string,
-		sourcePath: string,
-		maxCharacters: number
-	): Promise<ContextAttachment | null> {
-		const file = this.resolveMarkdownPath(path, sourcePath);
-		if (!file) {
-			return null;
-		}
-		const raw = (await this.app.vault.cachedRead(file)).trim();
-		if (!raw) {
-			return null;
-		}
-		const limit = normalizeBoundedInteger(maxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
-		const role = kind === "style_guide" ? "Style guide" : "Glossary";
-		const guidance = kind === "style_guide"
-			? "Use this attachment for tone, formatting, naming, and writing conventions."
-			: "Use this attachment for domain terms, aliases, acronyms, and definitions.";
-		const content = [`${role} role context. ${guidance}`, "", raw.slice(0, limit)].join("\n");
-		return this.createContextAttachment(kind, `${role}: ${file.path}`, file.path, content, raw.length);
-	}
-
-	private createContextAttachment(
-		kind: ContextAttachmentKind,
-		title: string,
-		sourcePath: string,
-		content: string,
-		originalCharacters = content.length
-	): ContextAttachment {
-		const normalized = content.trim();
-		return {
-			kind,
-			title,
-			sourcePath,
-			content: normalized,
-			originalCharacters,
-			finalCharacters: normalized.length,
-			truncated: normalized.length < originalCharacters
-		};
-	}
-
-	private async buildAdditionalNoteAttachments(paths: string[], sourcePath: string, maxCharacters: number): Promise<ContextAttachment[]> {
-		const attachments: ContextAttachment[] = [];
-		let remaining = maxCharacters;
-
-		for (const path of normalizeContextPathList(paths)) {
-			if (remaining <= 0) {
-				break;
-			}
-
-			const file = this.resolveMarkdownPath(path, sourcePath);
-			if (!file || file.path === sourcePath) {
-				continue;
-			}
-
-			const raw = (await this.app.vault.cachedRead(file)).trim();
-			const content = raw.slice(0, remaining);
-			remaining -= content.length;
-			attachments.push(this.createContextAttachment(
-				"additional_note",
-				`Additional note: ${file.path}`,
-				file.path,
-				content,
-				raw.length
-			));
-		}
-
-		return attachments;
-	}
-
-	private async buildFolderContextAttachments(options: FolderContextOptions, excludePath: string): Promise<ContextAttachment[]> {
-		if (!options.enabled || !options.path.trim()) {
-			return [];
-		}
-
-		const folder = this.cleanFolderPath(options.path);
-		if (!folder) {
-			return [];
-		}
-
-		const maxFiles = normalizeBoundedInteger(options.maxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
-		let remaining = normalizeBoundedInteger(options.maxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
-		const attachments: ContextAttachment[] = [];
-		const files = await this.listMarkdownFilesInFolder(folder, maxFiles, excludePath);
-
-		for (const file of files) {
-			if (attachments.length >= maxFiles || remaining <= 0) {
-				break;
-			}
-
-			const raw = (await this.app.vault.cachedRead(file)).trim();
-			const content = raw.slice(0, remaining);
-			remaining -= content.length;
-			attachments.push(this.createContextAttachment(
-				"folder_note",
-				`Folder note ${attachments.length + 1}: ${file.path}`,
-				file.path,
-				content,
-				raw.length
-			));
-		}
-
-		return attachments;
-	}
-
-	private resolveMarkdownPath(path: string, sourcePath: string): TFile | null {
-		const cleanPath = normalizeContextPathList([path])[0] ?? "";
-		if (!cleanPath) {
-			return null;
-		}
-
-		const direct = this.app.vault.getAbstractFileByPath(cleanPath);
-		if (direct instanceof TFile && direct.extension === "md") {
-			return direct;
-		}
-
-		const linked = this.app.metadataCache.getFirstLinkpathDest(cleanPath, sourcePath);
-		return linked?.extension === "md" ? linked : null;
-	}
-
-	private async buildExcalidrawSummaryAttachments(context: NoteContext): Promise<ContextAttachment[]> {
-		const sourcePath = context.file?.path ?? "";
-		const files = new Map<string, TFile>();
-
-		if (context.file && this.isExcalidrawPath(context.file.path)) {
-			files.set(context.file.path, context.file);
-		}
-
-		for (const reference of this.extractLinkedReferences(context.content)) {
-			const file = this.app.metadataCache.getFirstLinkpathDest(reference, sourcePath);
-			if (file instanceof TFile && this.isExcalidrawPath(file.path)) {
-				files.set(file.path, file);
-			}
-		}
-
-		const attachments: ContextAttachment[] = [];
-		for (const file of files.values()) {
-			const raw = await this.app.vault.cachedRead(file);
-			const summary = this.extractExcalidrawSummary(raw, file.path);
-			if (!summary.trim()) {
-				continue;
-			}
-			attachments.push(this.createContextAttachment(
-				"excalidraw_summary",
-				`Excalidraw summary: ${file.path}`,
-				file.path,
-				summary,
-				raw.length
-			));
-		}
-
-		return attachments;
-	}
-
-	private extractExcalidrawSummary(raw: string, sourcePath: string): string {
-		const lines = new Set<string>();
-		const addLine = (value: unknown): void => {
-			if (typeof value !== "string") {
-				return;
-			}
-			const clean = value.replace(/\s+/g, " ").trim();
-			if (clean) {
-				lines.add(clean);
-			}
-		};
-
-		try {
-			const parsed = JSON.parse(raw) as { elements?: Array<{ type?: unknown; text?: unknown }> };
-			for (const element of parsed.elements ?? []) {
-				if (element?.type === "text") {
-					addLine(element.text);
-				}
-			}
-		} catch {
-			for (const match of raw.matchAll(/"text"\s*:\s*"([^"]+)"/g)) {
-				addLine(match[1].replace(/\\"/g, "\""));
-			}
-		}
-
-		for (const match of raw.matchAll(/!\[\[([^\]]+)\]\]|\[\[([^\]]+)\]\]/g)) {
-			addLine(match[1] ?? match[2]);
-		}
-
-		const body = Array.from(lines).slice(0, 80).join("\n");
-		const content = [
-			`Excalidraw text extraction for ${sourcePath}.`,
-			"This is not pixel-level visual analysis. It includes readable drawing text, labels, and embedded references when available.",
-			"",
-			body || "No readable text elements were found."
-		].join("\n");
-		return content.slice(0, this.settings.excalidrawSummaryMaxCharacters).trim();
-	}
-
-	private isExcalidrawPath(path: string): boolean {
-		const clean = path.toLowerCase();
-		return clean.endsWith(".excalidraw.md") || clean.endsWith(".excalidraw") || clean.endsWith(".excalidraw.json");
-	}
-
-	private buildImageManifestAttachments(context: NoteContext): ContextAttachment[] {
-		const references = this.extractImageReferenceInfos(context.content);
-		if (references.length === 0) {
-			return [];
-		}
-
-		const sourcePath = context.file?.path ?? "";
-		const lines = [
-			"Image manifest only. AskMate did not send image pixels to the text provider.",
-			"Use paths, labels, captions, and surrounding note text only. Do not claim visual details that are not present in metadata or note context.",
-			""
-		];
-
-		for (const reference of references.slice(0, MAX_CONTEXT_IMAGE_PREVIEWS * 3)) {
-			const clean = reference.target;
-			const file = this.app.metadataCache.getFirstLinkpathDest(clean, sourcePath);
-			if (file instanceof TFile && IMAGE_FILE_EXTENSIONS.has(file.extension.toLowerCase())) {
-				lines.push(`- Local image: ${file.path} (${file.extension}, ${formatTokenCount(file.stat.size)} bytes)`);
-			} else {
-				lines.push(`- Image reference: ${clean}`);
-			}
-			if (reference.label) {
-				lines.push(`  - Label or alt text: ${reference.label}`);
-			}
-			if (reference.line) {
-				lines.push(`  - Reference line: ${reference.line}`);
-			}
-		}
-
-		const content = lines.join("\n");
-		return [this.createContextAttachment("image_manifest", "Image reference manifest", sourcePath, content, content.length)];
-	}
-
-	private extractImageReferenceInfos(markdown: string): ImageReferenceInfo[] {
-		const infos: ImageReferenceInfo[] = [];
-		for (const line of markdown.split(/\r?\n/)) {
-			for (const match of line.matchAll(/!?\[\[([^\]]+)\]\]/g)) {
-				const raw = match[1] ?? "";
-				const [target, label = ""] = raw.split("|");
-				const cleanTarget = this.cleanReferenceText(target ?? "");
-				if (cleanTarget && isImageReferencePath(cleanTarget)) {
-					infos.push({
-						target: cleanTarget,
-						label: label.trim(),
-						line: line.trim().slice(0, 240)
-					});
-				}
-			}
-
-			for (const match of line.matchAll(/!\[([^\]]*)]\(([^)]+)\)/g)) {
-				const cleanTarget = this.cleanReferenceText(match[2] ?? "");
-				if (cleanTarget && isImageReferencePath(cleanTarget)) {
-					infos.push({
-						target: cleanTarget,
-						label: (match[1] ?? "").trim(),
-						line: line.trim().slice(0, 240)
-					});
-				}
-			}
-		}
-
-		return infos;
-	}
-
-	private extractLinkedReferences(markdown: string): string[] {
-		const references: string[] = [];
-		for (const match of markdown.matchAll(/!?\[\[([^\]]+)\]\]/g)) {
-			references.push(this.cleanReferenceText(match[1]));
-		}
-		for (const match of markdown.matchAll(/!?\[[^\]]*]\(([^)]+)\)/g)) {
-			references.push(this.cleanReferenceText(match[1]));
-		}
-		return references.filter(Boolean);
-	}
-
-	private extractImageReferencesFromMarkdown(markdown: string): string[] {
-		return this.extractImageReferenceInfos(markdown).map((reference) => reference.target);
-	}
-
-	private cleanReferenceText(reference: string): string {
-		let clean = reference.trim();
-		clean = clean.replace(/^<(.+)>$/, "$1");
-		clean = clean.replace(/^['"](.+)['"]$/, "$1");
-		clean = clean.split("|")[0]?.split("#")[0]?.trim() ?? "";
-		try {
-			return decodeURI(clean);
-		} catch {
-			return clean;
-		}
-	}
-
 	async buildRequest(question: string, title: string, options: BuildRequestOptions = {}): Promise<AskRequest> {
-		const intentKind = this.classifyRequestIntent(question, options);
-		const providerRef = this.getSelectedProviderModelRef();
-		const selectedModel = providerRef.model;
-		const forceImage = options.forceImage === true || intentKind === "explicit_image";
-		const autoImage = options.autoImage === true || intentKind === "auto_image";
-		const context = options.forceFileContext && options.file instanceof TFile && options.file.extension === "md"
-			? await this.getFileNoteContext(options.file)
-			: await this.getNoteContext(options.editor, options.file);
-		const privacy = normalizeRequestPrivacyOptions({ ...this.settings.requestPrivacyDefaults, ...options.privacy });
-		const contextBudgetMode = normalizeContextBudgetMode(options.contextBudgetMode ?? this.settings.contextBudgetMode);
-		const attachments = await this.buildContextAttachments(context, options, privacy);
-		const contextWithAttachments: NoteContext = {
-			...context,
-			attachments
-		};
-		const promptContext = this.buildPromptContextContent(contextWithAttachments, privacy, contextBudgetMode);
-		const primaryPromptContext = this.buildPromptContextContent({ ...context, attachments: [] }, privacy, contextBudgetMode);
-		const workflowVariableContext = privacy.includeNoteContext ? primaryPromptContext.text : "";
-		const requestQuestion = options.workflow ? this.expandWorkflowPrompt(options.workflow, contextWithAttachments, workflowVariableContext) : question;
-		const folderAttachments = attachments.filter((attachment) => attachment.kind === "folder_note");
-		const evidenceSources = privacy.includeNoteContext && providerRef.capability === "text" && !forceImage && !autoImage
-			? this.buildEvidenceSources(contextWithAttachments)
-			: [];
-
-		return {
-			context: contextWithAttachments,
-			question: requestQuestion,
-			title,
-			evidenceSources,
-			metadata: {
-				intentKind,
-				commandSource: options.commandSource ?? "sidebar",
-				outputMode: options.outputMode ?? this.settings.outputMode,
-				promptVersion: ASKMATE_PROMPT_VERSION,
-				providerId: providerRef.providerId,
-				providerName: providerRef.providerName,
-				selectedModel,
-				modelCapability: providerRef.capability,
-				reasoningEffort: this.getSelectedReasoningEffort(),
-				privacy,
-				contextBudgetMode,
-				contextBudgetLimitCharacters: promptContext.limitCharacters,
-				contextTruncated: promptContext.truncated,
-				contextCharacters: promptContext.originalCharacters,
-				promptContextCharacters: promptContext.finalCharacters,
-				contextAttachmentCount: attachments.length,
-				contextAttachmentSources: attachments.map((attachment) => attachment.sourcePath || attachment.title).slice(0, 20),
-				threadHistoryIncluded: attachments.some((attachment) => attachment.kind === "thread_history"),
-				folderContextPath: folderAttachments.length > 0 ? (options.folderContext?.path ?? this.settings.folderContextPath) : null,
-				folderContextFilesIncluded: folderAttachments.length,
-				evidenceEnabled: evidenceSources.length > 0,
-				evidenceSourceCount: evidenceSources.length,
-				forceImage,
-				autoImage,
-				workflowId: options.workflow?.id ?? null,
-				workflowName: options.workflow?.name ?? null,
-				createdAt: new Date().toISOString()
-			}
-		};
+		return await this.requestRunner.buildRequest(question, title, options);
 	}
 
-	private buildEvidenceSources(context: NoteContext): EvidenceSource[] {
-		if (!this.settings.evidenceLinkedAnswersEnabled) {
-			return [];
-		}
-		const sources: EvidenceSource[] = [];
-		const addSources = (kind: EvidenceSource["kind"], title: string, sourcePath: string, markdown: string, startLine = 1): void => {
-			for (const source of this.buildEvidenceSourcesFromMarkdown(kind, title, sourcePath, markdown, startLine, sources.length)) {
-				sources.push(source);
-				if (sources.length >= this.settings.evidenceMaxSources) {
-					return;
-				}
-			}
-		};
-		addSources(
-			"primary_note",
-			context.source,
-			context.file?.path ?? "Untitled or unsaved note",
-			context.content,
-			context.source === "Selected text" ? context.selectionStartLine ?? 1 : 1
-		);
-		for (const attachment of context.attachments ?? []) {
-			if (!["additional_note", "folder_note", "excalidraw_summary"].includes(attachment.kind)) {
-				continue;
-			}
-			addSources(attachment.kind, attachment.title, attachment.sourcePath, attachment.content, 1);
-			if (sources.length >= this.settings.evidenceMaxSources) {
-				break;
-			}
-		}
-		return sources.slice(0, this.settings.evidenceMaxSources).map((source, index) => ({ ...source, id: `S${index + 1}` }));
-	}
-
-	private buildEvidenceSourcesFromMarkdown(
-		kind: EvidenceSource["kind"],
-		title: string,
-		sourcePath: string,
-		markdown: string,
-		startLine: number,
-		offset: number
-	): EvidenceSource[] {
-		const sources: EvidenceSource[] = [];
-		const lines = markdown.split(/\r?\n/);
-		let blockStart = 0;
-		let blockLines: string[] = [];
-		const flush = (): void => {
-			const excerpt = blockLines.join("\n").replace(/\s+/g, " ").trim().slice(0, 240);
-			if (excerpt) {
-				sources.push({
-					id: `S${offset + sources.length + 1}`,
-					kind,
-					sourcePath,
-					title,
-					lineStart: startLine + blockStart,
-					lineEnd: startLine + blockStart + Math.max(0, blockLines.length - 1),
-					excerpt
-				});
-			}
-			blockLines = [];
-		};
-		for (let index = 0; index < lines.length; index += 1) {
-			const line = lines[index];
-			if (!line.trim()) {
-				flush();
-				blockStart = index + 1;
-				continue;
-			}
-			if (/^#{1,6}\s+/.test(line) && blockLines.length > 0) {
-				flush();
-				blockStart = index;
-			}
-			if (blockLines.length === 0) {
-				blockStart = index;
-			}
-			blockLines.push(line);
-		}
-		flush();
-		return sources;
-	}
-
-	private formatEvidenceSources(request: AskRequest): string {
-		if (request.evidenceSources.length === 0) {
-			return "";
-		}
-		return request.evidenceSources
-			.map((source) => `[${source.id}] ${source.sourcePath}#L${source.lineStart}-L${source.lineEnd}: ${source.excerpt}`)
-			.join("\n");
-	}
-
-	private getPromptContextContent(request: AskRequest): string {
-		return this.buildPromptContextContent(
-			request.context,
-			request.metadata.privacy,
-			request.metadata.contextBudgetMode
-		).text;
-	}
-
-	private buildPromptContextContent(
-		context: NoteContext,
-		privacy: RequestPrivacyOptions,
-		contextBudgetMode: ContextBudgetMode
-	): PromptContextResult {
-		if (!privacy.includeNoteContext) {
-			const text = "[Note context omitted by AskMate privacy controls.]";
-			return {
-				text,
-				originalCharacters: context.content.length,
-				finalCharacters: text.length,
-				truncated: false,
-				limitCharacters: null
-			};
-		}
-
-		const budget = getContextBudgetOption(contextBudgetMode);
-		const attachmentText = (context.attachments ?? [])
-			.filter((attachment) => attachment.content.trim())
-			.map((attachment) => [
-				"",
-				`<context_attachment kind="${attachment.kind}" title="${attachment.title.replace(/"/g, "'")}" source="${attachment.sourcePath.replace(/"/g, "'")}">`,
-				attachment.content,
-				"</context_attachment>"
-			].join("\n"))
-			.join("\n");
-		const assembledContent = [context.content, attachmentText].filter((part) => part.trim()).join("\n\n");
-		const originalCharacters = assembledContent.length;
-		let content = privacy.includeImageReferences
-			? assembledContent
-			: assembledContent
-				.replace(/!?\[\[([^\]]+)\]\]/g, (match, reference: string) => {
-					return isImageReferencePath(reference) ? "[Image reference omitted by AskMate privacy controls.]" : match;
-				})
-				.replace(/!?\[[^\]]*\]\(([^)]+)\)/g, (match, reference: string) => {
-					return isImageReferencePath(reference) ? "[Image reference omitted by AskMate privacy controls.]" : match;
-				});
-
-		if (budget.maxCharacters !== null && content.length > budget.maxCharacters) {
-			const marker = `\n\n[AskMate omitted ${formatTokenCount(content.length - budget.maxCharacters)} characters from the middle because the ${budget.label} context budget is selected. Switch to Expanded to include more.]\n\n`;
-			const available = Math.max(0, budget.maxCharacters - marker.length);
-			const headLength = Math.floor(available * 0.7);
-			const tailLength = Math.max(0, available - headLength);
-			content = `${content.slice(0, headLength).trimEnd()}${marker}${content.slice(content.length - tailLength).trimStart()}`;
-
-			return {
-				text: content,
-				originalCharacters,
-				finalCharacters: content.length,
-				truncated: true,
-				limitCharacters: budget.maxCharacters
-			};
-		}
-
-		return {
-			text: content,
-			originalCharacters,
-			finalCharacters: content.length,
-			truncated: false,
-			limitCharacters: budget.maxCharacters
-		};
-	}
-
-	private buildPrompt(request: AskRequest): string {
-		const sourcePath = request.context.file?.path ?? "Untitled or unsaved note";
-		const promptContext = this.getPromptContextContent(request);
-		const evidenceSourceText = request.metadata.privacy.includeNoteContext ? this.formatEvidenceSources(request) : "";
-
-		return [
-			"Goal: Complete the user request using the note context below.",
-			"",
-			"Success criteria:",
-			"- Address the requested task directly.",
-			"- Use the note context as the evidence source.",
-			"- State what is missing if the note context is insufficient.",
-			"- Keep the final output useful as Obsidian Markdown.",
-			"",
-			"Stop rules: Answer once the core request is satisfied. Do not add unrelated sections.",
-			"",
-			`Prompt version: ${request.metadata.promptVersion}`,
-			`Intent: ${formatRequestIntent(request.metadata.intentKind)}`,
-			`Workflow: ${request.metadata.workflowName ?? "None"}`,
-			`Source: ${sourcePath}`,
-			`Context type: ${request.context.source}`,
-			"",
-			"<note_context>",
-			promptContext,
-			"</note_context>",
-			evidenceSourceText ? "" : "",
-			evidenceSourceText ? "<evidence_sources>" : "",
-			evidenceSourceText,
-			evidenceSourceText ? "</evidence_sources>" : "",
-			"",
-			"<user_request>",
-			request.question,
-			"</user_request>"
-		].join("\n");
-	}
-
-	private buildTextInstructions(): string {
-		return [
-			"Role: You are AskMate, a concise AI assistant inside Obsidian for working with the user's notes.",
-			"",
-			"Goal: Complete the user's request using the provided note context, whether the task is Q&A, translation, summarization, analysis, rewriting, extraction, or another note workflow.",
-			"",
-			"Success criteria: Address the exact request, preserve important source details, make factual claims traceable to the note context, and produce clear Markdown that can be pasted into an Obsidian note.",
-			"",
-			"Constraints: Do not invent details. If the context is insufficient, say what is missing. Thread history and note history can clarify follow-up intent, but factual claims must still be grounded in the note context or explicit context attachments. Style guide and glossary attachments are guidance roles for tone, terminology, and formatting, not primary evidence. Image manifests are metadata only, not pixel-level vision. When evidence sources are provided, cite factual claims with source IDs like [S1] or [S2] when useful. For translation, preserve meaning, tone, structure, names, numbers, terminology, and formatting unless asked to adapt. For summaries, include quotes or timestamps only when present. For analysis, separate observations from recommendations when useful and label uncertainty.",
-			"",
-			"Output: Stay concise and direct. Use headings, bullets, or numbered lists only when they improve readability. Stop when the user's request is answered."
-		].join("\n");
-	}
-
-	private async recordOperationUsage({
-		request,
-		providerId,
-		providerName,
-		operationKind,
-		endpoint,
-		status,
-		model,
-		instructions,
-		input,
-		responseText,
-		usage,
-		startedAt,
-		errorMessage = ""
-	}: {
+	private async recordOperationUsage(params: {
 		request: AskRequest;
 		providerId?: TextProviderId;
 		providerName?: string;
@@ -3403,59 +1788,19 @@ export class AskMatePlugin extends Plugin {
 		startedAt: Date;
 		errorMessage?: string;
 	}): Promise<void> {
-		try {
-			const inputUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.input_tokens);
-			const outputUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.output_tokens);
-			const totalUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.total_tokens);
-			const inputTokens = inputUsage ?? estimateTokenCount(`${instructions}\n\n${input}`);
-			const outputTokens = outputUsage ?? estimateTokenCount(responseText);
-			const componentTotal = inputTokens + outputTokens;
-			const totalTokens = Math.max(totalUsage ?? componentTotal, componentTotal);
-			const record: TokenUsageRecord = {
-				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-				timestamp: new Date().toISOString(),
-				providerId: providerId ?? normalizeTextProviderId(request.metadata.providerId),
-				providerName: (providerName ?? request.metadata.providerName ?? getProviderLabel(normalizeTextProviderId(request.metadata.providerId))).trim(),
-				model,
-				title: request.title.trim() || "AskMate request",
-				contextSource: request.context.source,
-				sourcePath: request.context.file?.path ?? "",
-				inputTokens,
-				outputTokens,
-				totalTokens,
-				cachedInputTokens: getNonNegativeInteger(usage?.input_tokens_details?.cached_tokens) ?? 0,
-				reasoningOutputTokens: getNonNegativeInteger(usage?.output_tokens_details?.reasoning_tokens) ?? 0,
-				durationMs: Math.max(0, Date.now() - startedAt.getTime()),
-				estimated: endpoint === "images_generations" || inputUsage === null || outputUsage === null || totalUsage === null,
-				operationKind,
-				outputMode: request.metadata.outputMode,
-				promptVersion: request.metadata.promptVersion,
-				status,
-				endpoint,
-				errorMessage: errorMessage.trim().slice(0, 240)
-			};
-
-			const existing = normalizeTokenUsageStats(this.settings.tokenUsageStats).records;
-			this.settings.tokenUsageStats = {
-				records: [...existing, record].slice(-MAX_TOKEN_USAGE_RECORDS)
-			};
-			await this.saveSettings();
-		} catch (error) {
-			console.warn("AskMate could not save token usage statistics.", error);
-		}
+		await this.usageService.recordOperationUsage(params);
 	}
 
 	getTokenUsageRecords(): TokenUsageRecord[] {
-		return [...normalizeTokenUsageStats(this.settings.tokenUsageStats).records];
+		return this.usageService.getTokenUsageRecords();
 	}
 
 	getTokenUsageSummary(): TokenUsageSummary {
-		return summarizeTokenUsage(this.getTokenUsageRecords());
+		return this.usageService.getTokenUsageSummary();
 	}
 
 	async resetTokenUsageStats(): Promise<void> {
-		this.settings.tokenUsageStats = { records: [] };
-		await this.saveSettings();
+		await this.usageService.resetTokenUsageStats();
 	}
 
 	private async runWorkflowFromCommand(workflow: Workflow, editor: Editor, noteFile: TFile | null): Promise<void> {
@@ -3511,7 +1856,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private getImageResultFolder(request?: AskRequest, result?: ImageAskMateResult): string {
-		const fallbackFolder = this.cleanFolderPath(this.settings.resultFolder);
+		const fallbackFolder = cleanFolderPath(this.settings.resultFolder);
 		if (!request || !result) {
 			return fallbackFolder ? `${fallbackFolder}/Images` : "AskMate Images";
 		}
@@ -3525,7 +1870,7 @@ export class AskMatePlugin extends Plugin {
 			planningFallback: result.promptPlan.fallbackReason ?? ""
 		};
 		const rendered = this.renderTemplate(this.settings.imageFolderTemplate, variables);
-		const folder = this.cleanFolderPath(rendered);
+		const folder = cleanFolderPath(rendered);
 		return folder || (fallbackFolder ? `${fallbackFolder}/Images` : "AskMate Images");
 	}
 
@@ -3554,10 +1899,6 @@ export class AskMatePlugin extends Plugin {
 		} catch {
 			throw new Error("OpenAI returned invalid base64 image data.");
 		}
-	}
-
-	private cleanFolderPath(folder: string): string {
-		return normalizePath(folder.trim()).replace(/^\/+|\/+$/g, "");
 	}
 
 	private async ensureFolder(folder: string): Promise<void> {
@@ -3621,7 +1962,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	getErrorMessage(error: unknown): string {
-		if (error instanceof DOMException && error.name === "AbortError") {
+		if (isAbortError(error)) {
 			return "AskMate request stopped.";
 		}
 

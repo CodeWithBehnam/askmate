@@ -1,18 +1,32 @@
 import { normalizePath } from "obsidian";
 import {
 	CONTEXT_BUDGET_OPTIONS,
+	DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS,
+	DEFAULT_BATCH_WORKFLOW_MAX_FILES,
+	DEFAULT_EVIDENCE_MAX_SOURCES,
+	DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS,
+	DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS,
+	DEFAULT_FOLDER_CONTEXT_MAX_FILES,
+	DEFAULT_IMAGE_FILE_NAME_TEMPLATE,
+	DEFAULT_IMAGE_FOLDER_TEMPLATE,
+	DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE,
 	DEFAULT_MODEL_OPTIONS,
+	DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE,
 	DEFAULT_PROVIDER_ROLE_SETTINGS,
 	DEFAULT_PROVIDER_SETTINGS,
 	DEFAULT_REASONING_EFFORT,
 	DEFAULT_REQUEST_PRIVACY_OPTIONS,
+	DEFAULT_RESULT_NOTE_TEMPLATE,
 	DEFAULT_REVIEW_QUEUE_MAX_ITEMS,
+	DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS,
 	DEFAULT_SEND_SHORTCUT,
+	DEFAULT_THREADED_CHAT_MAX_TURNS,
 	DEFAULT_TRANSLATION_TARGET_LANGUAGE,
+	DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS,
 	IMAGE_FILE_EXTENSIONS,
 	LEGACY_PROMPT_VERSION,
-	MAX_CONTEXT_PATH_LENGTH,
 	MAX_CONTEXT_PATHS,
+	MAX_CONTEXT_PATH_LENGTH,
 	MAX_NOTE_HISTORY_ANSWER_CHARACTERS,
 	MAX_NOTE_HISTORY_QUESTION_CHARACTERS,
 	MAX_NOTE_HISTORY_TURNS,
@@ -20,6 +34,7 @@ import {
 	MAX_TEMPLATE_LENGTH,
 	MAX_TOKEN_USAGE_RECORDS,
 	MAX_TRANSLATION_TARGET_LANGUAGE_LENGTH,
+	MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH,
 	REASONING_EFFORT_OPTIONS,
 	TEXT_PROVIDER_IDS,
 	TEXT_PROVIDER_LABELS,
@@ -27,7 +42,7 @@ import {
 	WORKFLOW_ACCENTS
 } from "./constants";
 import { DEFAULT_SETTINGS } from "./defaults";
-import type { ApiEndpoint, ApplyApprovalMode, ApplyScope, AskMateSettings, BatchWorkflowOutputMode, BudgetEnforcementMode, ComposerLayout, ContextBudgetMode, CustomWorkflow, FrontmatterApplyPolicy, ImagePromptPlanningProviderId, NoteHistoryStore, NoteHistoryTurn, OperationKind, OperationStatus, OutputMode, ProviderRoleSettings, ProviderSettings, ReasoningEffort, RequestIntentKind, RequestPrivacyOptions, ReviewQueueItem, ReviewQueueStatus, SendShortcut, TextProviderId, TextProviderSettings, TokenUsageRecord, TokenUsageStats, TokenUsageSummary, WorkflowAccent, WorkflowDisplayPreference } from "../shared/types";
+import type { ApiEndpoint, ApplyApprovalMode, ApplyScope, AskMateSettings, BatchWorkflowOutputMode, BudgetEnforcementMode, ComposerLayout, ContextBudgetMode, ContextSource, CustomWorkflow, EffectiveApplyScope, FrontmatterApplyPolicy, ImagePromptPlanningProviderId, NoteHistoryStore, NoteHistoryTurn, OperationKind, OperationStatus, OutputMode, ProviderRoleSettings, ProviderSettings, ReasoningEffort, RequestIntentKind, RequestPrivacyOptions, ReviewQueueItem, ReviewQueueStatus, SendShortcut, TextProviderId, TextProviderSettings, TokenUsageRecord, TokenUsageStats, TokenUsageSummary, WorkflowAccent, WorkflowDisplayPreference } from "../shared/types";
 
 export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
 	if (typeof value !== "string") {
@@ -100,11 +115,59 @@ export function normalizeContextPathList(value: unknown): string[] {
 }
 
 export function normalizeApplyScope(value: unknown): ApplyScope {
-	if (value === "selected-block" || value === "heading-section" || value === "full-note" || value === "auto") {
+	if (value === "selected-block" || value === "heading-section" || value === "full-note" || value === "append" || value === "auto") {
 		return value;
 	}
 
 	return "auto";
+}
+
+/**
+ * Expand `auto` the same way live Apply does:
+ * selected text → selected-block; otherwise → append (never full-note).
+ */
+export function resolveApplyScope(scope: unknown, contextSource: ContextSource | string): EffectiveApplyScope {
+	const normalized = normalizeApplyScope(scope);
+	if (normalized === "auto") {
+		return contextSource === "Selected text" ? "selected-block" : "append";
+	}
+	return normalized;
+}
+
+export function createAbortError(message = "Request was stopped."): Error {
+	const error = new Error(message);
+	error.name = "AbortError";
+	return error;
+}
+
+export function isAbortError(error: unknown): boolean {
+	if (error instanceof DOMException && error.name === "AbortError") {
+		return true;
+	}
+
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	if (error.name === "AbortError") {
+		return true;
+	}
+
+	// Compat for older throw sites that used a plain Error with this message.
+	return error.message === "Request was stopped.";
+}
+
+export function appendMarkdownBlockToContent(existing: string, block: string): string {
+	const cleanBlock = block.trim();
+	const newline = existing.includes("\r\n") ? "\r\n" : "\n";
+
+	if (!existing) {
+		return `${cleanBlock}${newline}`;
+	}
+
+	const trailingLineBreaks = existing.match(/(?:\r\n|\n|\r)+$/u)?.[0].match(/\r\n|\n|\r/gu)?.length ?? 0;
+	const separator = trailingLineBreaks >= 2 ? "" : trailingLineBreaks === 1 ? newline : `${newline}${newline}`;
+	return `${existing}${separator}${cleanBlock}${newline}`;
 }
 
 export function normalizeApplyApprovalMode(value: unknown, legacyShowApplyPreview: unknown): ApplyApprovalMode {
@@ -609,10 +672,6 @@ export function formatRequestIntent(value: RequestIntentKind): string {
 	return "Freeform text";
 }
 
-export function isAbortError(error: unknown): boolean {
-	return error instanceof Error && error.name === "AbortError";
-}
-
 export function stripControlCharacters(value: string, replacement = ""): string {
 	return Array.from(value, (character) => {
 		const code = character.charCodeAt(0);
@@ -829,4 +888,113 @@ export function truncateLabel(value: string, maxLength: number): string {
 	}
 
 	return `${value.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+
+/**
+ * Single normalize path for load + save.
+ * load: merge DEFAULT_SETTINGS with raw plugin data.
+ * save: re-sanitize the live settings object before persistence.
+ */
+export function normalizeAskMateSettings(
+	raw: Partial<AskMateSettings> | null | undefined,
+	mode: "load" | "save"
+): AskMateSettings {
+	const source = mode === "load"
+		? Object.assign({}, DEFAULT_SETTINGS, raw ?? {}) as AskMateSettings
+		: Object.assign({}, DEFAULT_SETTINGS, raw ?? {}) as AskMateSettings;
+
+	const legacy = {
+		openAiApiKeySecretName: typeof source.openAiApiKeySecretName === "string" ? source.openAiApiKeySecretName : "",
+		model: typeof source.model === "string" ? source.model : DEFAULT_SETTINGS.model,
+		modelOptions: Array.isArray(source.modelOptions) ? source.modelOptions : DEFAULT_MODEL_OPTIONS
+	};
+
+	const settings = source;
+	settings.selectedTextProvider = normalizeTextProviderId(source.selectedTextProvider);
+	settings.providerRoles = normalizeProviderRoleSettings(
+		mode === "load" ? (raw as Partial<AskMateSettings> | null | undefined)?.providerRoles ?? source.providerRoles : source.providerRoles,
+		mode === "load"
+			? ((raw as Partial<AskMateSettings> | null | undefined)?.selectedTextProvider ?? settings.selectedTextProvider)
+			: settings.selectedTextProvider
+	);
+	settings.selectedTextProvider = settings.providerRoles.chatProviderId;
+	settings.providers = normalizeProviderSettings(source.providers, legacy);
+
+	const openaiFallback = mode === "load" ? DEFAULT_MODEL_OPTIONS : [];
+	settings.providers.openai.modelOptions = normalizeProviderModelOptions(
+		settings.providers.openai.modelOptions,
+		openaiFallback,
+		settings.providers.openai.model
+	);
+	settings.openAiApiKeySecretName = settings.providers.openai.apiKeySecretName;
+	settings.model = settings.providers.openai.model;
+	settings.modelOptions = settings.providers.openai.modelOptions;
+
+	settings.customWorkflows = normalizeCustomWorkflows(settings.customWorkflows);
+	settings.requestPrivacyDefaults = normalizeRequestPrivacyOptions(settings.requestPrivacyDefaults);
+	settings.contextBudgetMode = normalizeContextBudgetMode(settings.contextBudgetMode);
+	settings.workflowDisplayPreferences = normalizeWorkflowDisplayPreferences(settings.workflowDisplayPreferences);
+	if (mode === "load") {
+		settings.showRequestPreview = settings.showRequestPreview !== false;
+		settings.applyApprovalMode = normalizeApplyApprovalMode(
+			(raw as Partial<AskMateSettings> | null | undefined)?.applyApprovalMode,
+			(raw as Partial<AskMateSettings> | null | undefined)?.showApplyPreview
+		);
+		settings.reasoningEffort = normalizeReasoningEffort(settings.reasoningEffort);
+		settings.sendShortcut = normalizeSendShortcut(settings.sendShortcut);
+		settings.translationTargetLanguage = normalizeTranslationTargetLanguage(settings.translationTargetLanguage);
+		settings.showOnboardingTips = settings.showOnboardingTips !== false;
+	} else {
+		settings.applyApprovalMode = normalizeApplyApprovalMode(settings.applyApprovalMode, settings.showApplyPreview);
+	}
+	settings.showApplyPreview = settings.applyApprovalMode === "manual";
+	settings.workflowCustomInstructions = normalizeOptionalString(settings.workflowCustomInstructions, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
+	settings.resultNoteTemplate = normalizeTemplateString(settings.resultNoteTemplate, DEFAULT_RESULT_NOTE_TEMPLATE);
+	settings.imageResultNoteTemplate = normalizeTemplateString(settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
+	settings.imageFolderTemplate = normalizeTemplateString(settings.imageFolderTemplate, DEFAULT_IMAGE_FOLDER_TEMPLATE);
+	settings.imageFileNameTemplate = normalizeTemplateString(settings.imageFileNameTemplate, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
+	settings.composerLayout = normalizeComposerLayout(settings.composerLayout);
+	settings.onboardingTipsDismissedAt = normalizeNullableIsoDate(settings.onboardingTipsDismissedAt);
+	settings.threadedChatEnabled = normalizeBoolean(settings.threadedChatEnabled, false);
+	settings.threadedChatMaxTurns = normalizeBoundedInteger(settings.threadedChatMaxTurns, DEFAULT_THREADED_CHAT_MAX_TURNS, 1, 12);
+	settings.additionalContextPaths = normalizeContextPathList(settings.additionalContextPaths);
+	settings.additionalContextMaxCharacters = normalizeBoundedInteger(settings.additionalContextMaxCharacters, DEFAULT_ADDITIONAL_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+	settings.folderContextEnabled = normalizeBoolean(settings.folderContextEnabled, false);
+	settings.folderContextPath = normalizeOptionalString(settings.folderContextPath, MAX_CONTEXT_PATH_LENGTH);
+	settings.folderContextMaxFiles = normalizeBoundedInteger(settings.folderContextMaxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
+	settings.folderContextMaxCharacters = normalizeBoundedInteger(settings.folderContextMaxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
+	settings.includeExcalidrawSummaries = normalizeBoolean(settings.includeExcalidrawSummaries, false);
+	settings.excalidrawSummaryMaxCharacters = normalizeBoundedInteger(settings.excalidrawSummaryMaxCharacters, DEFAULT_EXCALIDRAW_SUMMARY_MAX_CHARACTERS, 1000, 100000);
+	settings.includeImageManifests = normalizeBoolean(settings.includeImageManifests, false);
+	settings.partialApplyDefaultScope = normalizeApplyScope(settings.partialApplyDefaultScope);
+	settings.evidenceLinkedAnswersEnabled = normalizeBoolean(settings.evidenceLinkedAnswersEnabled, true);
+	settings.evidenceMaxSources = normalizeBoundedInteger(settings.evidenceMaxSources, DEFAULT_EVIDENCE_MAX_SOURCES, 1, 200);
+	settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(settings.frontmatterApplyPolicy);
+	settings.batchWorkflowFolderPath = normalizeOptionalString(settings.batchWorkflowFolderPath, MAX_CONTEXT_PATH_LENGTH);
+	settings.batchWorkflowId = normalizeOptionalString(settings.batchWorkflowId, 120) || "study-summary";
+	settings.batchWorkflowMaxFiles = normalizeBoundedInteger(settings.batchWorkflowMaxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
+	settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(settings.batchWorkflowOutputMode);
+	settings.noteHistoryEnabled = normalizeBoolean(settings.noteHistoryEnabled, true);
+	settings.noteHistoryIncludeInContext = normalizeBoolean(settings.noteHistoryIncludeInContext, false);
+	settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
+	settings.noteHistoryStore = normalizeNoteHistoryStore(settings.noteHistoryStore);
+	settings.includeStyleGuideContext = normalizeBoolean(settings.includeStyleGuideContext, false);
+	settings.styleGuideContextPath = normalizeOptionalString(settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
+	settings.styleGuideMaxCharacters = normalizeBoundedInteger(settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+	settings.includeGlossaryContext = normalizeBoolean(settings.includeGlossaryContext, false);
+	settings.glossaryContextPath = normalizeOptionalString(settings.glossaryContextPath, MAX_CONTEXT_PATH_LENGTH);
+	settings.glossaryMaxCharacters = normalizeBoundedInteger(settings.glossaryMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);
+	settings.reviewQueueMaxItems = normalizeBoundedInteger(settings.reviewQueueMaxItems, DEFAULT_REVIEW_QUEUE_MAX_ITEMS, 1, 200);
+	settings.reviewQueue = normalizeReviewQueueItems(settings.reviewQueue, settings.reviewQueueMaxItems);
+	settings.smartResultPlacementEnabled = normalizeBoolean(settings.smartResultPlacementEnabled, false);
+	settings.appendResultBacklinkToSource = normalizeBoolean(settings.appendResultBacklinkToSource, false);
+	settings.usageGuardrailsEnabled = normalizeBoolean(settings.usageGuardrailsEnabled, false);
+	settings.usageDailyTokenBudget = normalizeBoundedInteger(settings.usageDailyTokenBudget, 0, 0, 10000000);
+	settings.usageMonthlyTokenBudget = normalizeBoundedInteger(settings.usageMonthlyTokenBudget, 0, 0, 100000000);
+	settings.usagePerRequestWarningTokens = normalizeBoundedInteger(settings.usagePerRequestWarningTokens, DEFAULT_USAGE_PER_REQUEST_WARNING_TOKENS, 0, 10000000);
+	settings.usagePerRequestHardLimitTokens = normalizeBoundedInteger(settings.usagePerRequestHardLimitTokens, 0, 0, 10000000);
+	settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(settings.usageBudgetEnforcement);
+	settings.tokenUsageStats = normalizeTokenUsageStats(settings.tokenUsageStats);
+	return settings;
 }

@@ -20,15 +20,13 @@ export {
 } from "./common";
 export {
 	extractOpenAIText,
-	getOpenAIStreamDelta,
-	getOpenAIStreamTerminalError,
-	getOpenAIStreamUsage,
-	isCompletedOpenAIStreamEvent,
+	getOpenAIBaseUrl,
+	joinOpenAIUrl,
 	normalizeOpenAIModelOptions,
-	parseOpenAIStreamEvent,
 	requestOpenAIImageGeneration,
 	requestOpenAIResponses
 } from "./open-ai";
+// Stream helpers are quarantined in open-ai-stream.ts (not live path).
 export type {
 	ProviderRequestOptions,
 	ProviderRuntime
@@ -57,6 +55,14 @@ export async function completeProviderTextRequest(
 	input: string,
 	abortSignal?: AbortSignal
 ): Promise<ProviderTextResult> {
+	if (providerRef.providerId === "openai") {
+		// OpenAI text always uses Responses API via plugin streamOpenAI / requestOpenAIResponses.
+		// Never fall through to OpenAI-compatible chat/completions with OpenAI settings.
+		throw new Error(
+			"OpenAI text requests use the Responses API. Call requestOpenAIResponses instead of completeProviderTextRequest."
+		);
+	}
+
 	if (providerRef.providerId === "anthropic") {
 		return await completeAnthropicText(runtime, providerRef, instructions, input, abortSignal);
 	}
@@ -77,7 +83,11 @@ export async function completeProviderTextRequest(
 		return await completeOpenRouterText(runtime, providerRef, instructions, input, abortSignal);
 	}
 
-	return await completeOpenAICompatibleText(runtime, providerRef, instructions, input, abortSignal);
+	if (providerRef.providerId === "openai-compatible") {
+		return await completeOpenAICompatibleText(runtime, providerRef, instructions, input, abortSignal);
+	}
+
+	throw new Error(`Unsupported text provider: ${providerRef.providerId}`);
 }
 
 export async function fetchProviderModels(runtime: ProviderRuntime, providerId: TextProviderId): Promise<string[]> {

@@ -26,13 +26,23 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Validate release version
+      - name: Validate release version triad
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME}"
           MANIFEST_VERSION="$(bun -e "console.log(require('./manifest.json').version)")"
+          PACKAGE_VERSION="$(bun -e "console.log(require('./package.json').version)")"
+          HAS_VERSIONS_ENTRY="$(bun -e "const v=require('./versions.json'); console.log(Object.prototype.hasOwnProperty.call(v, process.argv[1]) ? 'yes' : 'no')" "$VERSION")"
           if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
             echo "Tag $VERSION does not match manifest version $MANIFEST_VERSION" >&2
+            exit 1
+          fi
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag $VERSION does not match package.json version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
+          if [ "$HAS_VERSIONS_ENTRY" != "yes" ]; then
+            echo "versions.json is missing an entry for $VERSION" >&2
             exit 1
           fi
 
@@ -55,19 +65,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: AskMate ${{ github.ref_name }}
+          generate_release_notes: true
           files: |
             main.js
             manifest.json
             styles.css
-          body: |
-            ## Changes
-
-            - Added Azure AI Foundry as a text provider.
-            - Added Azure AI Foundry provider settings, connection testing, and model info refresh.
-            - Documented the Azure AI Foundry `/models/chat/completions` endpoint.
-            - Bumped plugin version to ${{ github.ref_name }}.
-
-            ## Validation
-
-            - bun run test
-            - bun run build

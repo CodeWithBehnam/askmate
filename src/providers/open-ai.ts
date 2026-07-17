@@ -4,13 +4,28 @@ import {
 	getProviderLabel,
 	OpenAIImageGenerationBody,
 	OpenAIResponseBody,
-	OpenAIStreamEvent,
-	OpenAITokenUsage,
 	ReasoningEffort,
 	validateProviderBaseUrl
 } from "../shared/core";
 import { fetchModelList } from "./common";
 import type { ProviderRuntime } from "./types";
+
+/** Default OpenAI max output for Responses API is provider-side; image/text hosts share one base. */
+export function getOpenAIBaseUrl(runtime: ProviderRuntime): string {
+	const providerId = "openai";
+	const provider = runtime.getProviderSettings(providerId);
+	return validateProviderBaseUrl(
+		provider.baseUrl,
+		DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl,
+		getProviderLabel(providerId)
+	);
+}
+
+export function joinOpenAIUrl(baseUrl: string, path: string): string {
+	const base = baseUrl.replace(/\/+$/, "");
+	const suffix = path.replace(/^\/+/, "");
+	return `${base}/${suffix}`;
+}
 
 export function normalizeOpenAIModelOptions(
 	models: string[],
@@ -47,7 +62,8 @@ export async function requestOpenAIResponses(
 		abortSignal?: AbortSignal;
 	}
 ) {
-	return await runtime.requestJson<OpenAIResponseBody>("https://api.openai.com/v1/responses", {
+	const baseUrl = getOpenAIBaseUrl(runtime);
+	return await runtime.requestJson<OpenAIResponseBody>(joinOpenAIUrl(baseUrl, "responses"), {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -79,7 +95,8 @@ export async function requestOpenAIImageGeneration(
 		abortSignal?: AbortSignal;
 	}
 ) {
-	return await runtime.requestJson<OpenAIImageGenerationBody>("https://api.openai.com/v1/images/generations", {
+	const baseUrl = getOpenAIBaseUrl(runtime);
+	return await runtime.requestJson<OpenAIImageGenerationBody>(joinOpenAIUrl(baseUrl, "images/generations"), {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -115,80 +132,16 @@ export function extractOpenAIText(body: OpenAIResponseBody | null): string {
 	return parts.join("\n").trim();
 }
 
-export function parseOpenAIStreamEvent(line: string): OpenAIStreamEvent | null {
-	if (!line.startsWith("data: ")) {
-		return null;
-	}
-
-	const payload = line.slice(6).trim();
-
-	if (!payload || payload === "[DONE]") {
-		return null;
-	}
-
-	try {
-		const event = JSON.parse(payload) as OpenAIStreamEvent;
-
-		if (event.error?.message) {
-			throw new Error(event.error.message);
-		}
-
-		return event;
-	} catch (error) {
-		if (error instanceof Error) {
-			throw error;
-		}
-	}
-
-	return null;
-}
-
-export function getOpenAIStreamDelta(event: OpenAIStreamEvent): string {
-	if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-		return event.delta;
-	}
-
-	return "";
-}
-
-export function getOpenAIStreamUsage(event: OpenAIStreamEvent): OpenAITokenUsage | null {
-	return event.response?.usage ?? event.usage ?? null;
-}
-
-export function isCompletedOpenAIStreamEvent(event: OpenAIStreamEvent): boolean {
-	return event.type === "response.completed" || event.response?.status === "completed";
-}
-
-export function getOpenAIStreamTerminalError(event: OpenAIStreamEvent): string | null {
-	const responseError = event.response?.error?.message?.trim();
-
-	if (responseError) {
-		return responseError;
-	}
-
-	if (event.type === "response.failed" || event.response?.status === "failed") {
-		return "OpenAI response failed.";
-	}
-
-	if (event.type === "response.incomplete" || event.response?.status === "incomplete") {
-		const reason = event.response?.incomplete_details?.reason?.trim();
-		return reason ? `OpenAI response incomplete: ${reason}.` : "OpenAI response incomplete.";
-	}
-
-	return null;
-}
-
 export async function fetchOpenAIModels(runtime: ProviderRuntime): Promise<string[]> {
 	const providerId = "openai";
 	const providerName = getProviderLabel(providerId);
-	const provider = runtime.getProviderSettings(providerId);
 	const apiKey = await runtime.getProviderApiKey(providerId);
 
 	if (!apiKey) {
 		throw new Error(`Add a ${providerName} API key before refreshing models.`);
 	}
 
-	const baseUrl = validateProviderBaseUrl(provider.baseUrl, DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl, providerName);
+	const baseUrl = getOpenAIBaseUrl(runtime);
 	return await fetchModelList(runtime, {
 		baseUrl,
 		providerName,
