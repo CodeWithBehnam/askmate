@@ -1,6 +1,6 @@
 {
 	"name": "askmate-obsidian-plugin",
-	"version": "1.6.13",
+	"version": "1.7.0",
 	"author": "Behnam Ebrahimi",
 	"main": "main.js",
 	"devDependencies": {
