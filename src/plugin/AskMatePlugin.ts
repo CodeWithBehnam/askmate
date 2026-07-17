@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile, normalizePath, requestUrl } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin, TFile, requestUrl } from "obsidian";
 import {
 	ApiEndpoint,
 	ApplyScope,
