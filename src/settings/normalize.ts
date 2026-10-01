@@ -1057,7 +1057,11 @@ export function normalizeAskMateSettings(
 	settings.imageResultNoteTemplate = normalizeTemplateString(settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
 	settings.imageFolderTemplate = normalizeTemplateString(settings.imageFolderTemplate, DEFAULT_IMAGE_FOLDER_TEMPLATE);
 	settings.imageFileNameTemplate = normalizeTemplateString(settings.imageFileNameTemplate, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
-	settings.composerLayout = normalizeComposerLayout(settings.composerLayout);
+	// Everyone moves to the Console layout once; after that the saved layout wins, so switching back sticks.
+	settings.composerLayout = mode === "load" && raw?.consoleLayoutMigrated !== true
+		? "console"
+		: normalizeComposerLayout(settings.composerLayout);
+	settings.consoleLayoutMigrated = true;
 	settings.onboardingTipsDismissedAt = normalizeNullableIsoDate(settings.onboardingTipsDismissedAt);
 	settings.threadedChatEnabled = normalizeBoolean(settings.threadedChatEnabled, false);
 	settings.threadedChatMaxTurns = normalizeBoundedInteger(settings.threadedChatMaxTurns, DEFAULT_THREADED_CHAT_MAX_TURNS, 1, 12);

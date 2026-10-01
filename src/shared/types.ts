@@ -101,6 +101,8 @@ export interface AskMateSettings {
 	translationTargetLanguage: string;
 	workflowCustomInstructions: string;
 	composerLayout: ComposerLayout;
+	// Set once the one-time move to the Console layout has run, so a later switch back to another layout is kept.
+	consoleLayoutMigrated: boolean;
 	showOnboardingTips: boolean;
 	autoImageIntentEnabled: boolean;
 	onboardingTipsDismissedAt: string | null;

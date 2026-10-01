@@ -217,3 +217,22 @@ describe("translation prompt", () => {
 		expect(prompt).not.toContain("{{");
 	});
 });
+
+describe("Console layout migration", () => {
+	test("new installs start in the Console layout", () => {
+		expect(normalizeAskMateSettings(null, "load").composerLayout).toBe("console");
+		expect(DEFAULT_SETTINGS.composerLayout).toBe("console");
+	});
+
+	test("existing settings move to Console once", () => {
+		const migrated = load({ composerLayout: "compact" });
+		expect(migrated.composerLayout).toBe("console");
+		expect(migrated.consoleLayoutMigrated).toBe(true);
+	});
+
+	test("a layout chosen after the move is kept on later loads and saves", () => {
+		expect(load({ composerLayout: "compact", consoleLayoutMigrated: true }).composerLayout).toBe("compact");
+		const settings = load({ composerLayout: "expanded", consoleLayoutMigrated: true });
+		expect(normalizeAskMateSettings(settings, "save").composerLayout).toBe("expanded");
+	});
+});

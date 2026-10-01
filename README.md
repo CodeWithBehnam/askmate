@@ -14,7 +14,7 @@
   <a href="https://github.com/CodeWithBehnam/askmate/releases"><img src="https://img.shields.io/github/v/release/CodeWithBehnam/askmate?style=for-the-badge&label=release&color=8B5CF6" alt="Latest release"></a>
   <a href="https://github.com/CodeWithBehnam/askmate/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/CodeWithBehnam/askmate/release.yml?style=for-the-badge&label=release%20build" alt="Release workflow status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/CodeWithBehnam/askmate?style=for-the-badge&color=34D399" alt="License"></a>
-  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-1.11.4%2B-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian 1.11.4 or newer"></a>
+  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-1.13.0%2B-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian 1.13.0 or newer"></a>
   <a href="https://github.com/CodeWithBehnam/askmate/stargazers"><img src="https://img.shields.io/github/stars/CodeWithBehnam/askmate?style=for-the-badge&color=22D3EE" alt="GitHub stars"></a>
   <a href="https://github.com/CodeWithBehnam/askmate/issues"><img src="https://img.shields.io/github/issues/CodeWithBehnam/askmate?style=for-the-badge&color=F59E0B" alt="Open issues"></a>
 </p>
@@ -103,7 +103,7 @@ Use it to ask questions, summarize, rewrite, translate, run reusable workflows, 
 
 ### Requirements
 
-- Obsidian `1.11.4` or newer.
+- Obsidian `1.13.0` or newer. Older Obsidian versions are offered AskMate 1.8.2, the last release that supports them.
 - Desktop Obsidian.
 - An API key for your selected provider, unless your local endpoint does not require one.
 - OpenAI API access for image generation with `gpt-image-2`.
@@ -257,7 +257,7 @@ Each custom workflow has an `Output kind`. `Revised note` means the output is a 
 
 ### Console Layout
 
-Console is a keyboard-first sidebar layout for people who prefer typing to clicking. Choose `Console` under `Sidebar layout` in AskMate settings, or type `/layout console` in the sidebar in any layout. Type `/layout compact` to switch back.
+Console is AskMate's default sidebar layout: keyboard-first, for people who prefer typing to clicking. Updating AskMate moves you to Console once. To switch back, type `/layout compact` or `/layout expanded` in the sidebar, or choose under `Sidebar layout` in AskMate settings; AskMate keeps that choice. Type `/layout console` to return.
 
 The conversation is monospaced, one line per event. A status bar at the bottom shows the output mode, the model, the reasoning effort and today's token use. Click the mode to cycle between Chat, Note and Apply.
 
@@ -329,7 +329,7 @@ The plugin's settings file, `.obsidian/plugins/askmate/data.json` in your vault,
 
 - Note history: the question and answer of successful AskMate turns per note (up to 12 turns per note by default). It is on by default. Turn it off with the first switch of `Note-specific AskMate history` in settings, or clear one note's history with `Clear note history` in the sidebar's note history view. Including that history in future requests is a separate switch and is off by default.
 - The review queue: pending suggestions keep the proposed text and a snapshot of the original text until you apply or dismiss them. Applied and dismissed items keep only metadata.
-- Usage statistics: per-request token counts, provider, model, title and note path, plus per-day token totals. They contain no note text. Clear them with `Reset statistics` in the `Usage and guardrails` section of AskMate settings.
+- Usage statistics: per-request token counts, provider, model, title and note path, plus per-day token totals. They contain no note text. Clear them with `Reset statistics` under `Usage and guardrails` → `Usage statistics` in AskMate settings.
 
 If you sync your `.obsidian` folder (for example with Obsidian Sync, iCloud or git), this data syncs with it. Generated notes and images are saved as ordinary files in your vault.
 
