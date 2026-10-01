@@ -15,14 +15,7 @@ import type {
 	Workflow
 } from "../src/shared/types";
 
-class TFile {
-	path = "";
-	extension = "md";
-}
-
-class Editor {}
-
-mock.module("obsidian", () => ({ Editor, TFile }));
+import { TFile } from "./support/obsidian-fakes";
 
 const {
 	MAX_FALLBACK_IMAGE_PROMPT_CHARACTERS,
@@ -386,7 +379,7 @@ describe("buildRequest", () => {
 	});
 
 	test("@note widens a selection to the whole note through the host", async () => {
-		const file = Object.assign(new TFile(), { path: "Plan.md", extension: "md" });
+		const file = new TFile("Plan.md");
 		const fullNote: NoteContext = { content: "# Plan\n\nWhole note text.", file, source: "Current note", attachments: [] };
 		const requested: string[] = [];
 		const { runner } = makeHarness([], {

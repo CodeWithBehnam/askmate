@@ -1,0 +1,3 @@
+[test]
+# The obsidian package ships types only; tests run against shared fakes registered here.
+preload = ["./tests/support/obsidian-preload.ts"]

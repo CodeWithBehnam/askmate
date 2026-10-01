@@ -1,21 +1,8 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
 import type { AskMateSettings, NoteContext } from "../src/shared/types";
 
-class TAbstractFile {
-	constructor(public path: string) {}
-}
-
-class TFile extends TAbstractFile {
-	stat = { size: 10, ctime: 0, mtime: 0 };
-
-	get extension(): string {
-		const name = this.path.split("/").pop() ?? "";
-		return name.includes(".") ? name.split(".").pop() ?? "" : "";
-	}
-}
-
-class TFolder extends TAbstractFile {}
+import { MarkdownView, TAbstractFile, TFile, TFolder } from "./support/obsidian-fakes";
 
 type Position = { line: number; ch: number };
 
@@ -67,24 +54,6 @@ class FakeEditor {
 		return { line: before.length - 1, ch: (before[before.length - 1] ?? "").length };
 	}
 }
-
-class MarkdownView {
-	mode: "source" | "preview" = "source";
-
-	constructor(public editor: FakeEditor, public file: TFile | null) {}
-
-	getMode(): "source" | "preview" {
-		return this.mode;
-	}
-}
-
-class Editor {}
-
-function normalizePath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "") || "/";
-}
-
-mock.module("obsidian", () => ({ Editor, MarkdownView, TAbstractFile, TFile, TFolder, normalizePath }));
 
 const {
 	ContextService,
