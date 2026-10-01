@@ -28,8 +28,8 @@ import { parseMarkdownHeadingSections } from "../output";
 export function cleanFolderPath(folder: string): string {
 	const clean = normalizePath(folder.trim()).replace(/^\/+|\/+$/g, "");
 	// Folder templates can include model output, so a "." or ".." segment could otherwise point outside the intended folder.
-	if (/[\u0000-\u001f\u007f]/.test(clean) || clean.split("/").some((segment) => segment.trim() === "." || segment.trim() === "..")) {
-		throw new Error(`AskMate cannot use the folder path "${clean.replace(/[\u0000-\u001f\u007f]/g, "?")}" because it contains a "." or ".." segment or a control character.`);
+	if (/\p{Cc}/u.test(clean) || clean.split("/").some((segment) => segment.trim() === "." || segment.trim() === "..")) {
+		throw new Error(`AskMate cannot use the folder path "${clean.replace(/\p{Cc}/gu, "?")}" because it contains a "." or ".." segment or a control character.`);
 	}
 	return clean;
 }

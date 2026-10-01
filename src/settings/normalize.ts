@@ -134,7 +134,7 @@ export function normalizeApplyScope(value: unknown): ApplyScope {
  * Expand `auto` the same way live Apply does:
  * selected text → selected-block; otherwise → append (never full-note).
  */
-export function resolveApplyScope(scope: unknown, contextSource: ContextSource | string): EffectiveApplyScope {
+export function resolveApplyScope(scope: unknown, contextSource: ContextSource): EffectiveApplyScope {
 	const normalized = normalizeApplyScope(scope);
 	if (normalized === "auto") {
 		return contextSource === "Selected text" ? "selected-block" : "append";
@@ -1006,7 +1006,7 @@ export function normalizeAskMateSettings(
 	raw: Partial<AskMateSettings> | null | undefined,
 	mode: "load" | "save"
 ): AskMateSettings {
-	const source = Object.assign({}, DEFAULT_SETTINGS, raw ?? {}) as AskMateSettings;
+	const source: AskMateSettings = { ...DEFAULT_SETTINGS, ...raw };
 	// On load, legacy migration must see what was actually saved: the merged defaults would always win over legacy fields.
 	const savedRoles = mode === "load" ? raw?.providerRoles : source.providerRoles;
 	const savedProviders = mode === "load" ? raw?.providers : source.providers;

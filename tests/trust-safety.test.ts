@@ -73,6 +73,12 @@ describe("awaitWithAbortAndTimeout", () => {
 		await expect(awaitWithAbortAndTimeout(Promise.reject(new Error("HTTP 500")), { timeoutMs: 1000 }))
 			.rejects.toThrow("HTTP 500");
 	});
+
+	test("wraps a rejection that is not an Error", async () => {
+		const raced = awaitWithAbortAndTimeout(Promise.reject("socket closed"), { timeoutMs: 1000 });
+		await expect(raced).rejects.toBeInstanceOf(Error);
+		await expect(raced).rejects.toThrow("socket closed");
+	});
 });
 
 describe("assertNoteUnchangedDuringPreview", () => {

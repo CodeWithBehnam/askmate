@@ -611,6 +611,7 @@ describe("folder path safety (security#7)", () => {
 		expect(() => cleanFolderPath("AskMate/../../outside")).toThrow("\"..\" segment");
 		expect(() => cleanFolderPath("AskMate/./Images")).toThrow("\".\"");
 		expect(() => cleanFolderPath("AskMate/\u0000Images")).toThrow("control character");
+		expect(() => cleanFolderPath("AskMate/\u009bImages")).toThrow("control character");
 	});
 
 	test("folder context with a dot segment fails before listing", async () => {

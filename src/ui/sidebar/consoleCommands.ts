@@ -146,7 +146,8 @@ function findCommand(name: string, commands: readonly ConsoleCommand[]): { comma
 
 // A mention may be followed by closing punctuation ("Summarise @note."); a bare folder name never ends with it.
 const MENTION_PATTERN = /(^|\s)@(?:\[\[([^\]\n]+)\]\]|(selection|sel|note|folder)(?::(?:"([^"\n]+)"|(\S*[^\s.,;:!?)])))?)(?=[\s.,;:!?)]|$)/gi;
-const REMOVED_MENTION = "\u0000";
+// U+FFFF is a Unicode noncharacter, reserved for internal use, so it never stands for anything the user typed.
+const REMOVED_MENTION = "\uffff";
 
 /** Removes @mentions from the input. Unknown @words (such as email addresses) are left alone. */
 export function extractConsoleMentions(input: string): { text: string; mentions: ConsoleMentions; error: string | null } {
@@ -178,8 +179,8 @@ export function extractConsoleMentions(input: string): { text: string; mentions:
 	});
 	// Tidy only where a mention was removed, so indentation, tables and pasted code keep their spacing.
 	const text = marked
-		.replace(/[ \t]*\u0000[ \t]*(?=[.,;:!?)\r\n]|$)/g, "")
-		.replace(/[ \t]*\u0000[ \t]*/g, " ")
+		.replace(/[ \t]*\uffff[ \t]*(?=[.,;:!?)\r\n]|$)/g, "")
+		.replace(/[ \t]*\uffff[ \t]*/g, " ")
 		.trim();
 
 	if (scopes.size > 1) {

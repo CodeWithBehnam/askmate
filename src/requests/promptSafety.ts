@@ -9,7 +9,7 @@ export const PROMPT_DELIMITER_TAGS = [
 	"image_request"
 ] as const;
 
-// No trailing boundary check: a model may still read `</note_context​>` or `<user_request->` as a delimiter,
+// No trailing boundary check: a model may still read `</note_context` followed by a zero-width space, or `<user_request-`, as a delimiter,
 // and escaping a longer name that merely starts with a tag name is harmless.
 const PROMPT_DELIMITER_PATTERN = new RegExp(`<(\\s*/?\\s*)(${PROMPT_DELIMITER_TAGS.join("|")})`, "gi");
 

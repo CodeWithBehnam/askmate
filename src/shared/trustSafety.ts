@@ -30,14 +30,14 @@ export function awaitWithAbortAndTimeout<T>(
 
 	return new Promise<T>((resolve, reject) => {
 		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | null = null;
+		let timer: number | null = null;
 		const finish = (callback: () => void): void => {
 			if (settled) {
 				return;
 			}
 			settled = true;
 			if (timer !== null) {
-				clearTimeout(timer);
+				window.clearTimeout(timer);
 			}
 			abortSignal?.removeEventListener("abort", onAbort);
 			callback();
@@ -46,12 +46,12 @@ export function awaitWithAbortAndTimeout<T>(
 
 		abortSignal?.addEventListener("abort", onAbort, { once: true });
 		if (timeoutMs && timeoutMs > 0) {
-			timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs);
+			timer = window.setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs);
 		}
 
 		void request.then(
 			(value) => finish(() => resolve(value)),
-			(error) => finish(() => reject(error))
+			(error: unknown) => finish(() => reject(error instanceof Error ? error : new Error(String(error))))
 		);
 	});
 }

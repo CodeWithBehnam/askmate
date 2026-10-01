@@ -400,7 +400,9 @@ export class AskMateSettingTab extends PluginSettingTab {
 
 		details.open = true;
 		if (scrollIntoView) {
-			details.scrollIntoView({ behavior: "smooth", block: "start" });
+			// An explicit "smooth" overrides CSS scroll-behavior, so reduced motion has to be honoured here.
+			const reduceMotion = details.win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+			details.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
 			const summary = details.querySelector("summary");
 			summary?.focus();
 		}
@@ -1939,21 +1941,18 @@ export class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private createChartSvg(parent: HTMLElement, width: number, height: number, label: string): SVGSVGElement {
-		const svg = activeDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+		const svg = parent.createSvg("svg");
 		const id = `askmate-chart-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 		svg.setAttribute("class", "askmate-chart-svg");
 		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 		svg.setAttribute("role", "img");
 		svg.setAttribute("aria-labelledby", `${id}-title ${id}-desc`);
-		const title = activeDocument.createElementNS("http://www.w3.org/2000/svg", "title");
+		const title = svg.createSvg("title");
 		title.id = `${id}-title`;
 		title.textContent = label;
-		svg.appendChild(title);
-		const description = activeDocument.createElementNS("http://www.w3.org/2000/svg", "desc");
+		const description = svg.createSvg("desc");
 		description.id = `${id}-desc`;
 		description.textContent = `${label}. Detailed operation data is available in the recent operations table below.`;
-		svg.appendChild(description);
-		parent.appendChild(svg);
 		return svg;
 	}
 
@@ -1962,11 +1961,10 @@ export class AskMateSettingTab extends PluginSettingTab {
 		tagName: K,
 		attributes: Record<string, string | number>
 	): SVGElementTagNameMap[K] {
-		const element = activeDocument.createElementNS("http://www.w3.org/2000/svg", tagName);
+		const element = parent.createSvg(tagName);
 		for (const [key, value] of Object.entries(attributes)) {
 			element.setAttribute(key, String(value));
 		}
-		parent.appendChild(element);
 		return element;
 	}
 
@@ -1991,9 +1989,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	private appendSvgTitle(parent: SVGElement, text: string): void {
-		const title = activeDocument.createElementNS("http://www.w3.org/2000/svg", "title");
-		title.textContent = text;
-		parent.appendChild(title);
+		parent.createSvg("title").textContent = text;
 	}
 
 	private renderChartYAxis(

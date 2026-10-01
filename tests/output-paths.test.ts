@@ -18,6 +18,7 @@ describe("sanitizeFileName", () => {
 	test("removes path separators, link syntax and control characters", () => {
 		expect(sanitizeFileName("a/b\\c:d*e?f\"g<h>i|j#k^l[m]n")).toBe("abcdefghijklmn");
 		expect(sanitizeFileName("line\none\ttwo")).toBe("line one two");
+		expect(sanitizeFileName("del\u007fnel\u0085end")).toBe("del nel end");
 	});
 
 	test("drops trailing dots and spaces that Windows rejects", () => {

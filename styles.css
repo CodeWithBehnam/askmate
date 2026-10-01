@@ -2236,14 +2236,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.askmate-sidebar *,
-	.askmate-settings-tab * {
-		scroll-behavior: auto !important;
-		transition-duration: 0.01ms !important;
+	/* Same selectors as the rules that add motion, so these win by source order. */
+	.askmate-workflow-card,
+	.askmate-settings-section-chevron,
+	.askmate-batch-progress-fill {
+		transition: none;
 	}
 
-	.askmate-avatar {
-		animation: none !important;
+	.askmate-sidebar.is-loading .askmate-avatar-assistant {
+		animation: none;
 	}
 
 	.askmate-workflow-card:hover {

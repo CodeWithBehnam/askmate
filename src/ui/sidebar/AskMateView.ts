@@ -1864,8 +1864,10 @@ export class AskMateView extends ItemView {
 			return;
 		}
 
-		const host = activeDocument.createElement("div");
-		host.addClass("askmate-rendered-markdown");
+		// Created through body so it belongs to the view's own window (popouts included), then detached so the previous
+		// reply stays on screen until this render finishes.
+		const host = body.createDiv({ cls: "askmate-rendered-markdown" });
+		host.detach();
 		const component = this.addChild(new Component());
 		const isCurrent = (): boolean => !this.isClosed && body.isConnected && body.dataset.askmateRenderId === renderId;
 		this.markdownRendersInFlight.set(body, (this.markdownRendersInFlight.get(body) ?? 0) + 1);

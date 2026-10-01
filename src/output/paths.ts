@@ -1,5 +1,5 @@
 const ILLEGAL_FILE_NAME_CHARACTERS = /[\\/:*?"<>|#^[\]]/g;
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
+const CONTROL_CHARACTERS = /\p{Cc}/gu;
 
 /**
  * Makes one vault path segment from free text such as a title or model output. Leading dots are removed because
