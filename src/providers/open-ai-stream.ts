@@ -9,11 +9,13 @@
 import type { OpenAIStreamEvent, OpenAITokenUsage } from "../shared/core";
 
 export function parseOpenAIStreamEvent(line: string): OpenAIStreamEvent | null {
-	if (!line.startsWith("data: ")) {
+	// SSE allows "data:" with or without a following space.
+	const match = /^data:\s?(.*)$/.exec(line);
+	if (!match) {
 		return null;
 	}
 
-	const payload = line.slice(6).trim();
+	const payload = match[1].trim();
 
 	if (!payload || payload === "[DONE]") {
 		return null;
@@ -24,6 +26,12 @@ export function parseOpenAIStreamEvent(line: string): OpenAIStreamEvent | null {
 
 		if (event.error?.message) {
 			throw new Error(event.error.message);
+		}
+
+		// Responses API "error" events put the message at the top level, not under `error`.
+		const topLevelMessage = "message" in event ? event.message : undefined;
+		if (event.type === "error") {
+			throw new Error(typeof topLevelMessage === "string" && topLevelMessage.trim() ? topLevelMessage.trim() : "OpenAI stream error.");
 		}
 
 		return event;

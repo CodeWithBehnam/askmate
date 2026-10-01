@@ -37,25 +37,26 @@ export class UsageService {
 		return summarizeTokenUsage(this.getTokenUsageRecords());
 	}
 
-	getUsageTokensSince(startIso: string): number {
-		const startMs = Date.parse(startIso);
-		return this.getTokenUsageRecords()
-			.filter((record) => Date.parse(record.timestamp) >= startMs)
-			.reduce((sum, record) => sum + record.totalTokens, 0);
+	/**
+	 * Budgets read per-day totals because the record list is capped (MAX_TOKEN_USAGE_RECORDS) and would undercount
+	 * a busy month. Data saved before totals existed falls back to the records.
+	 */
+	getUsageTotalsByDay(): Record<string, number> {
+		const stats = normalizeTokenUsageStats(this.host.getSettings().tokenUsageStats);
+		return stats.totalsByDay ?? buildUsageTotalsFromRecords(stats.records);
 	}
 
 	evaluateUsageGuardrails(
-		request: AskRequest,
+		_request: AskRequest,
 		estimatedInputTokens?: number,
 		resolveEstimatedInputTokens?: () => number
 	): UsageGuardrailResult {
 		const settings = this.host.getSettings();
 		const estimate = estimatedInputTokens ?? resolveEstimatedInputTokens?.() ?? 0;
-		const now = new Date();
-		const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-		const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-		const dayUsedTokens = this.getUsageTokensSince(dayStart);
-		const monthUsedTokens = this.getUsageTokensSince(monthStart);
+		const todayKey = getLocalDayKey(new Date());
+		const totals = this.getUsageTotalsByDay();
+		const dayUsedTokens = totals[todayKey] ?? 0;
+		const monthUsedTokens = sumUsageTotalsForMonth(totals, todayKey.slice(0, 7));
 		const warnings: string[] = [];
 		const blockers: string[] = [];
 		if (!settings.usageGuardrailsEnabled) {
@@ -115,11 +116,13 @@ export class UsageService {
 				errorMessage = ""
 			} = params;
 			const settings = this.host.getSettings();
-			const inputUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.input_tokens);
-			const outputUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.output_tokens);
-			const totalUsage = endpoint === "images_generations" ? 0 : getNonNegativeInteger(usage?.total_tokens);
-			const inputTokens = inputUsage ?? estimateTokenCount(`${instructions}\n\n${input}`);
-			const outputTokens = outputUsage ?? estimateTokenCount(responseText);
+			const isImageGeneration = endpoint === "images_generations";
+			const inputUsage = getNonNegativeInteger(usage?.input_tokens);
+			const outputUsage = getNonNegativeInteger(usage?.output_tokens);
+			const totalUsage = getNonNegativeInteger(usage?.total_tokens);
+			// Image prompts are not priced like text, so an image call without reported usage is recorded as 0 rather than a text estimate.
+			const inputTokens = inputUsage ?? (isImageGeneration ? 0 : estimateTokenCount(`${instructions}\n\n${input}`));
+			const outputTokens = outputUsage ?? (isImageGeneration ? 0 : estimateTokenCount(responseText));
 			const componentTotal = inputTokens + outputTokens;
 			const totalTokens = Math.max(totalUsage ?? componentTotal, componentTotal);
 			const record: TokenUsageRecord = {
@@ -137,7 +140,7 @@ export class UsageService {
 				cachedInputTokens: getNonNegativeInteger(usage?.input_tokens_details?.cached_tokens) ?? 0,
 				reasoningOutputTokens: getNonNegativeInteger(usage?.output_tokens_details?.reasoning_tokens) ?? 0,
 				durationMs: Math.max(0, Date.now() - startedAt.getTime()),
-				estimated: endpoint === "images_generations" || inputUsage === null || outputUsage === null || totalUsage === null,
+				estimated: inputUsage === null || outputUsage === null || totalUsage === null,
 				operationKind,
 				outputMode: request.metadata.outputMode,
 				promptVersion: request.metadata.promptVersion,
@@ -145,9 +148,15 @@ export class UsageService {
 				endpoint,
 				errorMessage: errorMessage.trim().slice(0, 240)
 			};
-			const records = normalizeTokenUsageStats(settings.tokenUsageStats).records;
+			const stats = normalizeTokenUsageStats(settings.tokenUsageStats);
+			const totalsByDay = { ...(stats.totalsByDay ?? buildUsageTotalsFromRecords(stats.records)) };
+			if (countsTowardBudget(record)) {
+				const dayKey = getLocalDayKey(new Date(record.timestamp));
+				totalsByDay[dayKey] = (totalsByDay[dayKey] ?? 0) + record.totalTokens;
+			}
 			settings.tokenUsageStats = {
-				records: [...records, record].slice(-MAX_TOKEN_USAGE_RECORDS)
+				records: [...stats.records, record].slice(-MAX_TOKEN_USAGE_RECORDS),
+				totalsByDay
 			};
 			await this.host.saveSettings();
 		} catch (error) {
@@ -156,7 +165,34 @@ export class UsageService {
 	}
 
 	async resetTokenUsageStats(): Promise<void> {
-		this.host.getSettings().tokenUsageStats = { records: [] };
+		this.host.getSettings().tokenUsageStats = { records: [], totalsByDay: {} };
 		await this.host.saveSettings();
 	}
+}
+
+/** Local calendar day, because budgets reset at the user's midnight. */
+export function getLocalDayKey(date: Date): string {
+	const month = String(date.getMonth() + 1).padStart(2, "0");
+	const day = String(date.getDate()).padStart(2, "0");
+	return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** A failed or stopped call with no reported usage consumed nothing that can be measured, so it does not spend budget. */
+export function countsTowardBudget(record: TokenUsageRecord): boolean {
+	return !(record.estimated && (record.status === "failed" || record.status === "aborted"));
+}
+
+export function buildUsageTotalsFromRecords(records: TokenUsageRecord[]): Record<string, number> {
+	return records
+		.filter(countsTowardBudget)
+		.reduce<Record<string, number>>((totals, record) => {
+			const dayKey = getLocalDayKey(new Date(record.timestamp));
+			return { ...totals, [dayKey]: (totals[dayKey] ?? 0) + record.totalTokens };
+		}, {});
+}
+
+export function sumUsageTotalsForMonth(totals: Record<string, number>, monthKey: string): number {
+	return Object.entries(totals)
+		.filter(([day]) => day.startsWith(`${monthKey}-`))
+		.reduce((sum, [, total]) => sum + total, 0);
 }

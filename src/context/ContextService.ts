@@ -1,5 +1,5 @@
 import { Editor, MarkdownView, TFile, normalizePath } from "obsidian";
-import type { App } from "obsidian";
+import type { App, TAbstractFile } from "obsidian";
 import {
 	AskMateSettings,
 	BuildRequestOptions,
@@ -26,7 +26,153 @@ import {
 import { parseMarkdownHeadingSections } from "../output";
 
 export function cleanFolderPath(folder: string): string {
-	return normalizePath(folder.trim()).replace(/^\/+|\/+$/g, "");
+	const clean = normalizePath(folder.trim()).replace(/^\/+|\/+$/g, "");
+	// Folder templates can include model output, so a "." or ".." segment could otherwise point outside the intended folder.
+	if (/[\u0000-\u001f\u007f]/.test(clean) || clean.split("/").some((segment) => segment.trim() === "." || segment.trim() === "..")) {
+		throw new Error(`AskMate cannot use the folder path "${clean.replace(/[\u0000-\u001f\u007f]/g, "?")}" because it contains a "." or ".." segment or a control character.`);
+	}
+	return clean;
+}
+
+export function isSameOrDescendantPath(path: string, parentPath: string): boolean {
+	return Boolean(path) && Boolean(parentPath) && (path === parentPath || path.startsWith(`${parentPath}/`));
+}
+
+export type TruncatedText = { text: string; truncated: boolean };
+
+/**
+ * Cuts text to at most `limit` UTF-16 units. Never splits a surrogate pair, since some provider endpoints reject
+ * malformed strings, and prefers a line break in the last fifth of the budget so the model does not see half a line.
+ */
+export function truncateAtBoundary(text: string, limit: number): TruncatedText {
+	if (text.length <= limit) {
+		return { text, truncated: false };
+	}
+	let end = Math.max(0, Math.floor(limit));
+	const lastUnit = text.charCodeAt(end - 1);
+	if (end > 0 && lastUnit >= 0xd800 && lastUnit <= 0xdbff) {
+		end -= 1;
+	}
+	const lineBreak = text.lastIndexOf("\n", end - 1);
+	if (lineBreak > end * 0.8) {
+		end = lineBreak;
+	}
+	return { text: text.slice(0, end).trimEnd(), truncated: true };
+}
+
+/** Tells the model that an attachment is partial, so it does not conclude that the source lacks something. */
+export function formatTruncationNotice(shownCharacters: number, totalCharacters: number): string {
+	return `[AskMate truncated this attachment: showing ${shownCharacters} of ${totalCharacters} characters. Details beyond this point were not sent, so do not treat them as absent from the source.]`;
+}
+
+function withTruncationNotice(text: string, limit: number): TruncatedText & { shownCharacters: number } {
+	const cut = truncateAtBoundary(text, limit);
+	return {
+		text: cut.truncated ? `${cut.text}\n\n${formatTruncationNotice(cut.text.length, text.length)}` : cut.text,
+		truncated: cut.truncated,
+		shownCharacters: cut.text.length
+	};
+}
+
+const EXCALIDRAW_SECTION_END = /^(#{1,2}\s+(Excalidraw Data|Text Elements|Element Links|Embedded Files|Drawing)\s*|%%)$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function decodeJsonString(value: string): string {
+	try {
+		const decoded: unknown = JSON.parse(`"${value}"`);
+		return typeof decoded === "string" ? decoded : value;
+	} catch {
+		// A malformed escape sequence still leaves readable text, so keep the raw value.
+		return value;
+	}
+}
+
+function parseExcalidrawJsonTexts(json: string): string[] {
+	try {
+		const parsed: unknown = JSON.parse(json);
+		const elements = isRecord(parsed) && Array.isArray(parsed.elements) ? parsed.elements : [];
+		return elements.flatMap((element: unknown) => (
+			isRecord(element) && element.type === "text" && typeof element.text === "string" ? [element.text] : []
+		));
+	} catch {
+		// Partial or damaged JSON: scan for string values, honouring escaped quotes.
+		return Array.from(json.matchAll(/"text"\s*:\s*"((?:\\.|[^"\\])*)"/g), (match) => decodeJsonString(match[1] ?? ""));
+	}
+}
+
+/** Labels from the "## Text Elements" section of an .excalidraw.md file, where each element ends with a " ^blockId" marker. */
+export function parseExcalidrawTextElements(markdown: string): string[] {
+	const lines = markdown.split(/\r?\n/);
+	const start = lines.findIndex((line) => /^#{1,2}\s+Text Elements\s*$/.test(line));
+	if (start < 0) {
+		return [];
+	}
+
+	const texts: string[] = [];
+	let pending: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (EXCALIDRAW_SECTION_END.test(line.trim())) {
+			break;
+		}
+		const withoutComments = line.replace(/%%.*?%%/g, "");
+		const marker = withoutComments.match(/^(.*?)(?:^|\s+)\^[A-Za-z0-9_-]+\s*$/);
+		if (marker) {
+			texts.push([...pending, marker[1] ?? ""].join(" "));
+			pending = [];
+		} else if (withoutComments.trim()) {
+			pending.push(withoutComments);
+		}
+	}
+	return pending.length > 0 ? [...texts, pending.join(" ")] : texts;
+}
+
+export function describeExcalidrawForContext(raw: string, path: string): string {
+	const texts = extractExcalidrawTexts(raw, path);
+	return texts.length > 0
+		? ["[Excalidraw drawing: only its text labels are included, not the drawing itself.]", ...texts].join("\n")
+		: "[Excalidraw drawing with no text labels. The drawing itself cannot be included.]";
+}
+
+/**
+ * Readable text from an Excalidraw drawing. In .excalidraw.md files the labels live in the plain "## Text Elements"
+ * section. The "## Drawing" block is LZ-String "compressed-json" by default, which cannot be decoded without adding a
+ * dependency, so only an uncompressed ```json block is parsed. Plain .excalidraw and .excalidraw.json files are JSON.
+ */
+export function extractExcalidrawTexts(raw: string, path: string): string[] {
+	if (!path.toLowerCase().endsWith(".md")) {
+		return parseExcalidrawJsonTexts(raw);
+	}
+	const jsonBlock = raw.match(/```json\r?\n([\s\S]*?)\r?\n```/)?.[1];
+	return [...parseExcalidrawTextElements(raw), ...(jsonBlock ? parseExcalidrawJsonTexts(jsonBlock) : [])];
+}
+
+/** Defers the heading parse, which walks the whole note, until something reads `activeHeadingPath`. */
+function withLazyHeadingPath(context: NoteContext, compute: () => string | null): NoteContext {
+	let headingPath: string | null | undefined;
+	return Object.defineProperty(context, "activeHeadingPath", {
+		configurable: true,
+		enumerable: true,
+		get: (): string | null => {
+			if (headingPath === undefined) {
+				headingPath = compute();
+			}
+			return headingPath;
+		},
+		set: (value: string | null | undefined): void => {
+			headingPath = value ?? null;
+		}
+	});
+}
+
+/** Returns the path after a rename of `oldPath` to `newPath`, or null when the rename does not affect `path`. */
+export function remapRenamedPath(path: string, oldPath: string, newPath: string): string | null {
+	if (!isSameOrDescendantPath(path, oldPath)) {
+		return null;
+	}
+	return `${newPath}${path.slice(oldPath.length)}`;
 }
 
 export type ContextServiceHost = {
@@ -39,6 +185,11 @@ export class ContextService {
 	private lastMarkdownView: MarkdownView | null = null;
 	private lastMarkdownFile: TFile | null = null;
 	private lastNoteContext: NoteContext | null = null;
+	// A .md file can open in a non-Markdown view (Excalidraw, Kanban), which updates only the remembered file.
+	// These stamps record which of the view and the file was remembered last.
+	private rememberSequence = 0;
+	private viewRememberedAt = 0;
+	private fileRememberedAt = 0;
 
 	constructor(private readonly host: ContextServiceHost) {}
 
@@ -54,15 +205,25 @@ export class ContextService {
 			return;
 		}
 
-		this.lastMarkdownView = activeView;
+		this.rememberView(activeView);
 		this.rememberEditorContext(activeView.editor, activeView.file ?? null);
+	}
+
+	private rememberView(view: MarkdownView): void {
+		this.lastMarkdownView = view;
+		this.rememberSequence += 1;
+		this.viewRememberedAt = this.rememberSequence;
+		if (view.file?.extension === "md") {
+			this.lastMarkdownFile = view.file;
+			this.fileRememberedAt = this.rememberSequence;
+		}
 	}
 
 	async getNoteContext(editor?: Editor, file?: TFile | null): Promise<NoteContext> {
 		const activeView = this.host.app.workspace.getActiveViewOfType(MarkdownView);
 
 		if (editor) {
-			const context = this.tryCreateNoteContext(editor, file ?? activeView?.file ?? null);
+			const context = this.tryCreateNoteContext(editor, file ?? activeView?.file ?? null, this.findViewForEditor(editor));
 
 			if (context) {
 				this.rememberEditorContext(editor, context.file);
@@ -73,9 +234,8 @@ export class ContextService {
 		}
 
 		if (activeView) {
-			const context = this.tryCreateNoteContext(activeView.editor, activeView.file ?? null);
-			this.lastMarkdownView = activeView;
-			this.rememberMarkdownFile(activeView.file ?? null);
+			const context = this.tryCreateNoteContext(activeView.editor, activeView.file ?? null, activeView);
+			this.rememberView(activeView);
 			this.lastNoteContext = context;
 
 			if (context) {
@@ -84,16 +244,29 @@ export class ContextService {
 		}
 
 		const lastOpenView = this.getLastOpenMarkdownView();
+		const rememberedFile = this.getRememberedOpenFile();
+		const rememberedFileIsNewer = rememberedFile !== null
+			&& this.fileRememberedAt > this.viewRememberedAt
+			&& rememberedFile.path !== lastOpenView?.file?.path;
+		const view = rememberedFileIsNewer ? null : lastOpenView;
+		const targetFile = file ?? view?.file ?? rememberedFile;
+		const snapshot = this.lastNoteContext;
 
 		if (
-			this.lastNoteContext?.source === "Selected text" &&
-			(!lastOpenView || this.lastNoteContext.file === lastOpenView.file)
+			snapshot?.source === "Selected text"
+			&& snapshot.file
+			&& snapshot.file.path === targetFile?.path
+			&& view?.getMode() !== "preview"
 		) {
-			return this.lastNoteContext;
+			return snapshot;
 		}
 
-		if (lastOpenView) {
-			const context = this.tryCreateNoteContext(lastOpenView.editor, lastOpenView.file ?? null);
+		if (snapshot?.file && !this.isFileOpen(snapshot.file)) {
+			this.lastNoteContext = null;
+		}
+
+		if (view) {
+			const context = this.tryCreateNoteContext(view.editor, view.file ?? null, view);
 			this.lastNoteContext = context;
 
 			if (context) {
@@ -101,7 +274,7 @@ export class ContextService {
 			}
 		}
 
-		const fileContext = await this.tryCreateFileContext(file ?? lastOpenView?.file ?? this.lastMarkdownFile);
+		const fileContext = await this.tryCreateFileContext(targetFile);
 
 		if (fileContext) {
 			this.lastNoteContext = fileContext;
@@ -115,21 +288,116 @@ export class ContextService {
 		const activeView = this.host.app.workspace.getActiveViewOfType(MarkdownView);
 
 		if (activeView?.editor === editor) {
-			this.lastMarkdownView = activeView;
+			this.rememberView(activeView);
 		}
 
 		this.rememberMarkdownFile(file);
-		this.lastNoteContext = this.tryCreateNoteContext(editor, file);
+		// This runs on every keystroke. Only a selection needs a snapshot; the full note is read live when a request is built.
+		this.lastNoteContext = editor.somethingSelected()
+			? this.tryCreateNoteContext(editor, file, this.findViewForEditor(editor))
+			: null;
+	}
+
+	private findViewForEditor(editor: Editor): MarkdownView | null {
+		const activeView = this.host.app.workspace.getActiveViewOfType(MarkdownView);
+		if (activeView?.editor === editor) {
+			return activeView;
+		}
+		return this.lastMarkdownView?.editor === editor ? this.lastMarkdownView : null;
 	}
 
 	rememberMarkdownFile(file: TFile | null): void {
 		if (file?.extension === "md") {
 			this.lastMarkdownFile = file;
+			this.rememberSequence += 1;
+			this.fileRememberedAt = this.rememberSequence;
 		}
 	}
 
-	tryCreateNoteContext(editor: Editor | undefined, file: TFile | null): NoteContext | null {
-		const rawSelection = editor?.getSelection() ?? "";
+	/** The remembered file, or null (and forgotten) once it is deleted, renamed away from .md, or closed in every tab. */
+	private getRememberedOpenFile(): TFile | null {
+		const remembered = this.lastMarkdownFile;
+		if (!remembered) {
+			return null;
+		}
+
+		const current = this.host.app.vault.getAbstractFileByPath(remembered.path);
+		if (!(current instanceof TFile) || current.extension !== "md" || !this.isFileOpen(current)) {
+			this.lastMarkdownFile = null;
+			return null;
+		}
+
+		this.lastMarkdownFile = current;
+		return current;
+	}
+
+	private isFileOpen(file: TFile): boolean {
+		let open = false;
+		// The view state also covers deferred (not yet loaded) tabs, whose view is not a MarkdownView yet.
+		this.host.app.workspace.iterateAllLeaves((leaf) => {
+			if (!open && (leaf.getViewState().state?.file === file.path || (leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path))) {
+				open = true;
+			}
+		});
+		return open;
+	}
+
+	handleFileRenamed(file: TAbstractFile, oldPath: string): void {
+		// Obsidian updates TFile paths in place before this event, so match on the old path, the new path and the object itself.
+		const isAffected = (candidate: TFile | null | undefined): boolean => Boolean(candidate) && (
+			candidate === file
+			|| remapRenamedPath(candidate?.path ?? "", oldPath, file.path) !== null
+			|| isSameOrDescendantPath(candidate?.path ?? "", file.path)
+		);
+		const refresh = (candidate: TFile): TFile | null => {
+			const currentPath = remapRenamedPath(candidate.path, oldPath, file.path) ?? candidate.path;
+			const resolved = this.host.app.vault.getAbstractFileByPath(currentPath);
+			return resolved instanceof TFile && resolved.extension === "md" ? resolved : null;
+		};
+
+		if (this.lastMarkdownFile && isAffected(this.lastMarkdownFile)) {
+			this.lastMarkdownFile = refresh(this.lastMarkdownFile);
+		}
+
+		const snapshot = this.lastNoteContext;
+		const snapshotPath = snapshot?.selectionIdentity?.sourcePath ?? "";
+		if (snapshot && (isAffected(snapshot.file) || remapRenamedPath(snapshotPath, oldPath, file.path) !== null)) {
+			const refreshed = snapshot.file ? refresh(snapshot.file) : null;
+			this.lastNoteContext = refreshed
+				? {
+					...snapshot,
+					file: refreshed,
+					selectionIdentity: snapshot.selectionIdentity
+						? { ...snapshot.selectionIdentity, sourcePath: refreshed.path }
+						: snapshot.selectionIdentity
+				}
+				: null;
+		}
+	}
+
+	handleFileDeleted(file: TAbstractFile): void {
+		const isAffected = (candidate: TFile | null | undefined): boolean => Boolean(candidate) && (
+			candidate === file || isSameOrDescendantPath(candidate?.path ?? "", file.path)
+		);
+
+		if (isAffected(this.lastMarkdownFile)) {
+			this.lastMarkdownFile = null;
+		}
+
+		const snapshot = this.lastNoteContext;
+		if (snapshot && (isAffected(snapshot.file) || isSameOrDescendantPath(snapshot.selectionIdentity?.sourcePath ?? "", file.path))) {
+			this.lastNoteContext = null;
+		}
+
+		if (isAffected(this.lastMarkdownView?.file)) {
+			this.lastMarkdownView = null;
+		}
+	}
+
+	tryCreateNoteContext(editor: Editor | undefined, file: TFile | null, view: MarkdownView | null = null, ignoreSelection = false): NoteContext | null {
+		// In reading mode the user's highlight is a DOM selection the editor cannot see, while the editor may still hold
+		// an old, invisible selection from editing mode. Use the full note instead.
+		const rawSelection = ignoreSelection || view?.getMode() === "preview" ? "" : editor?.getSelection() ?? "";
 		const selectedText = rawSelection.trim();
 
 		if (selectedText.length > 0) {
@@ -138,33 +406,34 @@ export class ContextService {
 			const to = editor?.getCursor("to");
 			const startOffset = from && editor ? editor.posToOffset(from) : 0;
 			const endOffset = to && editor ? editor.posToOffset(to) : startOffset + rawSelection.length;
-			return {
+			const cursorLine = editor?.getCursor().line;
+			return withLazyHeadingPath({
 				content: selectedText,
 				file,
 				source: "Selected text",
-				activeHeadingPath: editor ? this.getActiveHeadingPath(fullValue, editor.getCursor().line) : null,
 				selectionStartLine: from ? from.line + 1 : null,
 				selectionEndLine: to ? to.line + 1 : null,
 				selectionIdentity: createSelectionIdentity(rawSelection, startOffset, endOffset, file?.path ?? "", fullValue)
-			};
+			}, () => cursorLine === undefined ? null : this.getActiveHeadingPath(fullValue, cursorLine));
 		}
 
 		if (!editor) {
 			return null;
 		}
 
-		const fullNote = editor.getValue().trim();
+		const value = editor.getValue();
+		const fullNote = value.trim();
 
 		if (fullNote.length > 0 || file?.extension === "md") {
-			return {
+			const cursorLine = editor.getCursor().line;
+			return withLazyHeadingPath({
 				content: fullNote,
 				file,
 				source: "Current note",
-				activeHeadingPath: this.getActiveHeadingPath(editor.getValue(), editor.getCursor().line),
 				selectionStartLine: null,
 				selectionEndLine: null,
 				selectionIdentity: null
-			};
+			}, () => this.getActiveHeadingPath(value, cursorLine));
 		}
 
 		return null;
@@ -178,8 +447,17 @@ export class ContextService {
 		return await this.getFileNoteContext(file);
 	}
 
+	/** The whole note, ignoring any selection. The open editor's text wins over the saved file, which can lag behind it. */
+	async getFullNoteContext(file: TFile): Promise<NoteContext> {
+		const view = this.getOpenMarkdownViewForFile(file);
+		const context = view ? this.tryCreateNoteContext(view.editor, file, view, true) : null;
+		return context ?? await this.getFileNoteContext(file);
+	}
+
 	async getFileNoteContext(file: TFile): Promise<NoteContext> {
-		const content = (await this.host.app.vault.cachedRead(file)).trim();
+		const raw = (await this.host.app.vault.cachedRead(file)).trim();
+		// An Excalidraw file is mostly compressed drawing data; only its text labels are useful to the model.
+		const content = file.path.toLowerCase().endsWith(".excalidraw.md") ? describeExcalidrawForContext(raw, file.path) : raw;
 		return {
 			content,
 			file,
@@ -279,7 +557,7 @@ export class ContextService {
 		}
 
 		if (settings.includeExcalidrawSummaries) {
-			attachments.push(...await this.buildExcalidrawSummaryAttachments(context));
+			attachments.push(...await this.buildExcalidrawSummaryAttachments(context, privacy));
 		}
 
 		if (privacy.includeImageReferences && settings.includeImageManifests) {
@@ -344,8 +622,9 @@ export class ContextService {
 		const guidance = kind === "style_guide"
 			? "Use this attachment for tone, formatting, naming, and writing conventions."
 			: "Use this attachment for domain terms, aliases, acronyms, and definitions.";
-		const content = [`${role} role context. ${guidance}`, "", raw.slice(0, limit)].join("\n");
-		return this.createContextAttachment(kind, `${role}: ${file.path}`, file.path, content, raw.length);
+		const body = withTruncationNotice(raw, limit);
+		const content = [`${role} role context. ${guidance}`, "", body.text].join("\n");
+		return this.createContextAttachment(kind, `${role}: ${file.path}`, file.path, content, raw.length, body.truncated);
 	}
 
 	createContextAttachment(
@@ -353,7 +632,8 @@ export class ContextService {
 		title: string,
 		sourcePath: string,
 		content: string,
-		originalCharacters = content.length
+		originalCharacters = content.length,
+		truncated?: boolean
 	): ContextAttachment {
 		const normalized = content.trim();
 		return {
@@ -363,7 +643,8 @@ export class ContextService {
 			content: normalized,
 			originalCharacters,
 			finalCharacters: normalized.length,
-			truncated: normalized.length < originalCharacters
+			// Explicit when known, because a truncation notice or header can make the content longer than the source.
+			truncated: truncated ?? normalized.length < originalCharacters
 		};
 	}
 
@@ -382,14 +663,15 @@ export class ContextService {
 			}
 
 			const raw = (await this.host.app.vault.cachedRead(file)).trim();
-			const content = raw.slice(0, remaining);
-			remaining -= content.length;
+			const content = withTruncationNotice(raw, remaining);
+			remaining = content.truncated ? 0 : remaining - content.shownCharacters;
 			attachments.push(this.createContextAttachment(
 				"additional_note",
 				`Additional note: ${file.path}`,
 				file.path,
-				content,
-				raw.length
+				content.text,
+				raw.length,
+				content.truncated
 			));
 		}
 
@@ -417,14 +699,15 @@ export class ContextService {
 			}
 
 			const raw = (await this.host.app.vault.cachedRead(file)).trim();
-			const content = raw.slice(0, remaining);
-			remaining -= content.length;
+			const content = withTruncationNotice(raw, remaining);
+			remaining = content.truncated ? 0 : remaining - content.shownCharacters;
 			attachments.push(this.createContextAttachment(
 				"folder_note",
 				`Folder note ${attachments.length + 1}: ${file.path}`,
 				file.path,
-				content,
-				raw.length
+				content.text,
+				raw.length,
+				content.truncated
 			));
 		}
 
@@ -446,7 +729,10 @@ export class ContextService {
 		return linked?.extension === "md" ? linked : null;
 	}
 
-	async buildExcalidrawSummaryAttachments(context: NoteContext): Promise<ContextAttachment[]> {
+	async buildExcalidrawSummaryAttachments(
+		context: NoteContext,
+		privacy: Pick<RequestPrivacyOptions, "includeImageReferences">
+	): Promise<ContextAttachment[]> {
 		const sourcePath = context.file?.path ?? "";
 		const files = new Map<string, TFile>();
 
@@ -464,23 +750,24 @@ export class ContextService {
 		const attachments: ContextAttachment[] = [];
 		for (const file of files.values()) {
 			const raw = await this.host.app.vault.cachedRead(file);
-			const summary = this.extractExcalidrawSummary(raw, file.path);
-			if (!summary.trim()) {
+			const summary = this.extractExcalidrawSummary(raw, file.path, privacy.includeImageReferences);
+			if (!summary.text.trim()) {
 				continue;
 			}
 			attachments.push(this.createContextAttachment(
 				"excalidraw_summary",
 				`Excalidraw summary: ${file.path}`,
 				file.path,
-				summary,
-				raw.length
+				summary.text,
+				raw.length,
+				summary.truncated
 			));
 		}
 
 		return attachments;
 	}
 
-	extractExcalidrawSummary(raw: string, sourcePath: string): string {
+	extractExcalidrawSummary(raw: string, sourcePath: string, includeImageReferences = true): TruncatedText {
 		const lines = new Set<string>();
 		const addLine = (value: unknown): void => {
 			if (typeof value !== "string") {
@@ -492,21 +779,14 @@ export class ContextService {
 			}
 		};
 
-		try {
-			const parsed = JSON.parse(raw) as { elements?: Array<{ type?: unknown; text?: unknown }> };
-			for (const element of parsed.elements ?? []) {
-				if (element?.type === "text") {
-					addLine(element.text);
-				}
-			}
-		} catch {
-			for (const match of raw.matchAll(/"text"\s*:\s*"([^"]+)"/g)) {
-				addLine(match[1].replace(/\\"/g, "\""));
-			}
-		}
+		extractExcalidrawTexts(raw, sourcePath).forEach(addLine);
 
-		for (const match of raw.matchAll(/!\[\[([^\]]+)\]\]|\[\[([^\]]+)\]\]/g)) {
-			addLine(match[1] ?? match[2]);
+		for (const match of raw.matchAll(/!?\[\[([^\]]+)\]\]/g)) {
+			const target = match[1] ?? "";
+			// Embedded image targets are written as bare paths here, which the bracket-based privacy redaction cannot see.
+			if (includeImageReferences || !isImageReferencePath(this.cleanReferenceText(target))) {
+				addLine(target);
+			}
 		}
 
 		const body = Array.from(lines).slice(0, 80).join("\n");
@@ -516,7 +796,7 @@ export class ContextService {
 			"",
 			body || "No readable text elements were found."
 		].join("\n");
-		return content.slice(0, this.host.getSettings().excalidrawSummaryMaxCharacters).trim();
+		return withTruncationNotice(content.trim(), this.host.getSettings().excalidrawSummaryMaxCharacters);
 	}
 
 	isExcalidrawPath(path: string): boolean {
@@ -622,6 +902,11 @@ export class ContextService {
 			&& !path.includes("/.");
 	}
 
+	isVisibleFolderPath(path: string): boolean {
+		return path !== this.host.app.vault.configDir
+			&& !path.split("/").some((segment) => segment.startsWith("."));
+	}
+
 	async listMarkdownFilesInFolder(folderPath: string, maxFiles: number, excludePath = ""): Promise<TFile[]> {
 		const folder = cleanFolderPath(folderPath);
 		if (!folder) {
@@ -654,7 +939,12 @@ export class ContextService {
 			}
 
 			for (const path of listed.folders.slice().sort((a, b) => a.localeCompare(b))) {
-				await visit(normalizePath(path));
+				const folderPath = normalizePath(path);
+				// Hidden folders (.git, the config folder, .trash) can hold thousands of files that are never context.
+				if (!this.isVisibleFolderPath(folderPath)) {
+					continue;
+				}
+				await visit(folderPath);
 				if (paths.length >= limit) {
 					return;
 				}

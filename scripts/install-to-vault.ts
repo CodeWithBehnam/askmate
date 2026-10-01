@@ -1,13 +1,25 @@
+/*
+ * Copies the built release assets into a development vault and asks Obsidian to reload AskMate.
+ *
+ * Environment variables:
+ *   ASKMATE_VAULT_PLUGIN_DIR   Required. The plugin folder inside your vault, for example
+ *                              <YourVault>/.obsidian/plugins/askmate
+ *   ASKMATE_VAULT_NAME         Vault name for the reload request. Default: the vault folder name
+ *                              derived from ASKMATE_VAULT_PLUGIN_DIR.
+ *   ASKMATE_OBSIDIAN_CLI_PATH  Obsidian binary used for the reload request.
+ *                              Default: /Applications/Obsidian.app/Contents/MacOS/obsidian (macOS).
+ *   ASKMATE_INSTALL_FILES      Comma-separated files to copy. Default: main.js,manifest.json,styles.css
+ *   ASKMATE_RELOAD_TIMEOUT_MS  Reload request timeout. Default: 10000
+ *   ASKMATE_VERIFY_ONLY        "1" or "true" to only compare files (same as --verify-only).
+ *   ASKMATE_SKIP_RELOAD        "1" or "true" to skip the reload request.
+ */
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-const DEFAULT_VAULT_PLUGIN_DIR =
-	"/Users/behnamebrahimi/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/PersonalLife/PLife/.obsidian/plugins/askmate";
 const DEFAULT_OBSIDIAN_CLI_PATH = "/Applications/Obsidian.app/Contents/MacOS/obsidian";
-const DEFAULT_VAULT_NAME = "PLife";
 const DEFAULT_FILES = ["main.js", "manifest.json", "styles.css"];
 const DEFAULT_RELOAD_TIMEOUT_MS = 10000;
 
@@ -41,9 +53,24 @@ function readInstallFiles(): string[] {
 	return files;
 }
 
-const vaultPluginDir = process.env.ASKMATE_VAULT_PLUGIN_DIR || DEFAULT_VAULT_PLUGIN_DIR;
+function readVaultPluginDir(): string {
+	const value = process.env.ASKMATE_VAULT_PLUGIN_DIR?.trim();
+
+	if (!value) {
+		console.error(
+			"ASKMATE_VAULT_PLUGIN_DIR is not set. Set it to your development vault's plugin folder, for example " +
+				"ASKMATE_VAULT_PLUGIN_DIR=\"<YourVault>/.obsidian/plugins/askmate\" bun run install:vault"
+		);
+		process.exit(1);
+	}
+
+	return value;
+}
+
+const vaultPluginDir = readVaultPluginDir();
 const obsidianCliPath = process.env.ASKMATE_OBSIDIAN_CLI_PATH || DEFAULT_OBSIDIAN_CLI_PATH;
-const vaultName = process.env.ASKMATE_VAULT_NAME || DEFAULT_VAULT_NAME;
+// <vault>/.obsidian/plugins/askmate sits three levels below the vault folder, whose name Obsidian uses as the vault name.
+const vaultName = process.env.ASKMATE_VAULT_NAME || basename(resolve(vaultPluginDir, "..", "..", ".."));
 const reloadTimeoutMs = readPositiveIntegerEnv("ASKMATE_RELOAD_TIMEOUT_MS", DEFAULT_RELOAD_TIMEOUT_MS);
 const files = readInstallFiles();
 const verifyOnly = readBooleanEnv("ASKMATE_VERIFY_ONLY") || process.argv.includes("--verify-only");

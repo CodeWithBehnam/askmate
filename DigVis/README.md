@@ -6,7 +6,7 @@ This DigVis package gives a visual, source-backed map of the AskMate Obsidian pl
 
 ## Project summary
 
-AskMate is a desktop-only Obsidian plugin that adds a right-sidebar AI assistant for the current note or selection. It supports Q&A, summaries, rewrites, reusable workflows, safe Apply back into notes, result notes, review queues, usage guardrails, evidence-linked answers, and OpenAI image generation.
+AskMate is a desktop-only Obsidian plugin that adds a right-sidebar AI assistant for the current note or selection. It supports Q&A, summaries, rewrites, reusable workflows, safe Apply back into notes, result notes, review queues, usage guardrails, evidence-linked answers, and OpenAI image generation. `AskMatePlugin` orchestrates four services (`ContextService`, `RequestRunner`, `HistoryService`, `UsageService`) plus pure helpers in `src/requests`, `src/output`, `src/shared` and `src/ui/sidebar/renderSafety.ts`, and a `bun test` suite in `tests/` covers the pure logic.
 
 ## What this package covers
 
@@ -108,13 +108,14 @@ Use this index first, then follow the numbered documents. Files marked inferred 
 
 ## Validation status
 
-The package was generated from repository inspection on 2026-05-19. Keep validation notes in this section when the package is updated. Mermaid rendering should be attempted only if the Mermaid CLI is already available or can be run through permitted project tooling.
+The package was generated from repository inspection on 2026-05-19 and updated on 2026-10-01 for the service split (`src/context`, `src/requests`, `src/history`, `src/usage`, `src/output`), the new safety modules (`renderSafety`, `promptSafety`, `imageIntent`, `syncInPlace`) and the `bun test` suite. On 2026-10-01 `bun test tests` passed (394 tests in 21 files) and the smoke guards passed; Mermaid diagrams were not rendered. Keep validation notes in this section when the package is updated. Mermaid rendering should be attempted only if the Mermaid CLI is already available or can be run through permitted project tooling.
 
 ## Known gaps and open questions
 
 | Gap | Status |
 | --- | --- |
-| No unit or integration test suite was visible in the inspected files. | inferred |
+| `AskMatePlugin.ts` and `AskMateView.ts` import the Obsidian runtime and are not loaded by `bun test`, so Apply, batch and UI flows have no automated behavioural tests beyond wiring guards. | confirmed |
+| Line references in `docs/investigations/*` predate the service split and point at old `main.ts` or `AskMatePlugin.ts` lines. | confirmed |
 | Manual Obsidian behavior, such as actual sidebar focus fallback and Apply UX, was not executed during documentation generation. | needs verification |
 | Provider API behavior depends on external services and was not called while creating DigVis. | needs verification |
 | Some CSS conclusions are based on targeted slices and source references, not a rendered UI review. | inferred |
@@ -123,8 +124,8 @@ The package was generated from repository inspection on 2026-05-19. Keep validat
 
 | Field | Details |
 | --- | --- |
-| Source files inspected | `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `rules.md`, `package.json`, `manifest.json`, `src/plugin/AskMatePlugin.ts`, `src/ui/sidebar/AskMateView.ts`, `src/ui/settings/AskMateSettingTab.ts`, `src/providers/index.ts`, `src/shared/types.ts`, `scripts/roadmap-smoke-tests.ts`, `.github/workflows/release.yml` |
-| Key symbols | `AskMatePlugin`, `AskMateView`, `AskMateSettingTab`, `AskRequest`, `AskMateSettings`, `ProviderRuntime`, `WORKFLOWS` |
+| Source files inspected | `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `rules.md`, `package.json`, `manifest.json`, `src/plugin/AskMatePlugin.ts`, `src/context/ContextService.ts`, `src/requests/RequestRunner.ts`, `src/history/HistoryService.ts`, `src/usage/UsageService.ts`, `src/ui/sidebar/AskMateView.ts`, `src/ui/settings/AskMateSettingTab.ts`, `src/providers/index.ts`, `src/shared/types.ts`, `scripts/roadmap-smoke-tests.ts`, `tests/*`, `.github/workflows/ci.yml`, `.github/workflows/release.yml` |
+| Key symbols | `AskMatePlugin`, `ContextService`, `RequestRunner`, `HistoryService`, `UsageService`, `AskMateView`, `AskMateSettingTab`, `AskRequest`, `AskMateSettings`, `ProviderRuntime`, `WORKFLOWS` |
 | Inferences | Reading paths and risk ordering are inferred from ownership and runtime boundaries. |
 | Confidence | confirmed |
 | Open questions | Manual Obsidian runtime behavior and external provider behavior were not executed. |

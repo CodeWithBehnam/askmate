@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS: AskMateSettings = {
 	workflowCustomInstructions: "",
 	composerLayout: "compact",
 	showOnboardingTips: true,
+	autoImageIntentEnabled: true,
 	onboardingTipsDismissedAt: null,
 	threadedChatEnabled: false,
 	threadedChatMaxTurns: DEFAULT_THREADED_CHAT_MAX_TURNS,

@@ -5,23 +5,27 @@ on:
     tags:
       - "[0-9]*.[0-9]*.[0-9]*"
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+permissions: {}
 
 jobs:
   release:
     name: Build, attest, and publish release
     runs-on: ubuntu-latest
+    permissions:
+      # Publishing the release needs contents: write; the provenance attestation needs id-token and attestations.
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.4.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -31,8 +35,10 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           MANIFEST_VERSION="$(bun -e "console.log(require('./manifest.json').version)")"
+          MANIFEST_MIN_APP_VERSION="$(bun -e "console.log(require('./manifest.json').minAppVersion)")"
           PACKAGE_VERSION="$(bun -e "console.log(require('./package.json').version)")"
           HAS_VERSIONS_ENTRY="$(bun -e "const v=require('./versions.json'); console.log(Object.prototype.hasOwnProperty.call(v, process.argv[1]) ? 'yes' : 'no')" "$VERSION")"
+          VERSIONS_MIN_APP_VERSION="$(bun -e "const v=require('./versions.json'); console.log(String(v[process.argv[1]]))" "$VERSION")"
           if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
             echo "Tag $VERSION does not match manifest version $MANIFEST_VERSION" >&2
             exit 1
@@ -45,6 +51,11 @@ jobs:
             echo "versions.json is missing an entry for $VERSION" >&2
             exit 1
           fi
+          # Obsidian reads versions.json to offer older app versions a compatible release, so it must agree with the manifest.
+          if [ "$VERSIONS_MIN_APP_VERSION" != "$MANIFEST_MIN_APP_VERSION" ]; then
+            echo "versions.json maps $VERSION to $VERSIONS_MIN_APP_VERSION, but manifest minAppVersion is $MANIFEST_MIN_APP_VERSION" >&2
+            exit 1
+          fi
 
       - name: Run tests
         run: bun run test
@@ -53,7 +64,7 @@ jobs:
         run: bun run build
 
       - name: Attest release assets
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: |
             main.js
@@ -61,7 +72,7 @@ jobs:
             styles.css
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           name: AskMate ${{ github.ref_name }}

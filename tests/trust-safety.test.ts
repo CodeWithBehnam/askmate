@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	assertNoteUnchangedDuringPreview,
 	awaitWithAbortAndTimeout,
 	canRunContinue,
 	cancelledMutation,
@@ -58,6 +59,30 @@ describe("awaitWithAbortAndTimeout", () => {
 		await expect(raced).rejects.toThrow("Generation timed out.");
 		pending.resolve("late success");
 		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	test("rejects at once when the signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(awaitWithAbortAndTimeout(Promise.resolve("value"), { abortSignal: controller.signal }))
+			.rejects.toMatchObject({ name: "AbortError" });
+	});
+
+	test("resolves with the request value and propagates the request's own error", async () => {
+		await expect(awaitWithAbortAndTimeout(Promise.resolve("value"), { timeoutMs: 1000 })).resolves.toBe("value");
+		await expect(awaitWithAbortAndTimeout(Promise.reject(new Error("HTTP 500")), { timeoutMs: 1000 }))
+			.rejects.toThrow("HTTP 500");
+	});
+});
+
+describe("assertNoteUnchangedDuringPreview", () => {
+	test("passes when the note is unchanged", () => {
+		expect(() => assertNoteUnchangedDuringPreview("same", "same", "Note.md")).not.toThrow();
+	});
+
+	test("throws a specific error when the note changed, including a line-ending-only change", () => {
+		expect(() => assertNoteUnchangedDuringPreview("a\nb", "a\nb edited", "Note.md")).toThrow('Note "Note.md" changed while the Apply preview was open');
+		expect(() => assertNoteUnchangedDuringPreview("a\nb", "a\r\nb", "Note.md")).toThrow("changed while the Apply preview was open");
 	});
 });
 
@@ -135,6 +160,67 @@ describe("selection identity resolution", () => {
 	test("rejects missing and ambiguous text", () => {
 		expect(resolveSelectionIdentity("no match", identity).status).toBe("missing");
 		expect(resolveSelectionIdentity("target and target", identity).status).toBe("ambiguous");
+	});
+
+	const fullText = "Intro line.\nFirst: target here.\nSecond: target here.\n";
+	const secondStart = fullText.lastIndexOf("target");
+
+	test("captures prefix and suffix anchors from the full text", () => {
+		const anchored = createSelectionIdentity("target", secondStart, secondStart + 6, "Note.md", fullText);
+		expect(anchored?.prefix).toBe(fullText.slice(0, secondStart));
+		expect(anchored?.suffix).toBe(" here.\n");
+	});
+
+	test("clips the prefix at the start of the document", () => {
+		const anchored = createSelectionIdentity("Intro", 0, 5, "Note.md", fullText);
+		expect(anchored?.prefix).toBe("");
+		expect(anchored?.startOffset).toBe(0);
+	});
+
+	test("uses anchors to pick the right copy of repeated text after it moved", () => {
+		const anchored = createSelectionIdentity("target", secondStart, secondStart + 6, "Note.md", fullText);
+		if (!anchored) {
+			throw new Error("expected an identity");
+		}
+		const moved = `New heading\n${fullText}`;
+		expect(resolveSelectionIdentity(moved, anchored)).toEqual({
+			status: "relocated",
+			startOffset: secondStart + "New heading\n".length,
+			endOffset: secondStart + "New heading\n".length + 6
+		});
+	});
+
+	test("an edit near unique selected text still resolves it", () => {
+		const text = "Some context here before the unique phrase and after.";
+		const start = text.indexOf("unique phrase");
+		const anchored = createSelectionIdentity("unique phrase", start, start + 13, "Note.md", text);
+		if (!anchored) {
+			throw new Error("expected an identity");
+		}
+		const edited = text.replace("here", "HERE");
+		// Anchors no longer match, so this is a relocation to the same unique offsets rather than an exact hit.
+		expect(resolveSelectionIdentity(edited, anchored)).toEqual({ status: "relocated", startOffset: start, endOffset: start + 13 });
+		expect(resolveSelectionIdentity(`Prepended. ${edited}`, anchored).status).toBe("relocated");
+	});
+
+	test("a copy of the selected text elsewhere is not mistaken for the selection after the original was edited", () => {
+		const note = "# Plan\n- [ ] Call Sam\nMore planning text here.\n\n# Later\n- [ ] Call Sam\nOther text.\n";
+		const start = note.indexOf("- [ ] Call Sam");
+		const anchored = createSelectionIdentity("- [ ] Call Sam", start, start + 14, "Note.md", note);
+		if (!anchored) {
+			throw new Error("expected an identity");
+		}
+		const ticked = note.replace("- [ ] Call Sam\nMore", "- [x] Call Sam\nMore");
+		expect(resolveSelectionIdentity(ticked, anchored).status).toBe("missing");
+	});
+
+	test("repeated text whose anchors were both edited is ambiguous, not guessed", () => {
+		const anchored = createSelectionIdentity("target", secondStart, secondStart + 6, "Note.md", fullText);
+		if (!anchored) {
+			throw new Error("expected an identity");
+		}
+		const edited = fullText.replace("Intro line.", "Changed intro.").replace("Second: target here.", "Second: target there.");
+		expect(resolveSelectionIdentity(edited, anchored).status).toBe("ambiguous");
 	});
 });
 

@@ -121,6 +121,17 @@ function anchorsMatch(currentText: string, identity: SelectionIdentity, startOff
 		&& currentText.slice(suffixStart, suffixStart + suffix.length) === suffix;
 }
 
+const ADJACENT_ANCHOR_CHARACTERS = 16;
+
+function adjacentAnchorMatches(currentText: string, identity: SelectionIdentity, startOffset: number): boolean {
+	const prefixTail = (identity.prefix ?? "").slice(-ADJACENT_ANCHOR_CHARACTERS);
+	const suffixHead = (identity.suffix ?? "").slice(0, ADJACENT_ANCHOR_CHARACTERS);
+	const endOffset = startOffset + identity.text.length;
+	const prefixMatches = prefixTail.length > 0 && currentText.slice(Math.max(0, startOffset - prefixTail.length), startOffset) === prefixTail;
+	const suffixMatches = suffixHead.length > 0 && currentText.slice(endOffset, endOffset + suffixHead.length) === suffixHead;
+	return prefixMatches || suffixMatches;
+}
+
 export function resolveSelectionIdentity(currentText: string, identity: SelectionIdentity): SelectionResolution {
 	if (
 		identity.startOffset >= 0
@@ -133,7 +144,12 @@ export function resolveSelectionIdentity(currentText: string, identity: Selectio
 
 	const occurrences = findExactOccurrences(currentText, identity.text);
 	const anchored = occurrences.filter((startOffset) => anchorsMatch(currentText, identity, startOffset));
-	const candidates = identity.prefix || identity.suffix ? anchored : occurrences;
+	// An edit somewhere in the 96-character anchors should not block Apply, but a copy of the same text elsewhere in the
+	// note (for example after the original was edited away) must not be mistaken for the selection. So an unanchored
+	// match is accepted only when the characters right next to it still match one side of the original anchors.
+	const nearlyAnchored = occurrences.filter((startOffset) => adjacentAnchorMatches(currentText, identity, startOffset));
+	const hasAnchors = Boolean(identity.prefix || identity.suffix);
+	const candidates = anchored.length > 0 ? anchored : hasAnchors ? nearlyAnchored : occurrences;
 	if (candidates.length === 1) {
 		const startOffset = candidates[0];
 		return { status: "relocated", startOffset, endOffset: startOffset + identity.text.length };
@@ -144,6 +160,14 @@ export function resolveSelectionIdentity(currentText: string, identity: Selectio
 		startOffset: null,
 		endOffset: null
 	};
+}
+
+export function assertNoteUnchangedDuringPreview(expected: string, actual: string, targetLabel: string): void {
+	if (expected !== actual) {
+		throw new Error(
+			`Note "${targetLabel}" changed while the Apply preview was open. AskMate cancelled the write to avoid overwriting concurrent edits. Try Apply again.`
+		);
+	}
 }
 
 export function appliedMutation(message: string, targetPath?: string): MutationOutcome {

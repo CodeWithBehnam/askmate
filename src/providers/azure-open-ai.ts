@@ -1,12 +1,11 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
-	getProviderLabel,
 	ProviderModelRef,
 	ProviderSettings,
 	ProviderTextResult,
 	validateAzureOpenAIBaseUrl
 } from "../shared/core";
-import { completeChatCompletionsText, extractProviderError, fetchModelList, formatProviderHttpError } from "./common";
+import { completeChatCompletionsText, describeProviderErrorBody, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
 export function getAzureOpenAIHeaders(apiKey: string): Record<string, string> {
@@ -48,21 +47,15 @@ export async function completeAzureOpenAIText(
 	});
 }
 
-export async function fetchAzureOpenAIModels(runtime: ProviderRuntime): Promise<string[]> {
-	const providerId = "azure-openai";
-	const provider = runtime.getProviderSettings(providerId);
-	const apiKey = await runtime.getProviderApiKey(providerId);
-
-	if (!apiKey) {
-		throw new Error(`Add a ${getProviderLabel(providerId)} API key before refreshing models.`);
-	}
-
-	return await fetchModelList(runtime, {
-		baseUrl: getAzureOpenAIBaseUrl(provider),
-		providerName: getProviderLabel(providerId),
-		headers: getAzureOpenAIHeaders(apiKey),
-		timeoutMessage: `${getProviderLabel(providerId)} model refresh timed out after 10 seconds.`
-	});
+/**
+ * Azure OpenAI's /openai/v1/models lists base models available to the resource, not deployments, and the
+ * deployment list needs the Azure management plane, which an API key cannot reach. Offering those model IDs
+ * as deployment names would produce DeploymentNotFound errors, so deployment names stay manual.
+ */
+export async function fetchAzureOpenAIModels(_runtime: ProviderRuntime): Promise<string[]> {
+	throw new Error(
+		"Azure OpenAI deployments cannot be listed with an API key. Type your deployment name in the model field (find it under Deployments in the Azure AI Foundry portal), then use Test connection."
+	);
 }
 
 export async function testAzureOpenAIConnection(runtime: ProviderRuntime): Promise<string> {
@@ -91,10 +84,9 @@ export async function testAzureOpenAIConnection(runtime: ProviderRuntime): Promi
 			]
 		})
 	});
-	const body = response.body;
 
 	if (!response.ok) {
-		throw new Error(formatProviderHttpError("Azure OpenAI", response.status, extractProviderError(body, "")));
+		throw new Error(formatProviderHttpError("Azure OpenAI", response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
 	return "AskMate Azure OpenAI test passed. It sent a minimal text request to the selected deployment and may have consumed a small number of tokens.";

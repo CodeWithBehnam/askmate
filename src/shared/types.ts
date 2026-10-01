@@ -14,7 +14,9 @@ export type ApiEndpoint = "responses" | "images_generations" | "chat_completions
 export type TextProviderId = "openai" | "azure-openai" | "azure-ai" | "openrouter" | "anthropic" | "google-gemini" | "openai-compatible";
 export type ContextBudgetMode = "expanded" | "balanced" | "concise";
 export type ImagePromptPlanningProviderId = TextProviderId | "same-as-chat";
-export type ComposerLayout = "compact" | "expanded";
+export type ComposerLayout = "compact" | "expanded" | "console";
+/** "auto" prefers selected text, "selection" requires it, "note" sends the whole note even when text is selected. */
+export type ContextScope = "auto" | "selection" | "note";
 export type ContextAttachmentKind =
 	| "thread_history"
 	| "note_history"
@@ -32,7 +34,7 @@ export type FrontmatterApplyPolicy = "preserve" | "confirm" | "replace";
 export type BatchWorkflowOutputMode = "note" | "review-queue";
 export type BudgetEnforcementMode = "warn" | "block";
 export type ReviewQueueStatus = "pending" | "applied" | "dismissed";
-export type MarkdownDiffLineKind = "context" | "added" | "removed";
+export type MarkdownDiffLineKind = "context" | "added" | "removed" | "omitted";
 export type RunPhase = "building" | "confirming" | "generating" | "post-processing";
 export type SelectionResolutionStatus = "exact" | "relocated" | "missing" | "ambiguous";
 export type MutationOutcomeStatus = "applied" | "cancelled" | "partial";
@@ -63,6 +65,8 @@ export interface ProviderTextResult {
 	model: string;
 	endpoint: ApiEndpoint;
 	usage: OpenAITokenUsage | null;
+	/** Set when the provider stopped early (token limit, safety filter, refusal). Null or absent means complete. */
+	incompleteReason?: string | null;
 }
 
 export interface AskMateHttpResponse<T> {
@@ -98,6 +102,7 @@ export interface AskMateSettings {
 	workflowCustomInstructions: string;
 	composerLayout: ComposerLayout;
 	showOnboardingTips: boolean;
+	autoImageIntentEnabled: boolean;
 	onboardingTipsDismissedAt: string | null;
 	threadedChatEnabled: boolean;
 	threadedChatMaxTurns: number;
@@ -204,6 +209,10 @@ export interface AskRequestMetadata {
 	contextBudgetMode: ContextBudgetMode;
 	contextBudgetLimitCharacters: number | null;
 	contextTruncated: boolean;
+	/** True when the primary note or selection itself was cut by the context budget, not only attachments. */
+	primaryContextTruncated?: boolean;
+	/** Set after the response arrives when the provider reported an incomplete or filtered answer. */
+	outputIncompleteReason?: string | null;
 	contextCharacters: number;
 	promptContextCharacters: number;
 	contextAttachmentCount: number;
@@ -244,6 +253,9 @@ export interface BuildRequestOptions {
 	additionalContextPaths?: string[];
 	folderContext?: FolderContextOptions;
 	forceFileContext?: boolean;
+	contextScope?: ContextScope;
+	/** Extra instructions the user typed after a workflow command, added after the workflow's own prompt. */
+	workflowExtra?: string;
 }
 
 export interface RunRequestOptions {
@@ -256,6 +268,9 @@ export interface RunRequestOptions {
 	folderContext?: FolderContextOptions;
 	threadMessages?: ChatMessage[];
 	includeThreadHistory?: boolean;
+	contextScope?: ContextScope;
+	workflowExtra?: string;
+	intentKind?: RequestIntentKind;
 }
 
 export interface FolderContextOptions {
@@ -304,6 +319,8 @@ export interface PromptContextResult {
 	originalCharacters: number;
 	finalCharacters: number;
 	truncated: boolean;
+	/** True when the primary note or selection was cut, not only attachments. */
+	primaryTruncated?: boolean;
 	limitCharacters: number | null;
 }
 
@@ -316,6 +333,7 @@ export interface TextAskMateResult {
 	kind: "text";
 	model: string;
 	text: string;
+	incompleteReason?: string | null;
 }
 
 export interface ImageAskMateResult {
@@ -369,9 +387,14 @@ export interface OpenAIResponseBody {
 	output_text?: string;
 	output?: OpenAIResponseItem[];
 	usage?: OpenAITokenUsage;
+	/** "completed", "incomplete" (for example max_output_tokens or content_filter) or "failed". */
+	status?: string;
+	incomplete_details?: {
+		reason?: string;
+	} | null;
 	error?: {
 		message?: string;
-	};
+	} | null;
 }
 
 export interface OpenAITokenUsage {
@@ -431,6 +454,8 @@ export interface TokenUsageRecord {
 
 export interface TokenUsageStats {
 	records: TokenUsageRecord[];
+	/** Total tokens per local calendar day (YYYY-MM-DD), kept separately from the capped record list so budgets stay accurate. */
+	totalsByDay?: Record<string, number>;
 }
 
 export interface TokenUsageSummary {
@@ -489,6 +514,8 @@ export interface RequestPrivacyOptions {
 	includeImageReferences: boolean;
 }
 
+export type WorkflowOutputKind = "note-edit" | "new-content";
+
 export interface CustomWorkflow {
 	id: string;
 	name: string;
@@ -499,6 +526,7 @@ export interface CustomWorkflow {
 	prompt: string;
 	resultNoteTemplate: string;
 	hidden: boolean;
+	outputKind?: WorkflowOutputKind;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -521,6 +549,8 @@ export interface Workflow {
 	prompt: WorkflowPrompt;
 	resultNoteTemplate?: string;
 	isCustom?: boolean;
+	/** "note-edit": output is a revised version of the whole input note. "new-content": output is new material (summary, analysis). */
+	outputKind?: WorkflowOutputKind;
 }
 
 export interface MarkdownHeadingSection {

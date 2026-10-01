@@ -1,6 +1,5 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
-	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getNonNegativeInteger,
 	getProviderLabel,
 	OpenAITokenUsage,
@@ -8,11 +7,14 @@ import {
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
-import { extractProviderError, fetchModelList, formatProviderHttpError } from "./common";
+import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
 /** Named default so long-note workflows are not silently capped without intent. */
 export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
+const ANTHROPIC_API_VERSION = "2023-06-01";
+/** Non-streaming requests return only when generation ends; slower Claude models need several minutes for an 8192-token answer. */
+export const ANTHROPIC_GENERATION_TIMEOUT_MS = 300000;
 
 export async function completeAnthropicText(
 	runtime: ProviderRuntime,
@@ -32,12 +34,12 @@ export async function completeAnthropicText(
 		method: "POST",
 		headers: {
 			"x-api-key": apiKey,
-			"anthropic-version": "2023-06-01",
+			"anthropic-version": ANTHROPIC_API_VERSION,
 			"Content-Type": "application/json"
 		},
 		abortSignal,
-		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
-		timeoutMessage: "Anthropic generation timed out after 2 minutes.",
+		timeoutMs: ANTHROPIC_GENERATION_TIMEOUT_MS,
+		timeoutMessage: "Anthropic generation timed out after 5 minutes.",
 		body: JSON.stringify({
 			model: providerRef.model,
 			system: instructions,
@@ -50,15 +52,33 @@ export async function completeAnthropicText(
 	const body = response.body;
 
 	if (!response.ok) {
-		throw new Error(formatProviderHttpError("Anthropic", response.status, extractProviderError(body, "")));
+		throw new Error(formatProviderHttpError("Anthropic", response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
+	const text = extractAnthropicText(body);
+	const incompleteReason = getAnthropicIncompleteReason(body);
+	assertProviderTextPresent("Anthropic", text, incompleteReason);
+
 	return {
-		text: extractAnthropicText(body),
+		text,
 		model: providerRef.model,
 		endpoint: "anthropic_messages",
-		usage: normalizeAnthropicUsage(body?.usage)
+		usage: normalizeAnthropicUsage(body?.usage),
+		incompleteReason
 	};
+}
+
+const ANTHROPIC_COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence"]);
+
+/** Any stop other than a natural end (max_tokens, refusal, model_context_window_exceeded, pause_turn) means the answer is partial. */
+export function getAnthropicIncompleteReason(body: Record<string, unknown> | null): string | null {
+	const stopReason = body?.stop_reason;
+
+	if (typeof stopReason !== "string" || !stopReason || ANTHROPIC_COMPLETE_STOP_REASONS.has(stopReason)) {
+		return null;
+	}
+
+	return stopReason;
 }
 
 export async function fetchAnthropicModels(runtime: ProviderRuntime): Promise<string[]> {
@@ -70,15 +90,39 @@ export async function fetchAnthropicModels(runtime: ProviderRuntime): Promise<st
 		throw new Error(`Add a ${providerName} API key before refreshing models.`);
 	}
 
-	return await fetchModelList(runtime, {
-		baseUrl: getAnthropicBaseUrl(runtime),
-		providerName,
-		headers: {
-			"x-api-key": apiKey,
-			"anthropic-version": "2023-06-01"
+	const baseUrl = getAnthropicBaseUrl(runtime);
+	return await collectModelPages<AnthropicModelListBody | null>(
+		async (cursor) => {
+			const afterId = cursor ? `&after_id=${encodeURIComponent(cursor)}` : "";
+			const response = await runtime.requestJson<AnthropicModelListBody>(`${baseUrl}/models?limit=1000${afterId}`, {
+				headers: {
+					"x-api-key": apiKey,
+					"anthropic-version": ANTHROPIC_API_VERSION
+				},
+				timeoutMs: 10000,
+				timeoutMessage: `${providerName} model refresh timed out after 10 seconds.`
+			});
+
+			if (!response.ok) {
+				throw new Error(formatProviderHttpError(providerName, response.status, describeProviderErrorBody(response, [apiKey])));
+			}
+
+			return response.body;
 		},
-		timeoutMessage: `${providerName} model refresh timed out after 10 seconds.`
-	});
+		(page) => page?.data?.map((model) => model.id ?? "") ?? [],
+		(page) => (page?.has_more && page.last_id ? page.last_id : null)
+	);
+}
+
+interface AnthropicModelListBody {
+	data?: Array<{
+		id?: string;
+	}>;
+	has_more?: boolean;
+	last_id?: string | null;
+	error?: {
+		message?: string;
+	};
 }
 
 function getAnthropicBaseUrl(runtime: ProviderRuntime): string {

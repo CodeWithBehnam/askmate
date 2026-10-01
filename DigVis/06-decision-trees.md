@@ -35,17 +35,20 @@ flowchart TD
 ```mermaid
 flowchart TD
   Apply["Apply requested"] --> Scope{"Scope"}
-  Scope -- "Heading" --> Heading["applyResponseToHeadingSection"]
-  Scope -- "Selected block" --> SelectedSource{"Original request used selected text?"}
-  SelectedSource -- "Yes" --> ExactMatch{"Exact selection or one occurrence?"}
+  Scope -- "Heading, selected block or full note" --> Complete{"outputIncompleteReason set?"}
+  Complete -- "Yes" --> IncompleteError["Refuse replace, suggest append"]
+  Complete -- "No" --> Risk{"Primary context truncated, or selection reply would replace a wider target?"}
+  Risk -- "Yes" --> ConfirmRisk["confirmReplaceScopeRisks"]
+  Risk -- "No" --> Target{"Target scope"}
+  ConfirmRisk --> Target
+  Target -- "Heading" --> Heading["applyResponseToHeadingSection"]
+  Target -- "Selected block" --> SelectedSource{"Original request used selected text?"}
+  SelectedSource -- "Yes" --> ExactMatch{"resolveSelectionIdentity: exact or relocated?"}
   SelectedSource -- "No" --> SelectedError["Reject selected-block Apply"]
   ExactMatch -- "Yes" --> Preview{"Approval mode requires preview?"}
-  ExactMatch -- "No" --> MatchError["Reject unsafe selected text Apply"]
+  ExactMatch -- "No, missing or ambiguous" --> MatchError["Reject unsafe selected text Apply"]
   Scope -- "Auto or no selection" --> Append["Append to captured note"]
-  Scope -- "Full note" --> Truncated{"Context was truncated?"}
-  Truncated -- "Yes" --> ConfirmTrunc["Confirm truncated full-note risk"]
-  Truncated -- "No" --> Frontmatter["Apply frontmatter policy"]
-  ConfirmTrunc --> Frontmatter
+  Target -- "Full note" --> Frontmatter["Apply frontmatter policy"]
   Frontmatter --> Preview
   Heading --> Preview
   Append --> Preview
@@ -61,10 +64,10 @@ flowchart TD
   classDef no fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
   classDef store fill:#FFEDD5,stroke:#EA580C,color:#7C2D12
 
-  class Apply,Heading,Append,Frontmatter,Diff start
-  class Scope,SelectedSource,ExactMatch,Preview,Truncated,UserChoice decision
+  class Apply,Heading,Append,Frontmatter,Diff,ConfirmRisk start
+  class Scope,Complete,Risk,Target,SelectedSource,ExactMatch,Preview,UserChoice decision
   class Write yes
-  class SelectedError,MatchError,Cancel no
+  class SelectedError,MatchError,IncompleteError,Cancel no
 ```
 
 ## Diagram: privacy and context budget
@@ -73,13 +76,13 @@ flowchart TD
 flowchart TD
   Privacy["Request privacy options"] --> IncludeNote{"Include note context?"}
   IncludeNote -- "Yes" --> Attach["Attach note, thread, folder, role context"]
-  IncludeNote -- "No" --> Omit["Prompt says note context omitted"]
+  IncludeNote -- "No" --> Omit["Prompt says note context omitted, path and title withheld"]
   Attach --> IncludeImages{"Include image references?"}
   IncludeImages -- "Yes" --> KeepImages["Keep image references"]
   IncludeImages -- "No" --> StripImages["Replace image references with omission notice"]
   KeepImages --> Budget{"Context over budget?"}
   StripImages --> Budget
-  Budget -- "Yes" --> Truncate["Keep head and tail with omission marker"]
+  Budget -- "Yes" --> Truncate["Primary note first (middle cut), then attachments, history keeps its tail, omission markers and primaryTruncated"]
   Budget -- "No" --> Full["Send assembled context"]
   Omit --> Request["Build request metadata"]
   Truncate --> Request
@@ -106,7 +109,7 @@ flowchart TD
   Forced -- "Yes" --> ImageIntent["explicit_image"]
   Forced -- "No" --> ModelCap{"Selected model capability is image?"}
   ModelCap -- "Yes" --> ImageIntent
-  ModelCap -- "No" --> Heuristic{"Auto-image heuristic matches?"}
+  ModelCap -- "No" --> Heuristic{"shouldGenerateImage: /image or /img prefix, or autoImageIntentEnabled and an imperative image request?"}
   Heuristic -- "Yes" --> AutoImage["auto_image"]
   Heuristic -- "No" --> TextIntent["freeform_text or workflow"]
   ImageIntent --> Plan{"Image prompt planning succeeds?"}
@@ -136,7 +139,7 @@ flowchart TD
   Enabled -- "Yes" --> HardLimit{"Per-request hard limit exceeded?"}
   HardLimit -- "Yes" --> BlockHard["Block request"]
   HardLimit -- "No" --> BudgetMode{"Budget enforcement mode"}
-  BudgetMode -- "Block" --> BudgetExceeded{"Daily or monthly budget exceeded?"}
+  BudgetMode -- "Block" --> BudgetExceeded{"Daily or monthly budget exceeded (from totalsByDay)?"}
   BudgetMode -- "Warn" --> WarnExceeded{"Warning threshold or budget reached?"}
   BudgetExceeded -- "Yes" --> BlockBudget["Block request"]
   BudgetExceeded -- "No" --> Continue
@@ -157,14 +160,14 @@ flowchart TD
 
 ## Notes
 
-The code uses explicit request metadata to record intent, provider, privacy, context budget, evidence, and output mode. Apply approval mode controls user confirmation paths, but documented contributor rules require hard safety checks to remain regardless of approval mode.
+The code uses explicit request metadata to record intent, provider, privacy, context budget, evidence, output mode, `primaryContextTruncated` and `outputIncompleteReason`. Apply approval mode controls user confirmation paths, but hard safety checks (incomplete-output refusal, replace-scope risk confirmation, selection identity resolution, captured-file targeting) apply regardless of approval mode. Selected-text Apply no longer needs exactly one occurrence: `resolveSelectionIdentity()` accepts the captured offsets when text and anchors still match, otherwise a single anchored or unique occurrence, and rejects missing or ambiguous text.
 
 ## Traceability
 
 | Field | Details |
 | --- | --- |
-| Source files inspected | `src/plugin/AskMatePlugin.ts`, `src/shared/types.ts`, `src/settings/normalize.ts`, `src/settings/defaults.ts`, `CONTRIBUTING.md`, `README.md`, `scripts/roadmap-smoke-tests.ts` |
-| Key symbols | `RequestIntentKind`, `buildRequest`, `runOpenAIRequest`, `normalizeApplyScope`, `applyResponseToContext`, `confirmTextApplyPreview`, `confirmTruncatedContextFullApply`, `buildPromptContextContent`, `usageGuardrailsEnabled` |
+| Source files inspected | `src/plugin/AskMatePlugin.ts`, `src/requests/RequestRunner.ts`, `src/requests/requestBuilders.ts`, `src/usage/UsageService.ts`, `src/shared/imageIntent.ts`, `src/shared/trustSafety.ts`, `src/shared/types.ts`, `src/settings/normalize.ts`, `src/settings/defaults.ts`, `CONTRIBUTING.md`, `README.md`, `scripts/roadmap-smoke-tests.ts` |
+| Key symbols | `RequestIntentKind`, `classifyRequestIntent`, `shouldGenerateImage`, `buildRequest`, `runOpenAIRequest`, `normalizeApplyScope`, `applyResponseToContext`, `assertOutputCompleteForReplace`, `confirmReplaceScopeRisks`, `resolveSelectionIdentity`, `confirmTextApplyPreview`, `buildPromptContextContent`, `evaluateUsageGuardrails`, `usageGuardrailsEnabled` |
 | Inferences | Usage guardrail details are summarized at a high level because this file focuses on request and Apply branch shape. |
 | Confidence | confirmed |
 | Open questions | Add a focused DigVis update if future guardrail logic becomes more complex. |

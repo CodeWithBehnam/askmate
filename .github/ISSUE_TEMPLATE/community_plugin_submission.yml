@@ -15,11 +15,11 @@ body:
       label: Checklist
       options:
         - label: README clearly explains features, setup, privacy, and manual installation.
-        - label: `manifest.json` has the correct plugin id, name, version, and minimum app version.
-        - label: `versions.json` includes the current release version.
+        - label: "`manifest.json` has the correct plugin id, name, version, and minimum app version."
+        - label: "`versions.json` includes the current release version."
         - label: Release assets include `main.js`, `manifest.json`, and `styles.css`.
-        - label: `bun run test` passes.
-        - label: `bun run build` passes.
+        - label: "`bun run test` passes."
+        - label: "`bun run build` passes."
         - label: Plugin was manually tested in Obsidian desktop.
         - label: API keys are stored through Obsidian SecretStorage, not raw settings.
         - label: Security, contributing, license, and code of conduct files exist.

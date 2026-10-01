@@ -19,6 +19,8 @@ export {
 	formatProviderHttpError
 } from "./common";
 export {
+	buildOpenAIResponsesBody,
+	extractOpenAIRefusal,
 	extractOpenAIText,
 	getOpenAIBaseUrl,
 	joinOpenAIUrl,
@@ -91,31 +93,27 @@ export async function completeProviderTextRequest(
 }
 
 export async function fetchProviderModels(runtime: ProviderRuntime, providerId: TextProviderId): Promise<string[]> {
-	if (providerId === "openai") {
-		return await fetchOpenAIModels(runtime);
+	switch (providerId) {
+		case "openai":
+			return await fetchOpenAIModels(runtime);
+		case "azure-openai":
+			return await fetchAzureOpenAIModels(runtime);
+		case "azure-ai":
+			return await fetchAzureAIModels(runtime);
+		case "openrouter":
+			return await fetchOpenRouterModels(runtime);
+		case "anthropic":
+			return await fetchAnthropicModels(runtime);
+		case "google-gemini":
+			return await fetchGeminiModels(runtime);
+		case "openai-compatible":
+			return await fetchOpenAICompatibleModels(runtime);
+		default: {
+			// A new provider must be wired here explicitly rather than sending its key to an OpenAI-compatible endpoint.
+			const unhandled: never = providerId;
+			throw new Error(`Unsupported text provider: ${String(unhandled)}`);
+		}
 	}
-
-	if (providerId === "azure-openai") {
-		return await fetchAzureOpenAIModels(runtime);
-	}
-
-	if (providerId === "azure-ai") {
-		return await fetchAzureAIModels(runtime);
-	}
-
-	if (providerId === "openrouter") {
-		return await fetchOpenRouterModels(runtime);
-	}
-
-	if (providerId === "anthropic") {
-		return await fetchAnthropicModels(runtime);
-	}
-
-	if (providerId === "google-gemini") {
-		return await fetchGeminiModels(runtime);
-	}
-
-	return await fetchOpenAICompatibleModels(runtime);
 }
 
 export async function testProviderConnection(runtime: ProviderRuntime, providerId: TextProviderId): Promise<string> {

@@ -16,6 +16,13 @@ flowchart TD
     Plugin --> Sidebar["AskMateView right sidebar"]
     Plugin --> SettingsUI["AskMateSettingTab"]
     Plugin --> Modals["AskMate modals"]
+    Plugin --> ContextSvc["ContextService"]
+    Plugin --> Runner["RequestRunner and requestBuilders"]
+    Plugin --> HistorySvc["HistoryService"]
+    Plugin --> UsageSvc["UsageService"]
+    Plugin --> OutputHelpers["src/output helpers"]
+    Sidebar --> RenderSafety["renderSafety"]
+    Runner --> Providers
     Plugin --> Shared["Shared types and helpers"]
     Plugin --> WorkflowCatalog["WORKFLOWS"]
     Plugin --> Providers["Provider adapters"]
@@ -25,6 +32,7 @@ flowchart TD
     Workspace["workspace events and leaves"]
     Vault["vault reads and writes"]
     Secrets["SecretStorage"]
+    PluginData["plugin data.json"]
     RequestUrl["requestUrl network IO"]
   end
 
@@ -40,6 +48,7 @@ flowchart TD
   Plugin --> Workspace
   Plugin --> Vault
   Plugin --> Secrets
+  Plugin --> PluginData
   Providers --> RequestUrl
   RequestUrl --> OpenAI
   RequestUrl --> Azure
@@ -55,15 +64,15 @@ flowchart TD
   classDef external fill:#F3E8FF,stroke:#9333EA,color:#3B0764
 
   class User user
-  class Obsidian,Entry,Plugin,Sidebar,SettingsUI,Modals,Shared,WorkflowCatalog,Providers core
+  class Obsidian,Entry,Plugin,Sidebar,SettingsUI,Modals,ContextSvc,Runner,HistorySvc,UsageSvc,OutputHelpers,RenderSafety,Shared,WorkflowCatalog,Providers core
   class Workspace config
-  class Vault,Secrets store
+  class Vault,Secrets,PluginData store
   class RequestUrl,OpenAI,Azure,Router,Anthropic,Gemini,Local external
 ```
 
 ## Notes
 
-AskMate is loaded by Obsidian through `main.ts`, which exports `AskMatePlugin`. The plugin registers the right sidebar view, commands, workspace event listeners, ribbon icon, and settings tab. `AskMatePlugin` is the main orchestration point: it captures note context, normalizes settings, builds requests, routes provider calls, records usage, creates result notes and images, applies text back into notes, and manages review queues.
+AskMate is loaded by Obsidian through `main.ts`, which exports `AskMatePlugin`. The plugin registers the right sidebar view, commands, workspace event listeners, ribbon icon, and settings tab. `AskMatePlugin` is the main orchestration point, but since the service extraction it delegates most work: `ContextService` captures note context and builds attachments, `RequestRunner` (with the pure `requestBuilders` and `promptSafety` modules) builds requests and calls providers, `HistoryService` owns note history and the review queue, and `UsageService` records usage and evaluates budgets. The plugin keeps settings load and save (`syncObjectInPlace` keeps the live settings object stable), commands, vault rename and delete events, result notes and images, Apply, and batch runs. `AskMateView` renders model replies through `renderSafety` before handing them to Obsidian's Markdown renderer.
 
 Provider adapters do not call browser `fetch` directly. They receive a `ProviderRuntime`, and the plugin implements `requestJson()` through Obsidian `requestUrl`.
 
@@ -74,17 +83,21 @@ Provider adapters do not call browser `fetch` directly. They receive a `Provider
 | Plugin lifecycle | `AskMatePlugin.onload()` | `src/plugin/AskMatePlugin.ts` |
 | Sidebar UI | `AskMateView` | `src/ui/sidebar/AskMateView.ts` |
 | Settings UI | `AskMateSettingTab` | `src/ui/settings/AskMateSettingTab.ts` |
-| Provider dispatch | `completeProviderTextRequest()` | `src/providers/index.ts` |
+| Context capture | `ContextService` | `src/context/ContextService.ts` |
+| Request building and provider calls | `RequestRunner`, `buildPrompt()`, `escapePromptDelimiters()` | `src/requests/RequestRunner.ts`, `src/requests/requestBuilders.ts`, `src/requests/promptSafety.ts` |
+| Provider dispatch | `completeProviderTextRequest()` (OpenAI text uses `requestOpenAIResponses()` instead) | `src/providers/index.ts`, `src/providers/open-ai.ts` |
 | Provider IO | `ProviderRuntime.requestJson()` and `AskMatePlugin.requestJson()` | `src/providers/types.ts`, `src/plugin/AskMatePlugin.ts` |
 | Secrets | `app.secretStorage.getSecret()` | `src/plugin/AskMatePlugin.ts` |
-| Vault mutation | `vault.create`, `vault.createBinary`, `vault.modify` | `src/plugin/AskMatePlugin.ts` |
+| Vault mutation | `vault.create`, `vault.createBinary`, `vault.process`, and editor `replaceRange` or `replaceSelection` for open notes | `src/plugin/AskMatePlugin.ts` |
+| Plugin data | `loadData()` and `saveData()` (through `saveSettings()`) for settings, note history, review queue and usage | `src/plugin/AskMatePlugin.ts`, `src/history/HistoryService.ts`, `src/usage/UsageService.ts` |
+| Reply rendering | `renderSafety` helpers before `MarkdownRenderer` | `src/ui/sidebar/AskMateView.ts`, `src/ui/sidebar/renderSafety.ts` |
 
 ## Traceability
 
 | Field | Details |
 | --- | --- |
-| Source files inspected | `main.ts`, `manifest.json`, `src/plugin/AskMatePlugin.ts`, `src/ui/sidebar/AskMateView.ts`, `src/ui/settings/AskMateSettingTab.ts`, `src/ui/modals/modals.ts`, `src/providers/index.ts`, `src/providers/types.ts`, `src/shared/types.ts` |
-| Key symbols | `onload`, `registerView`, `addCommand`, `AskMateView`, `AskMateSettingTab`, `ProviderRuntime`, `requestJson`, `completeProviderTextRequest` |
+| Source files inspected | `main.ts`, `manifest.json`, `src/plugin/AskMatePlugin.ts`, `src/context/ContextService.ts`, `src/requests/RequestRunner.ts`, `src/requests/requestBuilders.ts`, `src/history/HistoryService.ts`, `src/usage/UsageService.ts`, `src/ui/sidebar/AskMateView.ts`, `src/ui/sidebar/renderSafety.ts`, `src/ui/settings/AskMateSettingTab.ts`, `src/ui/modals/modals.ts`, `src/providers/index.ts`, `src/providers/types.ts`, `src/shared/types.ts` |
+| Key symbols | `onload`, `registerView`, `addCommand`, `ContextService`, `RequestRunner`, `HistoryService`, `UsageService`, `AskMateView`, `AskMateSettingTab`, `ProviderRuntime`, `requestJson`, `completeProviderTextRequest` |
 | Inferences | The diagram groups Obsidian APIs as a boundary even though they are imported individually across files. |
 | Confidence | confirmed |
 | Open questions | None. |

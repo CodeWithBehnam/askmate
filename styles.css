@@ -23,7 +23,7 @@
 	background: color-mix(in srgb, var(--background-secondary) 84%, var(--interactive-accent) 16%);
 	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, transparent);
 	border-radius: 999px;
-	color: var(--text-faint);
+	color: var(--text-muted);
 	flex: 0 1 auto;
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	font-weight: 700;
@@ -40,7 +40,7 @@
 	flex: 1 1 0;
 	flex-direction: column;
 	gap: 8px;
-	min-height: 0;
+	min-height: 64px;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	padding: 2px 2px 4px;
@@ -76,6 +76,27 @@
 		"avatar evidence";
 	grid-template-columns: auto minmax(0, 1fr);
 	row-gap: 6px;
+}
+
+/* The incomplete-reply warning gets its own row above the reply, in the content column, never in the avatar column. */
+.askmate-message.askmate-message-incomplete {
+	grid-template-areas:
+		"avatar warning warning"
+		"avatar body actions";
+	row-gap: 6px;
+}
+
+.askmate-message-assistant.askmate-message-has-actions.askmate-message-incomplete {
+	grid-template-areas:
+		"avatar actions"
+		"avatar warning"
+		"avatar body"
+		"avatar evidence";
+}
+
+.askmate-message-incomplete-warning {
+	grid-area: warning;
+	margin: 0;
 }
 
 .askmate-message-system {
@@ -449,7 +470,7 @@
 }
 
 .askmate-avatar-assistant {
-	background: linear-gradient(135deg, color-mix(in srgb, var(--interactive-accent) 88%, #ffffff), color-mix(in srgb, var(--interactive-accent) 42%, #ffffff));
+	background: linear-gradient(135deg, var(--interactive-accent), var(--interactive-accent-hover));
 	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
 }
 
@@ -619,12 +640,13 @@
 .askmate-workflow-card:focus-visible,
 .askmate-workflow-toggle:focus-visible,
 .askmate-segment:focus-visible,
+.askmate-reasoning-shell:focus-within,
 .askmate-icon-select-control:focus-within,
 .askmate-action-button:focus-visible,
 .askmate-message-action:focus-visible,
 .askmate-request-preview-select:focus-visible {
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 32%, transparent);
-	outline: none;
+	box-shadow: 0 0 0 2px var(--askmate-focus-ring);
+	outline: 2px solid transparent;
 }
 
 .askmate-workflow-icon {
@@ -665,12 +687,12 @@
 	white-space: nowrap;
 }
 
-.askmate-accent-blue { --askmate-card-accent: #3b82f6; }
-.askmate-accent-violet { --askmate-card-accent: #8b5cf6; }
-.askmate-accent-green { --askmate-card-accent: #10b981; }
-.askmate-accent-amber { --askmate-card-accent: #f59e0b; }
-.askmate-accent-rose { --askmate-card-accent: #f43f5e; }
-.askmate-accent-slate { --askmate-card-accent: #64748b; }
+.askmate-accent-blue { --askmate-card-accent: var(--color-blue); }
+.askmate-accent-violet { --askmate-card-accent: var(--color-purple); }
+.askmate-accent-green { --askmate-card-accent: var(--color-green); }
+.askmate-accent-amber { --askmate-card-accent: var(--color-orange); }
+.askmate-accent-rose { --askmate-card-accent: var(--color-red); }
+.askmate-accent-slate { --askmate-card-accent: var(--text-muted); }
 
 .askmate-composer {
 	background: color-mix(in srgb, var(--background-primary) 78%, var(--background-secondary));
@@ -678,9 +700,12 @@
 	border-radius: var(--askmate-radius-md);
 	box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.07);
 	display: flex;
-	flex: 0 0 auto;
+	flex: 0 1 auto;
 	flex-direction: column;
 	gap: 7px;
+	max-height: 65%;
+	min-height: 0;
+	overflow-y: auto;
 	padding: 8px;
 }
 
@@ -723,7 +748,7 @@
 	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
 	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
 	border-radius: 999px;
-	color: var(--text-faint);
+	color: var(--text-muted);
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	font-weight: 750;
 	letter-spacing: 0.01em;
@@ -731,10 +756,15 @@
 	padding: 4px 8px;
 }
 
+.askmate-composer-brand.is-not-ready {
+	border-color: color-mix(in srgb, var(--text-warning) 60%, var(--background-modifier-border));
+	color: var(--text-warning);
+}
+
 .askmate-composer-brand.is-api-key-set {
-	border-color: color-mix(in srgb, #10b981 72%, var(--background-modifier-border));
-	box-shadow: 0 0 0 1px color-mix(in srgb, #10b981 18%, transparent);
-	color: color-mix(in srgb, #10b981 72%, var(--text-normal));
+	border-color: color-mix(in srgb, var(--color-green) 72%, var(--background-modifier-border));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-green) 18%, transparent);
+	color: var(--text-success);
 }
 
 .askmate-composer-model {
@@ -817,15 +847,6 @@
 .askmate-reasoning-shell:hover:not(.is-disabled) {
 	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
 	color: var(--text-normal);
-}
-
-.askmate-workflow-toggle:focus-visible,
-.askmate-segment:focus-visible,
-.askmate-reasoning-shell:focus-within,
-.askmate-action-button:focus-visible,
-.askmate-message-action:focus-visible {
-	box-shadow: 0 0 0 2px var(--askmate-focus-ring);
-	outline: none;
 }
 
 .askmate-workflow-toggle.is-active,
@@ -947,8 +968,9 @@
 	color: var(--text-normal);
 	font-size: var(--font-ui-small);
 	line-height: 1.4;
+	max-height: 240px;
 	min-height: 68px;
-	outline: none;
+	outline: 2px solid transparent;
 	padding: 9px 52px 42px 9px;
 	resize: vertical;
 	width: 100%;
@@ -991,7 +1013,7 @@
 .askmate-context-button {
 	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
 	border-color: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
-	color: var(--text-faint);
+	color: var(--text-muted);
 	flex-basis: 22px;
 	height: 22px;
 	min-height: 22px;
@@ -1020,20 +1042,19 @@
 }
 
 .askmate-send-button:not(:disabled) {
-	background: linear-gradient(135deg, var(--interactive-accent), color-mix(in srgb, var(--interactive-accent) 72%, #ffffff));
+	background: linear-gradient(135deg, var(--interactive-accent), var(--interactive-accent-hover));
 	border-color: color-mix(in srgb, var(--interactive-accent) 72%, var(--background-modifier-border));
 	color: var(--text-on-accent);
 }
 
-.askmate-stop-button:not([hidden]) {
-	align-items: center;
-	display: inline-flex;
+.askmate-action-button[hidden] {
+	display: none;
 }
 
 .askmate-stop-button:not(:disabled) {
-	background: color-mix(in srgb, #f43f5e 12%, var(--background-primary));
-	border-color: color-mix(in srgb, #f43f5e 48%, var(--background-modifier-border));
-	color: #f43f5e;
+	background: color-mix(in srgb, var(--color-red) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--color-red) 48%, var(--background-modifier-border));
+	color: var(--text-error);
 }
 
 .askmate-action-button:disabled {
@@ -1347,8 +1368,8 @@
 
 .askmate-chart-legend-output,
 .askmate-chart-bar-output {
-	fill: #f59e0b;
-	background: #f59e0b;
+	fill: var(--color-orange);
+	background: var(--color-orange);
 }
 
 .askmate-chart-svg {
@@ -1445,10 +1466,6 @@
 }
 
 @media (max-width: 420px) {
-	.askmate-sidebar {
-		padding: 10px;
-	}
-
 	.askmate-settings-nav {
 		padding: 12px;
 	}
@@ -1473,7 +1490,9 @@
 	.askmate-settings-section-content {
 		padding: 2px 12px 12px;
 	}
+}
 
+@container askmate-sidebar (max-width: 420px) {
 	.askmate-workflow-grid {
 		grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
 	}
@@ -1498,6 +1517,12 @@
 	.askmate-reasoning-shell {
 		flex: 0 0 32px;
 		width: 32px;
+	}
+}
+
+@container askmate-sidebar (max-width: 240px) {
+	.askmate-output-controls {
+		flex-wrap: wrap;
 	}
 }
 .askmate-request-preview {
@@ -1531,7 +1556,7 @@
 
 .askmate-request-preview-toggle {
 	align-items: center;
-	color: var(--text-faint);
+	color: var(--text-muted);
 	display: inline-flex;
 	font-size: var(--font-ui-smaller);
 	gap: 5px;
@@ -1690,10 +1715,13 @@
 	border-color: var(--interactive-accent);
 }
 
-.askmate-diff-modal,
-.askmate-prompt-inspector,
-.askmate-note-history {
-	max-width: min(920px, 92vw);
+.modal.askmate-modal-wide {
+	width: min(920px, 92vw);
+	max-width: 92vw;
+}
+
+.askmate-modal-message {
+	white-space: pre-line;
 }
 
 .askmate-diff-summary,
@@ -1747,6 +1775,12 @@
 
 .askmate-diff-line-context {
 	color: var(--text-muted);
+}
+
+.askmate-diff-line-omitted {
+	color: var(--text-muted);
+	font-style: italic;
+	background: var(--background-secondary);
 }
 
 .askmate-diff-line-number {
@@ -1814,8 +1848,6 @@
 	transition: width 180ms ease;
 }
 
-.askmate-batch-log,
-.askmate-request-preview-budget,
 .askmate-review-excerpt {
 	font-size: 12px;
 	color: var(--text-muted);
@@ -1860,6 +1892,339 @@
 	}
 }
 
+/* ---------- Console layout: keyboard-first, monospaced, one line per event ---------- */
+.askmate-console-completions,
+.askmate-console-status,
+.askmate-console-prompt {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console {
+	background: var(--background-primary);
+	font-family: var(--font-monospace);
+	gap: 0;
+	padding: 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-workflow-section,
+.askmate-sidebar.askmate-composer-layout-console .askmate-composer-header,
+.askmate-sidebar.askmate-composer-layout-console .askmate-composer-footer,
+.askmate-sidebar.askmate-composer-layout-console .askmate-request-preview,
+.askmate-sidebar.askmate-composer-layout-console .askmate-send-button {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-messages {
+	font-size: var(--font-ui-small);
+	gap: 2px;
+	line-height: 1.55;
+	padding: 10px 12px;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message {
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	display: block;
+	padding: 1px 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-header {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-body {
+	font-family: var(--font-monospace);
+	padding: 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-user,
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-echo {
+	margin-top: 10px;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-user .askmate-message-body,
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-echo .askmate-message-body {
+	color: var(--text-normal);
+	white-space: pre-wrap;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-user .askmate-message-body::before,
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-echo .askmate-message-body::before {
+	color: var(--interactive-accent);
+	content: "askmate › ";
+	font-weight: 600;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-system {
+	color: var(--text-muted);
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-system:not(.askmate-console-echo):not(.askmate-console-output) .askmate-message-body::before {
+	color: var(--text-faint);
+	content: "· ";
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-output .askmate-message-body {
+	color: var(--text-muted);
+	overflow-x: auto;
+	white-space: pre;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-output.is-error .askmate-message-body {
+	color: var(--text-error);
+	white-space: pre-wrap;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-assistant .askmate-message-body:empty::before {
+	color: var(--text-faint);
+	content: "working…";
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-body-markdown :is(p, ul, ol, pre, blockquote, table) {
+	margin-block: 0.35em;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-body-markdown :is(h1, h2, h3, h4, h5, h6) {
+	font-size: 1em;
+	margin-block: 0.6em 0.2em;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-actions,
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-assistant .askmate-message-actions:not(:empty) {
+	/* The standard layout pins this row with a blurred backdrop; in the console it is an ordinary line. */
+	backdrop-filter: none;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	display: flex;
+	position: static;
+	z-index: auto;
+	flex-wrap: wrap;
+	gap: 0 8px;
+	min-height: 0;
+	padding: 2px 0 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-actions:empty {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-action {
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--font-ui-smaller);
+	height: auto;
+	padding: 0;
+	width: auto;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-action::before {
+	content: "[" attr(data-console-label) "]";
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-action-icon {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-action:hover,
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-action:focus-visible {
+	background: transparent;
+	color: var(--interactive-accent);
+	outline: 1px dotted var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-evidence {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 8px;
+	padding-top: 2px;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-evidence-label {
+	display: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-evidence-chip {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	color: var(--text-faint);
+	font: inherit;
+	font-size: var(--font-ui-smaller);
+	height: auto;
+	padding: 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-evidence-chip::before {
+	content: "↳ ";
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-incomplete-warning {
+	background: transparent;
+	border: 0;
+	color: var(--text-warning);
+	margin: 0;
+	padding: 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-incomplete-warning::before {
+	content: "warn  ";
+	font-weight: 600;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-composer {
+	background: var(--background-primary);
+	border: 0;
+	border-radius: 0;
+	border-top: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+	gap: 0;
+	max-height: 60%;
+	padding: 0;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-input-shell {
+	align-items: flex-start;
+	display: flex;
+	gap: 6px;
+	padding: 8px 12px;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-prompt {
+	color: var(--interactive-accent);
+	display: block;
+	font-weight: 600;
+	line-height: 1.55;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-question {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	field-sizing: content;
+	font-family: var(--font-monospace);
+	line-height: 1.55;
+	max-height: 9em;
+	min-height: 1.55em;
+	padding: 0;
+	resize: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-question:focus {
+	box-shadow: none;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-completions:not([hidden]) {
+	border-bottom: 1px solid var(--background-modifier-border);
+	display: block;
+	font-size: var(--font-ui-smaller);
+	max-height: 220px;
+	overflow-y: auto;
+	padding: 4px 0;
+}
+
+.askmate-console-completion {
+	cursor: pointer;
+	display: flex;
+	gap: 10px;
+	padding: 2px 12px;
+}
+
+.askmate-console-completion.is-selected {
+	background: var(--background-modifier-hover);
+}
+
+.askmate-console-completion-label {
+	color: var(--text-normal);
+	flex: 0 0 auto;
+}
+
+.askmate-console-completion-detail {
+	color: var(--text-muted);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-sidebar.askmate-composer-layout-console .askmate-console-status {
+	align-items: stretch;
+	background: var(--text-normal);
+	color: var(--background-primary);
+	display: flex;
+	font-size: var(--font-ui-smaller);
+	line-height: 1.6;
+}
+
+.askmate-console-status-segments {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.askmate-console-segment {
+	border-right: 1px solid color-mix(in srgb, var(--background-primary) 28%, transparent);
+	overflow: hidden;
+	padding: 2px 8px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-console-segment.is-model {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.askmate-console-segment.is-usage {
+	border-right: 0;
+	margin-left: auto;
+}
+
+.askmate-sidebar .askmate-console-status button {
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	cursor: pointer;
+	font: inherit;
+	height: auto;
+	padding: 2px 8px;
+}
+
+.askmate-sidebar .askmate-console-segment.is-mode {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-weight: 600;
+}
+
+.askmate-sidebar .askmate-console-segment.is-mode:disabled {
+	cursor: default;
+	opacity: 0.75;
+}
+
+.askmate-sidebar .askmate-console-stop {
+	background: var(--text-error);
+	color: var(--background-primary);
+	font-weight: 600;
+}
+
+.askmate-console-stop[hidden] {
+	display: none;
+}
+
+.askmate-sidebar .askmate-console-status button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
 @media (pointer: coarse) {
 	.askmate-action-button,
 	.askmate-message-action,
@@ -1877,8 +2242,7 @@
 		transition-duration: 0.01ms !important;
 	}
 
-	.askmate-avatar,
-	.askmate-logo {
+	.askmate-avatar {
 		animation: none !important;
 	}
 
@@ -1891,8 +2255,19 @@
 	.askmate-action-button:focus-visible,
 	.askmate-message-action:focus-visible,
 	.askmate-workflow-card:focus-visible,
+	.askmate-workflow-toggle:focus-visible,
+	.askmate-segment:focus-visible,
+	.askmate-reasoning-shell:focus-within,
+	.askmate-icon-select-control:focus-within,
+	.askmate-request-preview-select:focus-visible,
+	.askmate-question:focus,
 	.askmate-settings-nav-button:focus-visible {
 		outline: 2px solid CanvasText;
+	}
+
+	.askmate-workflow-toggle.is-active,
+	.askmate-segment.is-active {
+		outline: 2px solid Highlight;
 	}
 
 	.askmate-chart-axis-line,

@@ -45,7 +45,7 @@ body:
     id: askmate-version
     attributes:
       label: AskMate version
-      placeholder: 1.5.0
+      placeholder: 1.7.0
     validations:
       required: true
   - type: input
@@ -72,6 +72,8 @@ body:
       label: Provider
       options:
         - OpenAI
+        - Azure OpenAI
+        - Azure AI Foundry
         - OpenRouter
         - Anthropic Claude
         - Google Gemini

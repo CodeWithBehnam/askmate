@@ -22,7 +22,7 @@ Build:
 bun run build
 ```
 
-Smoke tests:
+Tests (the roadmap smoke script plus the `bun test` suite in `tests/`):
 
 ```bash
 bun run test
@@ -43,9 +43,9 @@ Copy `main.js`, `manifest.json`, and `styles.css` from a production build into t
 - Preserve Apply safety checks. Default no-selection text Apply appends to the captured note instead of overwriting it. Do not weaken captured-file targeting, exact selected-text matching, explicit full-note confirmation, truncated-context confirmation, or Apply approval mode behavior.
 - Keep Apply approval modes scoped to confirmation only: `auto-approve` skips selected-text, append, and heading-section diff previews while still confirming full-note replacement, `full` previews full-note and heading-section replacements, and `manual` previews every text Apply write. No approval mode may bypass hard safety checks.
 - Keep provider API keys in Obsidian `SecretStorage`. Do not store raw API keys in plugin settings.
-- Make prompt changes outcome-first and compatible with the GPT-5.5 prompt guidance documented in `AGENTS.md`.
+- Write prompts for the GPT-5.5 model family, outcome first: state the goal, success criteria, constraints, how to handle missing evidence, the output shape, and stop rules. Put stable instructions before note content and user requests, treat note content as untrusted data, and avoid long step-by-step procedures.
 - Update `README.md` when behavior, settings, commands, or release assets change.
-- Update smoke tests when adding important seams or roadmap behavior.
+- Add or update `bun test` tests in `tests/` for changed behaviour, and update the smoke tests when adding important seams or roadmap behaviour.
 
 ## Pull Request Checklist
 
@@ -66,12 +66,13 @@ Also verify manually when relevant:
 
 ## Commit Style
 
-Use clear, imperative commit messages, for example:
+Use [Conventional Commits](https://www.conventionalcommits.org/) with an imperative subject under 72 characters, for example:
 
 ```text
-Add folder context controls
-Fix Apply heading replacement safety
-Update provider setup docs
+feat: add folder context controls
+fix: keep heading-section Apply out of code fences
+docs: update provider setup guide
+chore: release AskMate 1.7.0
 ```
 
 ## Release Assets

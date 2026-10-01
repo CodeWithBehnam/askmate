@@ -8,14 +8,14 @@ import {
 	validateProviderBaseUrl
 } from "../shared/core";
 import {
-	extractChatCompletionText,
-	extractProviderError,
-	formatProviderHttpError,
-	normalizeChatCompletionsUsage
+	buildChatCompletionsResult,
+	describeProviderErrorBody,
+	formatProviderHttpError
 } from "./common";
 import type { ProviderRuntime } from "./types";
 
 const AZURE_AI_INFERENCE_API_VERSION = "2024-05-01-preview";
+const AZURE_AI_RESOURCE_HOST_PATTERN = /\.(?:services\.ai|cognitiveservices)\.azure\.com$/i;
 
 interface AzureAIModelInfoBody {
 	model_name?: string;
@@ -42,7 +42,15 @@ export function getAzureAIBaseUrl(provider: ProviderSettings): string {
 	}
 
 	const normalized = baseUrl.replace(/\/+$/g, "");
-	return normalized.endsWith("/models") ? normalized : `${normalized}/models`;
+	const hasPath = url.pathname.replace(/\/+$/g, "") !== "";
+
+	// Only the Foundry resource hosts serve inference under /models; serverless endpoints
+	// (*.models.ai.azure.com) and custom paths already point at the inference root.
+	if (!hasPath && AZURE_AI_RESOURCE_HOST_PATTERN.test(url.hostname)) {
+		return `${normalized}/models`;
+	}
+
+	return normalized;
 }
 
 export async function completeAzureAIText(
@@ -87,15 +95,10 @@ export async function completeAzureAIText(
 	const body = response.body;
 
 	if (!response.ok) {
-		throw new Error(formatProviderHttpError(providerRef.providerName, response.status, extractProviderError(body, "")));
+		throw new Error(formatProviderHttpError(providerRef.providerName, response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
-	return {
-		text: extractChatCompletionText(body),
-		model: providerRef.model,
-		endpoint: "chat_completions",
-		usage: normalizeChatCompletionsUsage(body?.usage)
-	};
+	return buildChatCompletionsResult(providerRef.providerName, providerRef.model, body);
 }
 
 export async function fetchAzureAIModels(runtime: ProviderRuntime): Promise<string[]> {
@@ -118,7 +121,7 @@ export async function fetchAzureAIModels(runtime: ProviderRuntime): Promise<stri
 	const body = response.body;
 
 	if (!response.ok) {
-		throw new Error(formatProviderHttpError(getProviderLabel(providerId), response.status, body?.error?.message ?? ""));
+		throw new Error(formatProviderHttpError(getProviderLabel(providerId), response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
 	const modelName = body?.model_name?.trim() ?? "";

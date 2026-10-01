@@ -11,7 +11,11 @@ flowchart TD
   Entry["main.ts"] --> Plugin["AskMatePlugin"]
   Plugin --> UI["AskMateView and AskMateSettingTab"]
   Plugin --> Modals["modals.ts"]
-  Plugin --> Providers["src/providers/index.ts"]
+  Plugin --> Services["ContextService, HistoryService, UsageService"]
+  Plugin --> Runner["RequestRunner and requestBuilders"]
+  Plugin --> Output["src/output/*"]
+  UI --> RenderSafety["renderSafety.ts"]
+  Runner --> Providers["src/providers/index.ts"]
   Plugin --> Settings["src/settings/*"]
   Plugin --> Shared["src/shared/*"]
   Plugin --> Workflows["builtInWorkflows.ts"]
@@ -27,6 +31,8 @@ flowchart TD
   Build["package scripts"] --> TypeScript["tsc no emit"]
   Build --> Esbuild["esbuild CJS bundle"]
   Build --> Bun["Bun runtime"]
+  Build --> Tests["bun test tests and smoke script"]
+  CI["GitHub CI workflow"] --> Build
   Release["GitHub release workflow"] --> Build
   Release --> Assets["main.js, manifest.json, styles.css"]
 
@@ -35,6 +41,10 @@ flowchart TD
     Plugin
     UI
     Modals
+    Services
+    Runner
+    Output
+    RenderSafety
     Providers
     Settings
     Shared
@@ -56,6 +66,8 @@ flowchart TD
     TypeScript
     Esbuild
     Bun
+    Tests
+    CI
     Release
     Assets
   end
@@ -65,9 +77,9 @@ flowchart TD
   classDef test fill:#DCFCE7,stroke:#16A34A,color:#14532D
   classDef config fill:#F1F5F9,stroke:#64748B,color:#0F172A
 
-  class Entry,Plugin,UI,Modals,Providers,Settings,Shared,Workflows core
+  class Entry,Plugin,UI,Modals,Services,Runner,Output,RenderSafety,Providers,Settings,Shared,Workflows core
   class OpenAI,AzureOpenAI,AzureAI,OpenRouter,Anthropic,Gemini,Compatible external
-  class Build,TypeScript,Esbuild,Bun,Release test
+  class Build,TypeScript,Esbuild,Bun,Tests,CI,Release test
   class Assets config
 ```
 
@@ -79,22 +91,22 @@ flowchart TD
 | Provider APIs | `src/providers/*`, `README.md` | OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic, Gemini, local OpenAI-compatible. |
 | Obsidian `requestUrl` | `AskMatePlugin.requestJson()` | Required by project review rules and provider runtime. |
 | Obsidian `SecretStorage` | `getProviderApiKey()` | Settings hold secret names, not raw keys. |
-| Obsidian vault API | `vault.create`, `vault.createBinary`, `vault.modify`, `vault.cachedRead` | Used for result notes, images, Apply, and context. |
+| Obsidian vault API | `vault.create`, `vault.createBinary`, `vault.process`, `vault.cachedRead`, `vault.on("rename")`, `vault.on("delete")` | Used for result notes, images, Apply, context, and keeping note history and the review queue in step with renamed or deleted notes. |
 
 ## Tooling dependencies
 
 | Tool | Evidence | Purpose |
 | --- | --- | --- |
-| Bun | `package.json`, `.github/workflows/release.yml` | Scripts, tests, build, release CI setup. |
-| TypeScript | `package.json`, `tsconfig.json` | Strict type checking before build. |
+| Bun | `package.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml` | Scripts, `bun test` suite, build, CI and release setup (Bun pinned to 1.4.2 in CI). |
+| TypeScript | `package.json`, `tsconfig.json` | Type checking before build with `strict`, `noUnusedLocals` and `noUnusedParameters`. `tests/` is excluded from `tsc`. |
 | esbuild | `esbuild.config.mjs` | Bundles `main.ts` to `main.js` as CJS targeting ES2018. |
-| GitHub Actions | `.github/workflows/release.yml` | Version validation, tests, build, asset attestation, release. |
+| GitHub Actions | `.github/workflows/ci.yml`, `.github/workflows/release.yml` | CI runs tests and build; release adds version validation, asset attestation and release. Actions are pinned to commit SHAs. |
 
 ## Traceability
 
 | Field | Details |
 | --- | --- |
-| Source files inspected | `main.ts`, `package.json`, `manifest.json`, `tsconfig.json`, `esbuild.config.mjs`, `.github/workflows/release.yml`, `src/providers/*`, `src/plugin/AskMatePlugin.ts` |
+| Source files inspected | `main.ts`, `package.json`, `manifest.json`, `tsconfig.json`, `esbuild.config.mjs`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `src/providers/*`, `src/plugin/AskMatePlugin.ts`, `src/requests/RequestRunner.ts` |
 | Key symbols | `completeProviderTextRequest`, `fetchProviderModels`, `requestOpenAIResponses`, `requestOpenAIImageGeneration`, `ProviderRuntime`, `requestJson` |
 | Inferences | Provider files are grouped by external service, while local OpenAI-compatible endpoints are treated as an external boundary because they are reached by HTTP. |
 | Confidence | confirmed |

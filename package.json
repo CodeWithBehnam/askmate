@@ -6,7 +6,7 @@
 	"devDependencies": {
 		"@types/node": "^24.0.0",
 		"esbuild": "^0.25.0",
-		"obsidian": "latest",
+		"obsidian": "1.12.3",
 		"typescript": "^5.9.0"
 	},
 	"description": "AI notes: Q&A, summaries, rewrites, workflows, safe Apply, images.",
@@ -26,9 +26,6 @@
 	"scripts": {
 		"dev": "bun run esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && bun run esbuild.config.mjs production",
-		"demo:video": "bun run scripts/remotion-safe-run.mjs dev",
-		"demo:render": "bun run scripts/remotion-safe-run.mjs render",
-		"demo:still": "bun run scripts/remotion-safe-run.mjs still",
 		"test": "bun run scripts/roadmap-smoke-tests.ts && bun test tests",
 		"install:vault": "bun run build && bun run scripts/install-to-vault.ts",
 		"verify:vault": "bun run build && bun run scripts/install-to-vault.ts --verify-only"

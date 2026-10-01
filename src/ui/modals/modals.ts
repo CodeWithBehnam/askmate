@@ -1,8 +1,9 @@
-import { App, Modal, Notice, Setting } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import {
 	buildMarkdownLineDiff,
 	formatOutputMode,
+	getMarkdownDiffStats,
 	formatRequestIntent,
 	formatTokenCount,
 	formatUsageTimestamp,
@@ -38,6 +39,8 @@ class AskMateConfirmModal extends Modal {
 		confirmButton.addEventListener("click", () => {
 			this.finish(true);
 		});
+		// Cancel is the safe default for destructive confirmations; Enter activates whichever button has focus.
+		cancelButton.focus();
 	}
 
 	onClose(): void {
@@ -79,11 +82,10 @@ class AskMatePromptModal extends Modal {
 		this.inputEl.setAttribute("aria-describedby", messageEl.id);
 		this.inputEl.addClass("askmate-modal-input");
 		this.inputEl.addEventListener("keydown", (event) => {
-			if (event.key === "Enter") {
+			// Enter while an IME candidate is open commits the candidate, not the prompt.
+			if (event.key === "Enter" && !event.isComposing) {
+				event.preventDefault();
 				this.finish(this.inputEl?.value ?? "");
-			}
-			if (event.key === "Escape") {
-				this.finish(null);
 			}
 		});
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
@@ -127,6 +129,8 @@ export class AskMateDiffConfirmModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
+		// Obsidian sizes the dialog on modalEl, so the wide layout class must go there.
+		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-diff-modal");
 		const title = this.options.scope === "selected-text"
 			? "Apply AskMate output to selected text?"
@@ -141,6 +145,11 @@ export class AskMateDiffConfirmModal extends Modal {
 			cls: "askmate-diff-summary",
 			text: `Before: ${this.options.before.split(/\r?\n/).length} lines, ${this.options.before.length.toLocaleString()} chars. After: ${this.options.after.split(/\r?\n/).length} lines, ${this.options.after.length.toLocaleString()} chars.`
 		});
+		const stats = getMarkdownDiffStats(this.options.before, this.options.after);
+		contentEl.createDiv({
+			cls: "askmate-diff-summary",
+			text: `${stats.removed.toLocaleString()} line${stats.removed === 1 ? "" : "s"} removed, ${stats.added.toLocaleString()} line${stats.added === 1 ? "" : "s"} added.`
+		});
 		if (this.options.warning) {
 			contentEl.createDiv({ cls: "askmate-diff-warning", text: this.options.warning });
 		}
@@ -149,7 +158,8 @@ export class AskMateDiffConfirmModal extends Modal {
 			const row = diffEl.createDiv({ cls: `askmate-diff-line askmate-diff-line-${line.kind}` });
 			row.createSpan({ cls: "askmate-diff-line-number", text: line.oldLineNumber === null ? "" : String(line.oldLineNumber) });
 			row.createSpan({ cls: "askmate-diff-line-number", text: line.newLineNumber === null ? "" : String(line.newLineNumber) });
-			row.createSpan({ text: `${line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "} ${line.text}` });
+			const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : line.kind === "omitted" ? "…" : " ";
+			row.createSpan({ text: `${marker} ${line.text}` });
 		}
 		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
 		const cancelButton = actions.createEl("button", { text: "Cancel" });
@@ -187,6 +197,7 @@ export class AskMateTextViewerModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
+		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-prompt-inspector");
 		this.setTitle(this.title);
 		const textarea = contentEl.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
@@ -213,6 +224,7 @@ export class AskMatePromptInspectorModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
+		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-prompt-inspector");
 		this.setTitle("Final prompt inspector");
 		contentEl.createDiv({
@@ -220,7 +232,7 @@ export class AskMatePromptInspectorModal extends Modal {
 			text: `${this.inspection.providerName}: ${this.inspection.model} · about ${formatTokenCount(this.inspection.estimatedInputTokens)} input tokens · ${formatRequestIntent(this.inspection.request.metadata.intentKind)}`
 		});
 		if (this.inspection.blockers.length > 0) {
-			contentEl.createDiv({ cls: "askmate-budget-blocker", text: this.inspection.blockers.join(" ") });
+			contentEl.createDiv({ cls: "askmate-budget-warning askmate-budget-blocker", text: this.inspection.blockers.join(" ") });
 		}
 		if (this.inspection.warnings.length > 0) {
 			contentEl.createDiv({ cls: "askmate-budget-warning", text: this.inspection.warnings.join(" ") });
@@ -265,6 +277,7 @@ export class AskMateNoteHistoryModal extends Modal {
 	private render(): void {
 		const { contentEl } = this;
 		contentEl.empty();
+		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-note-history");
 		this.setTitle("AskMate note history");
 		contentEl.createDiv({ cls: "askmate-note-history-meta", text: this.sourcePath || "No active note" });

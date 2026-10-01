@@ -1,4 +1,4 @@
-import { ItemView, MarkdownRenderer, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import {
 	ActiveRun,
@@ -7,6 +7,7 @@ import {
 	ChatImagePreview,
 	ChatMessage,
 	ChatRole,
+	ComposerLayout,
 	canRunContinue,
 	CONTEXT_BUDGET_OPTIONS,
 	createBuiltRetrySnapshot,
@@ -15,11 +16,9 @@ import {
 	DEFAULT_FOLDER_CONTEXT_MAX_FILES,
 	DEFAULT_IMAGE_PROMPT,
 	DEFAULT_REQUEST_PRIVACY_OPTIONS,
-	estimateTokenCount,
 	FolderContextOptions,
 	formatOperationStatus,
 	formatOutputMode,
-	getContextBudgetOption,
 	IMAGE_FILE_EXTENSIONS,
 	IMAGE_WORKFLOW_MESSAGE,
 	ImageAskMateResult,
@@ -42,16 +41,48 @@ import {
 	Workflow
 } from "../../shared/core";
 import { AskMatePromptInspectorModal, AskMateTextViewerModal, AskMateNoteHistoryModal, askMatePrompt } from "../modals/modals";
+import { classifyImagePreviewSource, describeDataImage, extractImageEmbedTargets, sanitizeModelMarkdown } from "./renderSafety";
+import {
+	buildConsoleCommands,
+	formatConsoleHelp,
+	formatConsoleStatus,
+	getConsoleCompletions,
+	parseConsoleInput,
+	resolveLayoutName,
+	type ConsoleAction,
+	type ConsoleCommand,
+	type ConsoleCompletion,
+	type ConsoleMentions
+} from "./consoleCommands";
+
+let consoleViewCounter = 0;
+
+/** Short labels shown as [label] in the Console layout; the full label stays the accessible name. */
+const CONSOLE_ACTION_LABELS: Record<string, string> = {
+	"Show reply text": "text",
+	"Use reply": "reuse",
+	"Queue for review": "queue",
+	"New note": "note",
+	"Apply reply": "apply",
+	"Replace full note": "replace",
+	"Apply selected block": "apply-sel",
+	"Apply to heading": "heading",
+	"Retry request": "retry",
+	"Edit": "edit",
+	"Show image prompt": "prompt",
+	"New image note": "note",
+	"Insert image": "insert"
+};
 
 export class AskMateView extends ItemView {
 	private readonly plugin: AskMatePlugin;
-	private messagesEl: HTMLElement;
-	private questionEl: HTMLTextAreaElement;
+	private messagesEl!: HTMLElement;
+	private questionEl!: HTMLTextAreaElement;
 	private contextEl: HTMLButtonElement | null = null;
 	private modelEl: HTMLElement | null = null;
-	private sendButton: HTMLButtonElement;
+	private sendButton!: HTMLButtonElement;
 	private imageButton: HTMLButtonElement | null = null;
-	private stopButton: HTMLButtonElement;
+	private stopButton!: HTMLButtonElement;
 	private clearButton: HTMLButtonElement | null = null;
 	private activeRun: ActiveRun | null = null;
 	private nextRunId = 0;
@@ -70,6 +101,10 @@ export class AskMateView extends ItemView {
 	private markdownRenderId = 0;
 	private readonly markdownRenderTimers = new WeakMap<HTMLElement, number>();
 	private readonly pendingMarkdownTimerIds = new Set<number>();
+	private readonly pendingMarkdown = new WeakMap<HTMLElement, { markdown: string; sourcePath: string }>();
+	private readonly markdownRendersInFlight = new WeakMap<HTMLElement, number>();
+	/** Each rendered body owns its embeds and post-processor children, so they unload with that body. */
+	private readonly markdownComponents = new Map<HTMLElement, Component>();
 	private requestPreviewEl: HTMLElement | null = null;
 	private privacyOptions: RequestPrivacyOptions = DEFAULT_REQUEST_PRIVACY_OPTIONS;
 	private contextBudgetMode: ContextBudgetMode = "expanded";
@@ -82,7 +117,24 @@ export class AskMateView extends ItemView {
 	private folderContextEnabled = false;
 	private folderContextPath = "";
 	private folderContextMaxFiles = DEFAULT_FOLDER_CONTEXT_MAX_FILES;
+	private requestDefaultsKey = "";
+	private lastRequestPreviewKey: string | null = null;
+	/** Bumped whenever the note context may have changed outside the sidebar. */
+	private requestPreviewContextGeneration = 0;
+	private contextLabelGeneration = 0;
+	private onboardingTipsShown = false;
 	private readonly activeActionKeys = new Set<string>();
+	private consoleCommands: ConsoleCommand[] = [];
+	private consoleCompletionsEl: HTMLElement | null = null;
+	private consoleStatusEl: HTMLElement | null = null;
+	private consoleStatusSegmentsEl: HTMLElement | null = null;
+	private consoleModeButton: HTMLButtonElement | null = null;
+	private consoleStopButton: HTMLButtonElement | null = null;
+	private consoleCompletion: { from: number; to: number; items: ConsoleCompletion[]; index: number; navigated: boolean } | null = null;
+	/** Unique per view, so two open AskMate sidebars never share listbox or option ids. */
+	private readonly consoleIdPrefix = `askmate-console-${++consoleViewCounter}`;
+	private consoleHistory: string[] = [];
+	private consoleHistoryIndex = -1;
 
 	constructor(leaf: WorkspaceLeaf, plugin: AskMatePlugin) {
 		super(leaf);
@@ -122,13 +174,9 @@ export class AskMateView extends ItemView {
 		this.workflowSectionEl = null;
 		this.workflowToggleButton = null;
 		this.requestPreviewEl = null;
-		this.privacyOptions = normalizeRequestPrivacyOptions(this.plugin.settings.requestPrivacyDefaults);
-		this.contextBudgetMode = normalizeContextBudgetMode(this.plugin.settings.contextBudgetMode);
-		this.additionalContextPaths = [...this.plugin.settings.additionalContextPaths];
-		this.folderContextEnabled = this.plugin.settings.folderContextEnabled;
-		this.folderContextPath = this.plugin.settings.folderContextPath;
-		this.folderContextMaxFiles = this.plugin.settings.folderContextMaxFiles;
+		this.resetRequestOptionsFromSettings();
 		this.workflowsVisible = false;
+		this.onboardingTipsShown = false;
 
 		this.plugin.rememberActiveMarkdownContext();
 
@@ -143,25 +191,67 @@ export class AskMateView extends ItemView {
 		this.registerDomEvent(this.messagesEl, "scroll", () => {
 			this.shouldFollowMessages = this.isScrolledNearBottom();
 		});
+		this.registerDomEvent(this.messagesEl, "click", (event) => {
+			this.openInternalLink(event);
+		});
+		this.registerDomEvent(this.messagesEl, "auxclick", (event) => {
+			if (event.button === 1) {
+				this.openInternalLink(event);
+			}
+		});
 		this.renderOnboardingTips();
 
+		this.refreshConsoleCommands();
 		this.renderWorkflowGrid(container);
 		this.renderComposer(container);
+		this.refreshConsoleStatus();
 
 		const refreshContext = (): void => {
 			this.plugin.rememberActiveMarkdownContext();
+			// Also picks up usage from runs started elsewhere (for example the command palette).
 			this.refreshReasoningSelector();
 			this.updateModelLabel();
-			void this.updateContextLabel();
-			void this.refreshRequestPreview();
+			// Building the preview reads the note and folder context, so one click (pointerdown, focusin and
+			// active-leaf-change together) must cost at most one debounced build, and only when something changed.
+			this.scheduleRequestPreviewRefresh();
 		};
 
 		this.registerDomEvent(container, "pointerdown", refreshContext);
 		this.registerDomEvent(container, "focusin", refreshContext);
 
 		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", refreshContext)
+			this.app.workspace.on("active-leaf-change", () => {
+				this.requestPreviewContextGeneration += 1;
+				refreshContext();
+			})
 		);
+	}
+
+	/** MarkdownRenderer emits wikilinks as `a.internal-link` but leaves navigation to the host view. */
+	private openInternalLink(event: MouseEvent): void {
+		// targetNode and instanceOf stay correct when the sidebar is moved to a popout window.
+		const target = event.targetNode;
+		if (!target || !target.instanceOf(Element)) {
+			return;
+		}
+		const link = target.closest("a.internal-link");
+		if (!link || !this.messagesEl.contains(link)) {
+			return;
+		}
+		const linktext = link.getAttribute("data-href") ?? link.getAttribute("href");
+		if (!linktext) {
+			return;
+		}
+
+		event.preventDefault();
+		const sourcePath = link.closest("[data-askmate-source-path]")?.getAttribute("data-askmate-source-path") ?? "";
+		void this.app.workspace.openLinkText(linktext, sourcePath, Keymap.isModEvent(event))
+			.catch((error: unknown) => new Notice(this.plugin.getErrorMessage(error)));
+	}
+
+	onResize(): void {
+		// A collapsed sidebar skips preview builds; catch up when it is shown again.
+		this.scheduleRequestPreviewRefresh();
 	}
 
 	private renderWorkflowGrid(container: HTMLElement): void {
@@ -182,6 +272,7 @@ export class AskMateView extends ItemView {
 	}
 
 	refreshSettingsSensitiveUi(): void {
+		this.refreshConsoleCommands();
 		this.applyComposerLayoutClass();
 		this.renderOnboardingTips();
 		this.refreshWorkflowGrid();
@@ -197,9 +288,16 @@ export class AskMateView extends ItemView {
 			this.sendButton.setAttribute("aria-label", label);
 			this.sendButton.setAttribute("title", label);
 		}
+		// Settings outside the draft options (keys, budgets, limits) can change the preview's blockers.
+		this.requestPreviewContextGeneration += 1;
 		this.syncRequestPreviewFromSettings();
+		if (this.activeRun) {
+			// Rebuilt workflow buttons and preview controls are created enabled; reapply the running state.
+			this.setLoading(true);
+		}
 		void this.refreshReadiness();
-		void this.refreshRequestPreview();
+		this.refreshConsoleStatus();
+		this.scheduleRequestPreviewRefresh();
 	}
 
 	private applyComposerLayoutClass(): void {
@@ -210,6 +308,26 @@ export class AskMateView extends ItemView {
 		const layout = normalizeComposerLayout(this.plugin.settings.composerLayout);
 		this.rootEl.classList.toggle("askmate-composer-layout-compact", layout === "compact");
 		this.rootEl.classList.toggle("askmate-composer-layout-expanded", layout === "expanded");
+		this.rootEl.classList.toggle("askmate-composer-layout-console", layout === "console");
+		this.closeConsoleCompletions();
+		this.applyConsolePromptSemantics();
+	}
+
+	/** The console prompt is a combobox with a suggestion list; the other layouts keep a plain text box. */
+	private applyConsolePromptSemantics(): void {
+		if (!this.questionEl) {
+			return;
+		}
+		if (this.isConsoleLayout()) {
+			this.questionEl.setAttribute("role", "combobox");
+			this.questionEl.setAttribute("aria-autocomplete", "list");
+			this.questionEl.setAttribute("aria-controls", `${this.consoleIdPrefix}-completions`);
+			this.questionEl.setAttribute("aria-expanded", String(Boolean(this.consoleCompletion)));
+			return;
+		}
+		for (const attribute of ["role", "aria-autocomplete", "aria-controls", "aria-expanded", "aria-activedescendant"]) {
+			this.questionEl.removeAttribute(attribute);
+		}
 	}
 
 	private renderOnboardingTips(): void {
@@ -217,10 +335,12 @@ export class AskMateView extends ItemView {
 			this.rootEl?.querySelectorAll(".askmate-onboarding-message").forEach((element) => element.remove());
 			return;
 		}
-		if (this.rootEl?.querySelector(".askmate-onboarding-message")) {
+		// Settings refreshes (output mode, reasoning effort) must not re-add the card after Clear chat removed it.
+		if (this.onboardingTipsShown || this.rootEl?.querySelector(".askmate-onboarding-message")) {
 			return;
 		}
 
+		this.onboardingTipsShown = true;
 		const message = this.createMessageEl("system", "", false);
 		message.wrapper.addClass("askmate-onboarding-message");
 		message.body.empty();
@@ -269,7 +389,7 @@ export class AskMateView extends ItemView {
 				}
 
 				this.setWorkflowPanelVisible(false);
-				void this.runWorkflow(workflow);
+				this.runUiTask(this.runWorkflow(workflow));
 			});
 		}
 	}
@@ -279,6 +399,9 @@ export class AskMateView extends ItemView {
 	}
 
 	private getComposerPlaceholder(): string {
+		if (this.isConsoleLayout()) {
+			return "Ask, or type / for commands and @ for context";
+		}
 		const shortcut = this.plugin.settings.sendShortcut;
 		const suffix = shortcut === "ctrl-enter" ? "Ctrl/Cmd+Enter to send." : "Enter to send, Shift+Enter for newline.";
 		return `Ask about the note, use /image, or choose a workflow... ${suffix}`;
@@ -316,7 +439,14 @@ export class AskMateView extends ItemView {
 		this.modelEl = header.createDiv({ cls: "askmate-model-chip askmate-composer-model" });
 		this.updateModelLabel();
 
+		this.consoleCompletionsEl = composer.createDiv({
+			cls: "askmate-console-completions",
+			attr: { id: `${this.consoleIdPrefix}-completions`, role: "listbox", "aria-label": "Command suggestions" }
+		});
+		this.consoleCompletionsEl.hidden = true;
+
 		const inputShell = composer.createDiv({ cls: "askmate-input-shell" });
+		inputShell.createSpan({ cls: "askmate-console-prompt", text: "›", attr: { "aria-hidden": "true" } });
 		this.questionEl = inputShell.createEl("textarea", {
 			cls: "askmate-question",
 			attr: {
@@ -326,20 +456,33 @@ export class AskMateView extends ItemView {
 			}
 		});
 		this.questionEl.addEventListener("keydown", (event) => {
+			if (this.isConsoleLayout() && this.handleConsoleKeydown(event)) {
+				return;
+			}
 			if (!this.shouldSubmitFromKeydown(event)) {
 				return;
 			}
 
 			event.preventDefault();
-			void this.submitQuestion();
+			// A held Enter key must not fire a burst of submits.
+			if (event.repeat) {
+				return;
+			}
+			this.runUiTask(this.submitQuestion());
 		});
 		this.questionEl.addEventListener("input", () => {
+			this.consoleHistoryIndex = -1;
+			this.updateConsoleCompletions();
 			this.scheduleRequestPreviewRefresh();
 		});
+		this.questionEl.addEventListener("blur", () => {
+			this.closeConsoleCompletions();
+		});
+		this.applyConsolePromptSemantics();
 
 		this.sendButton = this.createActionButton(inputShell, "send", `Send (${this.getSendShortcutLabel()})`, "askmate-send-button mod-cta");
 		this.sendButton.addEventListener("click", () => {
-			void this.submitQuestion();
+			this.runUiTask(this.submitQuestion());
 		});
 
 		this.renderRequestPreview(composer);
@@ -349,7 +492,7 @@ export class AskMateView extends ItemView {
 		const imageButton = this.createActionButton(actions, "image-plus", "Generate image", "askmate-image-button");
 		this.imageButton = imageButton;
 		imageButton.addEventListener("click", () => {
-			void this.submitImageQuestion();
+			this.runUiTask(this.submitImageQuestion());
 		});
 
 		this.stopButton = this.createActionButton(actions, "square", "Stop", "askmate-stop-button");
@@ -365,18 +508,24 @@ export class AskMateView extends ItemView {
 		const clearButton = this.createActionButton(actions, "trash-2", "Clear chat", "askmate-clear-button");
 		this.clearButton = clearButton;
 		clearButton.addEventListener("click", () => {
-			if (this.activeRun) {
-				new Notice("Stop the current request before clearing chat.");
-				return;
-			}
-
-			this.messages = [];
-			this.messagesEl.empty();
-			this.shouldFollowMessages = true;
-			this.addMessage("system", "Chat cleared.");
+			this.clearChat();
 		});
 
 		this.renderOutputToggle(footer);
+		this.renderConsoleStatusBar(composer);
+	}
+
+	private clearChat(): void {
+		if (this.activeRun) {
+			new Notice("Stop the current request before clearing chat.");
+			return;
+		}
+
+		this.messages = [];
+		this.releaseAllMarkdownComponents();
+		this.messagesEl.empty();
+		this.shouldFollowMessages = true;
+		this.addMessage("system", "Chat cleared.");
 	}
 
 	private renderRequestPreview(parent: HTMLElement): void {
@@ -385,7 +534,12 @@ export class AskMateView extends ItemView {
 		}
 
 		const preview = parent.createDiv({ cls: "askmate-request-preview" });
+		const footer = parent.querySelector(":scope > .askmate-composer-footer");
+		if (footer) {
+			parent.insertBefore(preview, footer);
+		}
 		this.requestPreviewEl = preview;
+		this.lastRequestPreviewKey = null;
 		preview.createDiv({ cls: "askmate-request-preview-summary", text: "Request preview loading..." });
 		const controls = preview.createDiv({ cls: "askmate-request-preview-controls" });
 		this.createPrivacyToggle(controls, "includeNoteContext", "Send note and attached context");
@@ -462,7 +616,7 @@ export class AskMateView extends ItemView {
 		notes.value = this.additionalContextPaths.join("\n");
 		notes.addEventListener("input", () => {
 			this.additionalContextPaths = normalizeContextPathList(notes.value);
-			void this.refreshRequestPreview();
+			this.scheduleRequestPreviewRefresh();
 		});
 
 		const folderLabel = body.createEl("label", { cls: "askmate-extra-context-inline" });
@@ -491,7 +645,7 @@ export class AskMateView extends ItemView {
 		folderInput.value = this.folderContextPath;
 		folderInput.addEventListener("input", () => {
 			this.folderContextPath = folderInput.value.trim();
-			void this.refreshRequestPreview();
+			this.scheduleRequestPreviewRefresh();
 		});
 
 		const maxFiles = body.createEl("input", {
@@ -507,7 +661,7 @@ export class AskMateView extends ItemView {
 		maxFiles.value = String(this.folderContextMaxFiles);
 		maxFiles.addEventListener("input", () => {
 			this.folderContextMaxFiles = normalizeBoundedInteger(maxFiles.value, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
-			void this.refreshRequestPreview();
+			this.scheduleRequestPreviewRefresh();
 		});
 	}
 
@@ -517,8 +671,22 @@ export class AskMateView extends ItemView {
 		}
 		this.requestPreviewTimer = window.setTimeout(() => {
 			this.requestPreviewTimer = null;
+			if (this.contextLabelGeneration !== this.requestPreviewContextGeneration) {
+				this.contextLabelGeneration = this.requestPreviewContextGeneration;
+				void this.updateContextLabel();
+			}
 			void this.refreshRequestPreview();
 		}, 200);
+	}
+
+	private getRequestPreviewKey(question: string, forceImage: boolean, options: RunRequestOptions): string {
+		return JSON.stringify([
+			this.requestPreviewContextGeneration,
+			question,
+			forceImage,
+			options,
+			this.plugin.getSelectedProviderModelRef()
+		]);
 	}
 
 	private getRequestDraftOptions(forceImage = false): RunRequestOptions {
@@ -535,23 +703,30 @@ export class AskMateView extends ItemView {
 	}
 
 	private async refreshRequestPreview(): Promise<void> {
-		if (!this.requestPreviewEl) {
+		if (!this.requestPreviewEl || !this.containerEl.isShown()) {
 			return;
 		}
 
-		const refreshId = ++this.requestPreviewRefreshId;
 		const summary = this.requestPreviewEl.querySelector<HTMLElement>(".askmate-request-preview-summary");
 		if (!summary) {
 			return;
 		}
 
+		const raw = this.questionEl?.value.trim() || "Preview request";
+		const command = this.parseComposerCommand(raw);
+		const options = this.getRequestDraftOptions(command.forceImage);
+		const previewKey = this.getRequestPreviewKey(command.question, command.forceImage, options);
+		if (previewKey === this.lastRequestPreviewKey) {
+			return;
+		}
+		this.lastRequestPreviewKey = previewKey;
+		const refreshId = ++this.requestPreviewRefreshId;
+
 		try {
-			const raw = this.questionEl?.value.trim() || "Preview request";
-			const command = this.parseComposerCommand(raw);
 			const inspection = await this.plugin.inspectFinalPrompt(
 				command.question,
 				command.forceImage ? "AskMate Image" : "AskMate Answer",
-				this.getRequestDraftOptions(command.forceImage)
+				options
 			);
 			if (refreshId !== this.requestPreviewRefreshId || !this.requestPreviewEl) {
 				return;
@@ -580,6 +755,8 @@ export class AskMateView extends ItemView {
 			summary.classList.toggle("has-blocker", inspection.blockers.length > 0);
 		} catch (error) {
 			if (refreshId === this.requestPreviewRefreshId) {
+				// Let the next trigger retry rather than keep showing a transient error.
+				this.lastRequestPreviewKey = null;
 				summary.setText(this.plugin.getErrorMessage(error));
 				summary.addClass("has-blocker");
 			}
@@ -640,7 +817,7 @@ export class AskMateView extends ItemView {
 			button.setAttribute("aria-label", option.ariaLabel);
 			this.addIcon(button, option.icon, "askmate-segment-icon");
 			button.addEventListener("click", () => {
-				void this.selectOutputMode(option.mode);
+				this.runUiTask(this.selectOutputMode(option.mode));
 			});
 			this.outputButtons[option.mode] = button;
 		}
@@ -664,6 +841,8 @@ export class AskMateView extends ItemView {
 		this.refreshOutputToggle();
 		void this.refreshRequestPreview();
 		await this.plugin.saveSettings();
+		// Other open AskMate views would otherwise keep showing the previous mode.
+		this.plugin.refreshOpenAskMateViews();
 	}
 
 	private refreshOutputToggle(): void {
@@ -672,6 +851,7 @@ export class AskMateView extends ItemView {
 			button.classList.toggle("is-active", isActive);
 			button.setAttribute("aria-pressed", String(isActive));
 		}
+		this.refreshConsoleStatus();
 	}
 
 	private renderReasoningSelector(parent: HTMLElement): void {
@@ -693,7 +873,7 @@ export class AskMateView extends ItemView {
 		}
 
 		select.addEventListener("change", () => {
-			void this.selectReasoningEffort(select.value);
+			this.runUiTask(this.selectReasoningEffort(select.value));
 		});
 
 		this.reasoningControlEl = shell;
@@ -711,9 +891,11 @@ export class AskMateView extends ItemView {
 		await this.plugin.setReasoningEffort(value);
 		this.refreshReasoningSelector();
 		this.updateModelLabel();
+		this.plugin.refreshOpenAskMateViews();
 	}
 
 	private refreshReasoningSelector(): void {
+		this.refreshConsoleStatus();
 		if (!this.reasoningSelectEl) {
 			return;
 		}
@@ -806,6 +988,7 @@ export class AskMateView extends ItemView {
 			window.clearTimeout(timer);
 		}
 		this.pendingMarkdownTimerIds.clear();
+		this.releaseAllMarkdownComponents();
 		this.containerEl.empty();
 	}
 
@@ -847,19 +1030,46 @@ export class AskMateView extends ItemView {
 		if (!run) {
 			return;
 		}
+		if (notify && run.phase === "post-processing") {
+			// The reply has arrived and its note write may be under way; unlocking now would report a stop that
+			// did not happen and let another write to the same note start.
+			new Notice("AskMate is saving the reply. Wait for it to finish.");
+			return;
+		}
 		run.abortController.abort();
 		this.activeRun = null;
 		this.setLoading(false);
 		if (notify && !this.isClosed) {
-			this.addMessage("system", "AskMate stopped waiting for this request. The provider may still finish it in the background.");
+			const message = run.phase === "generating"
+				? "AskMate stopped waiting for this request. The provider may still finish it in the background."
+				: "AskMate stopped this request before sending it.";
+			this.addMessage("system", message);
 			this.statusEl?.setText("AskMate request stopped locally.");
-			new Notice("AskMate stopped waiting for this request.");
+			new Notice(message);
 		}
 	}
 
 	private setRunPhase(run: ActiveRun, phase: ActiveRun["phase"]): void {
 		if (this.activeRun?.id === run.id) {
 			run.phase = phase;
+			this.refreshStopButton();
+		}
+	}
+
+	private refreshStopButton(): void {
+		const canStop = Boolean(this.activeRun) && this.activeRun?.phase !== "post-processing";
+		this.stopButton.hidden = !this.activeRun;
+		this.stopButton.disabled = !canStop;
+		this.stopButton.setAttribute("aria-hidden", String(!this.activeRun));
+		const label = this.activeRun?.phase === "post-processing" ? "Saving reply" : "Stop request";
+		this.stopButton.setAttribute("aria-label", label);
+		this.stopButton.setAttribute("title", label);
+		if (this.consoleStopButton) {
+			this.consoleStopButton.hidden = !this.activeRun;
+			this.consoleStopButton.disabled = !canStop;
+			this.consoleStopButton.setText(this.activeRun?.phase === "post-processing" ? "saving" : "stop");
+			this.consoleStopButton.setAttribute("aria-label", `${label} (Esc)`);
+			this.consoleStopButton.setAttribute("title", `${label} (Esc)`);
 		}
 	}
 
@@ -873,7 +1083,20 @@ export class AskMateView extends ItemView {
 	}
 
 	private async submitQuestion(): Promise<void> {
+		if (this.isConsoleLayout()) {
+			// Commands such as /help and /context work while a request runs; actions that send a request check idleness.
+			await this.submitConsoleInput();
+			return;
+		}
 		if (!this.ensureIdleForNewRequest()) {
+			return;
+		}
+		// "/layout console" also works here, so the way back to the Console layout is the same everywhere.
+		const layoutCommand = this.questionEl.value.trim().match(/^\/layout\s+(\S+)$/i);
+		const requestedLayout = layoutCommand ? resolveLayoutName(layoutCommand[1]) : null;
+		if (requestedLayout) {
+			this.questionEl.value = "";
+			await this.switchLayout(requestedLayout);
 			return;
 		}
 
@@ -882,14 +1105,16 @@ export class AskMateView extends ItemView {
 			new Notice("Type a question first.");
 			return;
 		}
-		if (!(await this.plugin.isSelectedProviderConfigured())) {
-			await this.refreshReadiness();
-			new Notice("Configure the selected AskMate provider in settings before sending.");
+		// "/image ..." goes to OpenAI Images whatever chat provider is selected, so check the matching readiness.
+		const command = this.parseComposerCommand(rawQuestion);
+		const isReady = command.forceImage
+			? await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured())
+			: await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before sending.");
+		if (!isReady) {
 			this.questionEl.focus();
 			return;
 		}
 
-		const command = this.parseComposerCommand(rawQuestion);
 		this.questionEl.value = "";
 		await this.runRequest(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", this.getRequestDraftOptions(command.forceImage));
 	}
@@ -898,15 +1123,45 @@ export class AskMateView extends ItemView {
 		if (!this.ensureIdleForNewRequest()) {
 			return;
 		}
-		if (!(await this.plugin.isSelectedProviderConfigured())) {
-			await this.refreshReadiness();
-			new Notice("Configure the selected AskMate provider in settings before generating an image.");
+		// Image generation always uses OpenAI Images, whichever chat provider is selected.
+		if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured()))) {
 			return;
 		}
 
-		const question = this.questionEl.value.trim() || DEFAULT_IMAGE_PROMPT;
+		// Match Enter: "/image a red fox" sends "a red fox", as the request preview shows.
+		const rawQuestion = this.questionEl.value.trim();
+		const question = rawQuestion ? this.parseComposerCommand(rawQuestion).question : DEFAULT_IMAGE_PROMPT;
 		this.questionEl.value = "";
 		await this.runRequest(question, "AskMate Image", this.getRequestDraftOptions(true));
+	}
+
+	/**
+	 * Holds a claim while the provider check awaits, so a second submit or a workflow click in that gap gets the
+	 * usual "busy" notice instead of racing for the run and clearing the composer.
+	 */
+	private async isProviderReadyForSubmit(
+		notConfiguredMessage: string,
+		isConfigured: () => Promise<boolean> = () => this.plugin.isSelectedProviderConfigured()
+	): Promise<boolean> {
+		const claim = "submit";
+		this.activeActionKeys.add(claim);
+		try {
+			if (await isConfigured()) {
+				return true;
+			}
+		} finally {
+			this.activeActionKeys.delete(claim);
+		}
+
+		await this.refreshReadiness();
+		new Notice(notConfiguredMessage);
+		return false;
+	}
+
+	private runUiTask(task: Promise<void>): void {
+		void task.catch((error: unknown) => {
+			new Notice(this.plugin.getErrorMessage(error));
+		});
 	}
 
 	private parseComposerCommand(value: string): { question: string; forceImage: boolean } {
@@ -953,6 +1208,9 @@ export class AskMateView extends ItemView {
 			new Notice(IMAGE_WORKFLOW_MESSAGE);
 			return;
 		}
+		if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before running a workflow."))) {
+			return;
+		}
 
 		await this.runRequest(this.plugin.getWorkflowPrompt(workflow), workflow.name, { workflow });
 	}
@@ -961,7 +1219,8 @@ export class AskMateView extends ItemView {
 		question: string,
 		title: string,
 		options: RunRequestOptions = {},
-		builtRequest?: AskRequest
+		builtRequest?: AskRequest,
+		displayText?: string
 	): Promise<void> {
 		const intentKind = this.plugin.classifyRequestIntent(question, options);
 		const willGenerateImage = intentKind === "explicit_image" || intentKind === "auto_image" || this.plugin.getSelectedProviderModelRef().capability === "image";
@@ -976,8 +1235,10 @@ export class AskMateView extends ItemView {
 		this.shouldFollowMessages = true;
 		const requestTitle = title === "AskMate Answer" && willGenerateImage ? "AskMate Image" : title;
 		const isUserPrompt = requestTitle === "AskMate Answer" || requestTitle === "AskMate Image";
-		const displayedQuestion = isUserPrompt ? question : requestTitle;
-		this.addMessage("user", displayedQuestion, isUserPrompt ? question : undefined);
+		// Thread history keeps the clean question; the console shows (and Edit restores) the line as typed.
+		const historyText = isUserPrompt ? question : requestTitle;
+		const userTurn = this.addMessage("user", displayText ?? historyText, displayText ?? (isUserPrompt ? question : undefined), historyText);
+		let answered = false;
 		let assistantMessage: MessageElements | null = null;
 		let responseText = "";
 		let retrySnapshot: RetryRequestSnapshot = createDraftRetrySnapshot(question, requestTitle, {
@@ -1050,11 +1311,20 @@ export class AskMateView extends ItemView {
 			this.setRunPhase(run, "post-processing");
 
 			if (result.kind === "text") {
-				responseText = result.text.trim() || responseText.trim() || "OpenAI returned no text.";
+				const finalText = result.text.trim() || responseText.trim();
+				if (!finalText) {
+					// An empty reply must not be saved to history or written into the note as if it were an answer.
+					throw new Error(`${request.metadata.providerName} returned no text. Try again or choose another model.`);
+				}
+				responseText = finalText;
 				if (!this.isClosed) {
 					this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
+					if (result.incompleteReason) {
+						this.renderIncompleteWarning(activeAssistantMessage, result.incompleteReason);
+					}
 					this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model);
 					this.messages.push({ role: "assistant", text: responseText });
+					answered = true;
 				}
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 				if (!this.isRunActive(run)) {
@@ -1083,6 +1353,7 @@ export class AskMateView extends ItemView {
 				this.renderGeneratedImage(activeAssistantMessage.body, result);
 				this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
 				this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
+				answered = true;
 			}
 			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
 			if (!this.isRunActive(run)) {
@@ -1116,6 +1387,7 @@ export class AskMateView extends ItemView {
 			if (!assistantMessage) {
 				assistantMessage = this.createMessageEl("assistant", "", false);
 			}
+			this.cancelPendingMarkdown(assistantMessage.body);
 			assistantMessage.body.setText(message);
 			if (!isAbortError(error)) {
 				this.createMessageAction(assistantMessage.actions, "rotate-ccw", "Retry request", () => {
@@ -1126,11 +1398,58 @@ export class AskMateView extends ItemView {
 					}
 				}, { requiresIdle: true });
 			}
-			this.messages.push({ role: "assistant", text: message });
+			// A status role keeps provider errors out of the thread history sent with the next request.
+			this.messages.push({ role: "system", text: message });
 			new Notice(message);
 		} finally {
+			if (!answered) {
+				// An unanswered question would otherwise be resent as a dangling user turn.
+				this.messages = this.messages.filter((message) => message !== userTurn);
+				if (assistantMessage && run.abortController.signal.aborted && !this.isClosed) {
+					if (responseText.trim()) {
+						// Keep what arrived (a pending render still draws the latest text); it stays out of the thread.
+						this.renderMessageWarning(assistantMessage, "Stopped. This reply is partial and was not saved.");
+					} else {
+						this.cancelPendingMarkdown(assistantMessage.body);
+						assistantMessage.body.setText("Stopped.");
+					}
+				}
+			}
 			this.finishRun(run);
 		}
+	}
+
+	private cancelPendingMarkdown(body: HTMLElement): void {
+		const pending = this.markdownRenderTimers.get(body);
+		if (pending !== undefined) {
+			window.clearTimeout(pending);
+			this.pendingMarkdownTimerIds.delete(pending);
+			this.markdownRenderTimers.delete(body);
+		}
+		this.pendingMarkdown.delete(body);
+		// Makes any in-flight render stale so it cannot replace the text set afterwards.
+		body.dataset.askmateRenderId = "";
+		this.releaseMarkdownComponent(body);
+	}
+
+	private renderIncompleteWarning(message: MessageElements, reason: string): void {
+		const normalized = reason.toLowerCase();
+		const explanation = /max_tokens|max_output_tokens|length|token/.test(normalized)
+			? "the provider stopped at its output token limit"
+			: /refusal|content_filter|safety|blocked|recitation|prohibited/.test(normalized)
+				? "the provider refused or filtered part of the answer"
+				: `the provider reported "${reason}"`;
+		this.renderMessageWarning(message, `This reply may be incomplete: ${explanation}. Review it before applying it to a note.`);
+	}
+
+	private renderMessageWarning(message: MessageElements, text: string): void {
+		const warning = message.wrapper.createDiv({
+			cls: "askmate-budget-warning askmate-message-incomplete-warning",
+			text
+		});
+		warning.setAttribute("role", "note");
+		message.wrapper.insertBefore(warning, message.body);
+		message.wrapper.addClass("askmate-message-incomplete");
 	}
 
 	/** System chat line + Notice for vault mutations that already succeeded. */
@@ -1141,8 +1460,9 @@ export class AskMateView extends ItemView {
 		new Notice(noticeMessage);
 	}
 
-	private addMessage(role: ChatRole, text: string, editableText?: string): void {
-		this.messages.push({ role, text });
+	private addMessage(role: ChatRole, text: string, editableText?: string, historyText?: string): ChatMessage {
+		const chatMessage: ChatMessage = { role, text: historyText ?? text };
+		this.messages.push(chatMessage);
 		const message = this.createMessageEl(role, text, false);
 
 		if (editableText) {
@@ -1150,6 +1470,7 @@ export class AskMateView extends ItemView {
 				this.useTextInComposer(editableText);
 			});
 		}
+		return chatMessage;
 	}
 
 	private createMessageEl(role: ChatRole, text: string, renderMarkdown: boolean): MessageElements {
@@ -1202,13 +1523,15 @@ export class AskMateView extends ItemView {
 
 	private renderContextImagePreviews(request: AskRequest): void {
 		const sourcePath = request.context.file?.path ?? "";
-		const references = this.extractImageReferences(request.context.content);
+		const references = extractImageEmbedTargets(request.context.content);
 
 		if (references.length === 0) {
 			return;
 		}
 
-		const previews: ChatImagePreview[] = [];
+		// Remote URLs are never loaded: fetching them would leak the user's IP and any tokens in the URL.
+		const remoteCount = references.filter((reference) => classifyImagePreviewSource(reference) === "remote").length;
+		const available: ChatImagePreview[] = [];
 		const seen = new Set<string>();
 
 		for (const reference of references) {
@@ -1219,13 +1542,10 @@ export class AskMateView extends ItemView {
 			}
 
 			seen.add(preview.src);
-			previews.push(preview);
-
-			if (previews.length >= MAX_CONTEXT_IMAGE_PREVIEWS) {
-				break;
-			}
+			available.push(preview);
 		}
 
+		const previews = available.slice(0, MAX_CONTEXT_IMAGE_PREVIEWS);
 		if (previews.length === 0) {
 			return;
 		}
@@ -1254,10 +1574,16 @@ export class AskMateView extends ItemView {
 			figure.createEl("figcaption", { text: preview.label });
 		}
 
-		if (references.length > previews.length) {
+		if (available.length > previews.length) {
 			shell.createDiv({
 				cls: "askmate-context-image-more",
-				text: `Showing ${previews.length} of ${references.length} referenced images.`
+				text: `Showing ${previews.length} of ${available.length} referenced images.`
+			});
+		}
+		if (remoteCount > 0) {
+			shell.createDiv({
+				cls: "askmate-context-image-more",
+				text: `${remoteCount} remote image${remoteCount === 1 ? " is" : "s are"} not loaded in previews.`
 			});
 		}
 
@@ -1265,37 +1591,21 @@ export class AskMateView extends ItemView {
 		this.maybeScrollMessagesToBottom();
 	}
 
-	private extractImageReferences(markdown: string): string[] {
-		const references: string[] = [];
-		const wikiImageLinkPattern = /!?\[\[([^\]]+)\]\]/g;
-		const markdownImageLinkPattern = /!?\[[^\]]*\]\(([^)]+)\)/g;
-
-		for (const match of markdown.matchAll(wikiImageLinkPattern)) {
-			references.push(match[1]);
-		}
-
-		for (const match of markdown.matchAll(markdownImageLinkPattern)) {
-			references.push(match[1]);
-		}
-
-		return references;
-	}
-
 	private resolveImagePreview(reference: string, sourcePath: string): ChatImagePreview | null {
-		const cleanReference = this.cleanImageReference(reference);
+		const kind = classifyImagePreviewSource(reference);
 
-		if (!cleanReference) {
+		if (kind === "remote") {
 			return null;
 		}
 
-		if (/^data:image\//i.test(cleanReference) || /^https?:\/\//i.test(cleanReference)) {
+		if (kind === "data") {
 			return {
-				label: cleanReference,
-				src: cleanReference
+				label: describeDataImage(reference),
+				src: reference
 			};
 		}
 
-		const file = this.app.metadataCache.getFirstLinkpathDest(cleanReference, sourcePath);
+		const file = this.app.metadataCache.getFirstLinkpathDest(reference, sourcePath);
 
 		if (!file || !IMAGE_FILE_EXTENSIONS.has(file.extension.toLowerCase())) {
 			return null;
@@ -1305,19 +1615,6 @@ export class AskMateView extends ItemView {
 			label: file.path,
 			src: this.app.vault.getResourcePath(file)
 		};
-	}
-
-	private cleanImageReference(reference: string): string {
-		let cleanReference = reference.trim();
-		cleanReference = cleanReference.replace(/^<(.+)>$/, "$1");
-		cleanReference = cleanReference.replace(/^['"](.+)['"]$/, "$1");
-		cleanReference = cleanReference.split("|")[0]?.split("#")[0]?.trim() ?? "";
-
-		try {
-			return decodeURI(cleanReference);
-		} catch {
-			return cleanReference;
-		}
 	}
 
 	private renderAssistantMessageActions(
@@ -1389,6 +1686,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private renderGeneratedImage(body: HTMLElement, result: ImageAskMateResult): void {
+		this.releaseMarkdownComponent(body);
 		body.empty();
 		body.removeClass("askmate-message-body-markdown");
 		body.addClass("askmate-message-body-image");
@@ -1455,6 +1753,7 @@ export class AskMateView extends ItemView {
 
 		const button = parent.createEl("button", { cls: "askmate-message-action" });
 		button.type = "button";
+		button.dataset.consoleLabel = CONSOLE_ACTION_LABELS[label] ?? label.toLowerCase().split(" ")[0];
 		button.setAttribute("aria-label", label);
 		button.setAttribute("title", label);
 		if (options.requiresIdle) {
@@ -1507,17 +1806,24 @@ export class AskMateView extends ItemView {
 	}
 
 	private renderMarkdownSoon(body: HTMLElement, markdown: string, sourcePath: string): void {
-		const pending = this.markdownRenderTimers.get(body);
-
-		if (pending !== undefined) {
-			window.clearTimeout(pending);
-			this.pendingMarkdownTimerIds.delete(pending);
+		// Throttle rather than debounce, so a steady stream of deltas still renders every 120 ms.
+		this.pendingMarkdown.set(body, { markdown, sourcePath });
+		if (this.markdownRenderTimers.has(body)) {
+			return;
 		}
 
 		const timer = window.setTimeout(() => {
 			this.markdownRenderTimers.delete(body);
 			this.pendingMarkdownTimerIds.delete(timer);
-			this.renderMarkdownNow(body, markdown, sourcePath);
+			if ((this.markdownRendersInFlight.get(body) ?? 0) > 0) {
+				// The in-flight render flushes the latest pending text when it settles.
+				return;
+			}
+			const latest = this.pendingMarkdown.get(body);
+			this.pendingMarkdown.delete(body);
+			if (latest) {
+				this.renderMarkdownNow(body, latest.markdown, latest.sourcePath);
+			}
 		}, 120);
 		this.markdownRenderTimers.set(body, timer);
 		this.pendingMarkdownTimerIds.add(timer);
@@ -1541,14 +1847,17 @@ export class AskMateView extends ItemView {
 			this.pendingMarkdownTimerIds.delete(pending);
 			this.markdownRenderTimers.delete(body);
 		}
+		this.pendingMarkdown.delete(body);
 
 		const renderId = String(++this.markdownRenderId);
 		body.dataset.askmateRenderId = renderId;
+		body.dataset.askmateSourcePath = sourcePath;
 		const isSimpleMarkdown = this.isSimpleMarkdownReply(markdown);
 		body.classList.toggle("is-simple-markdown", isSimpleMarkdown);
 		body.closest(".askmate-message")?.classList.toggle("askmate-message-simple-markdown", isSimpleMarkdown);
 
 		if (!markdown.trim()) {
+			this.releaseMarkdownComponent(body);
 			body.empty();
 			body.removeClass("is-simple-markdown");
 			body.closest(".askmate-message")?.removeClass("askmate-message-simple-markdown");
@@ -1557,22 +1866,63 @@ export class AskMateView extends ItemView {
 
 		const host = activeDocument.createElement("div");
 		host.addClass("askmate-rendered-markdown");
+		const component = this.addChild(new Component());
+		const isCurrent = (): boolean => !this.isClosed && body.isConnected && body.dataset.askmateRenderId === renderId;
+		this.markdownRendersInFlight.set(body, (this.markdownRendersInFlight.get(body) ?? 0) + 1);
 
-		void MarkdownRenderer.render(this.app, markdown, host, sourcePath, this)
+		// Model output can carry prompt-injected remote images or plugin code blocks, so render a defused copy.
+		void MarkdownRenderer.render(this.app, sanitizeModelMarkdown(markdown), host, sourcePath, component)
 			.then(() => {
-				if (this.isClosed || !body.isConnected || body.dataset.askmateRenderId !== renderId) {
+				if (!isCurrent()) {
+					this.removeChild(component);
 					return;
 				}
 
+				this.releaseMarkdownComponent(body);
+				this.markdownComponents.set(body, component);
 				body.empty();
 				body.appendChild(host);
 				this.maybeScrollMessagesToBottom();
 			})
 			.catch(() => {
-				if (!this.isClosed && body.isConnected && body.dataset.askmateRenderId === renderId) {
+				this.removeChild(component);
+				if (isCurrent()) {
+					this.releaseMarkdownComponent(body);
 					body.setText(markdown);
 				}
+			})
+			.finally(() => {
+				this.settleMarkdownRender(body);
 			});
+	}
+
+	private settleMarkdownRender(body: HTMLElement): void {
+		const remaining = (this.markdownRendersInFlight.get(body) ?? 1) - 1;
+		if (remaining > 0) {
+			this.markdownRendersInFlight.set(body, remaining);
+			return;
+		}
+		this.markdownRendersInFlight.delete(body);
+
+		const latest = this.pendingMarkdown.get(body);
+		if (latest && !this.markdownRenderTimers.has(body) && !this.isClosed && body.isConnected) {
+			this.renderMarkdownNow(body, latest.markdown, latest.sourcePath);
+		}
+	}
+
+	private releaseMarkdownComponent(body: HTMLElement): void {
+		const component = this.markdownComponents.get(body);
+		if (component) {
+			this.markdownComponents.delete(body);
+			this.removeChild(component);
+		}
+	}
+
+	private releaseAllMarkdownComponents(): void {
+		for (const component of this.markdownComponents.values()) {
+			this.removeChild(component);
+		}
+		this.markdownComponents.clear();
 	}
 
 	private createAvatarEl(parent: HTMLElement, role: ChatRole): HTMLElement {
@@ -1630,19 +1980,42 @@ export class AskMateView extends ItemView {
 		const label = isReady ? "AskMate · Ready" : "AskMate · Setup needed";
 		this.readinessEl.setText(label);
 		this.readinessEl.classList.toggle("is-api-key-set", isReady);
+		this.readinessEl.classList.toggle("is-ready", isReady);
 		this.readinessEl.classList.toggle("is-not-ready", !isReady);
 		this.readinessEl.setAttribute("role", "status");
 		this.readinessEl.setAttribute("aria-label", label);
 		this.readinessEl.setAttribute("title", isReady ? "AskMate is ready" : "Configure the selected provider in AskMate settings");
 	}
 
-	private syncRequestPreviewFromSettings(): void {
+	private getRequestDefaultsKey(): string {
+		const settings = this.plugin.settings;
+		return JSON.stringify([
+			settings.requestPrivacyDefaults,
+			settings.contextBudgetMode,
+			settings.additionalContextPaths,
+			settings.folderContextEnabled,
+			settings.folderContextPath,
+			settings.folderContextMaxFiles
+		]);
+	}
+
+	private resetRequestOptionsFromSettings(): void {
+		this.requestDefaultsKey = this.getRequestDefaultsKey();
 		this.privacyOptions = normalizeRequestPrivacyOptions(this.plugin.settings.requestPrivacyDefaults);
 		this.contextBudgetMode = normalizeContextBudgetMode(this.plugin.settings.contextBudgetMode);
 		this.additionalContextPaths = [...this.plugin.settings.additionalContextPaths];
 		this.folderContextEnabled = this.plugin.settings.folderContextEnabled;
 		this.folderContextPath = this.plugin.settings.folderContextPath;
 		this.folderContextMaxFiles = this.plugin.settings.folderContextMaxFiles;
+	}
+
+	private syncRequestPreviewFromSettings(): void {
+		// Unrelated saves (a workflow favourite, a UI toggle) must not silently undo the user's per-session choices,
+		// such as turning note context off, while the checkbox still shows the old state.
+		const defaultsChanged = this.getRequestDefaultsKey() !== this.requestDefaultsKey;
+		if (defaultsChanged) {
+			this.resetRequestOptionsFromSettings();
+		}
 		if (!this.composerEl) {
 			return;
 		}
@@ -1650,7 +2023,9 @@ export class AskMateView extends ItemView {
 		if (!this.plugin.settings.showRequestPreview) {
 			existing?.remove();
 			this.requestPreviewEl = null;
-		} else if (!existing) {
+		} else if (!existing || defaultsChanged) {
+			existing?.remove();
+			this.requestPreviewEl = null;
 			this.renderRequestPreview(this.composerEl);
 		}
 	}
@@ -1669,11 +2044,11 @@ export class AskMateView extends ItemView {
 			: "Text provider and model for the next request");
 	}
 
-	private async openPromptInspector(): Promise<void> {
+	private async openPromptInspector(questionOverride?: string, optionsOverride?: RunRequestOptions): Promise<void> {
 		try {
-			const raw = this.questionEl.value.trim() || "Preview request";
+			const raw = questionOverride?.trim() || this.questionEl.value.trim() || "Preview request";
 			const command = this.parseComposerCommand(raw);
-			const inspection = await this.plugin.inspectFinalPrompt(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", {
+			const inspection = await this.plugin.inspectFinalPrompt(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", optionsOverride ?? {
 				forceImage: command.forceImage,
 				privacy: this.privacyOptions,
 				contextBudgetMode: this.contextBudgetMode,
@@ -1753,9 +2128,7 @@ export class AskMateView extends ItemView {
 				control.disabled = isLoading;
 			});
 		this.sendButton.disabled = isLoading;
-		this.stopButton.hidden = !isLoading;
-		this.stopButton.disabled = !isLoading;
-		this.stopButton.setAttribute("aria-hidden", String(!isLoading));
+		this.refreshStopButton();
 		this.setButtonLabel(this.sendButton, isLoading ? "Sending" : "Send");
 		const sendShortcutLabel = this.getSendShortcutLabel();
 		this.sendButton.setAttribute("aria-label", isLoading ? "Sending" : `Send (${sendShortcutLabel})`);
@@ -1763,6 +2136,7 @@ export class AskMateView extends ItemView {
 		this.refreshReasoningSelector();
 		this.refreshWorkflowToggle();
 		this.updateModelLabel();
+		this.refreshConsoleStatus();
 	}
 
 	private setButtonLabel(button: HTMLButtonElement, label: string): void {
@@ -1774,6 +2148,400 @@ export class AskMateView extends ItemView {
 		}
 
 		button.setText(label);
+	}
+
+	private isConsoleLayout(): boolean {
+		return normalizeComposerLayout(this.plugin.settings.composerLayout) === "console";
+	}
+
+	private refreshConsoleCommands(): void {
+		this.consoleCommands = buildConsoleCommands(this.plugin.getAllWorkflows());
+	}
+
+	private renderConsoleStatusBar(composer: HTMLElement): void {
+		this.consoleStatusEl = composer.createDiv({ cls: "askmate-console-status" });
+		this.consoleStatusEl.setAttribute("role", "group");
+		this.consoleStatusEl.setAttribute("aria-label", "AskMate status");
+		// The mode button is created once and updated in place: re-creating it on every refresh (refreshes run on
+		// pointerdown and focusin) would replace it before a click could land.
+		this.consoleModeButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-segment is-mode" });
+		this.consoleModeButton.type = "button";
+		this.consoleModeButton.addEventListener("click", () => {
+			const order: OutputMode[] = ["chat", "note", "apply"];
+			const current = order.indexOf(normalizeOutputMode(this.plugin.settings.outputMode));
+			this.runUiTask(this.selectOutputMode(order[(current + 1) % order.length]));
+		});
+		this.consoleStatusSegmentsEl = this.consoleStatusEl.createDiv({ cls: "askmate-console-status-segments" });
+		this.consoleStopButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-stop", text: "stop" });
+		this.consoleStopButton.type = "button";
+		this.consoleStopButton.hidden = true;
+		this.consoleStopButton.addEventListener("click", () => {
+			this.stopActiveRun();
+		});
+	}
+
+	private refreshConsoleStatus(): void {
+		if (!this.consoleStatusSegmentsEl) {
+			return;
+		}
+		const ref = this.plugin.getSelectedProviderModelRef();
+		const segments = formatConsoleStatus({
+			mode: normalizeOutputMode(this.plugin.settings.outputMode),
+			providerName: ref.providerName,
+			model: ref.model,
+			effort: this.plugin.supportsSelectedReasoningEffort() ? this.plugin.getSelectedReasoningEffort() : null,
+			dayUsedTokens: this.plugin.getTodayTokenUsage(),
+			dayBudgetTokens: this.plugin.settings.usageDailyTokenBudget
+		});
+		this.consoleStatusSegmentsEl.empty();
+		for (const segment of segments) {
+			if (segment.kind === "mode") {
+				if (this.consoleModeButton) {
+					this.consoleModeButton.setText(segment.text);
+					this.consoleModeButton.setAttribute("title", segment.title);
+					this.consoleModeButton.setAttribute("aria-label", segment.title);
+					this.consoleModeButton.disabled = Boolean(this.activeRun);
+				}
+				continue;
+			}
+			const span = this.consoleStatusSegmentsEl.createSpan({ cls: `askmate-console-segment is-${segment.kind}`, text: segment.text });
+			span.setAttribute("title", segment.title);
+		}
+	}
+
+	/** Returns true when the console handled the key (completion, history or stop). */
+	private handleConsoleKeydown(event: KeyboardEvent): boolean {
+		if (event.isComposing) {
+			return false;
+		}
+		const completion = this.consoleCompletion;
+		if (completion && completion.items.length > 0) {
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				event.preventDefault();
+				const step = event.key === "ArrowDown" ? 1 : -1;
+				completion.index = (completion.index + step + completion.items.length) % completion.items.length;
+				completion.navigated = true;
+				this.renderConsoleCompletions();
+				return true;
+			}
+			if (event.key === "Tab") {
+				event.preventDefault();
+				this.acceptConsoleCompletion(completion.index);
+				return true;
+			}
+			// Enter accepts the highlighted suggestion, unless the typed token is already a complete command or mention
+			// and the user did not move through the list; then Enter sends as usual (Ctrl/Cmd+Enter always sends).
+			if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+				const typed = this.questionEl.value.slice(completion.from, completion.to);
+				const highlighted = completion.items[completion.index];
+				const alreadyComplete = completion.items.some((item) => item.insertText.trim() === typed);
+				if (highlighted && (completion.navigated || !alreadyComplete)) {
+					event.preventDefault();
+					this.acceptConsoleCompletion(completion.index);
+					return true;
+				}
+			}
+			if (event.key === "Escape") {
+				event.preventDefault();
+				this.closeConsoleCompletions();
+				return true;
+			}
+		}
+		if (event.key === "Escape" && this.activeRun) {
+			event.preventDefault();
+			this.stopActiveRun();
+			return true;
+		}
+		if ((event.key === "ArrowUp" || event.key === "ArrowDown") && this.canBrowseConsoleHistory()) {
+			event.preventDefault();
+			this.browseConsoleHistory(event.key === "ArrowUp" ? -1 : 1);
+			return true;
+		}
+		return false;
+	}
+
+	private canBrowseConsoleHistory(): boolean {
+		const value = this.questionEl.value;
+		// Only an empty prompt or one showing a recalled entry browses history, so arrows still move the caret while editing.
+		return this.consoleHistory.length > 0
+			&& (value === "" || (this.consoleHistoryIndex >= 0 && value === this.consoleHistory[this.consoleHistoryIndex]));
+	}
+
+	private browseConsoleHistory(direction: -1 | 1): void {
+		const length = this.consoleHistory.length;
+		const current = this.consoleHistoryIndex === -1 ? length : this.consoleHistoryIndex;
+		const next = Math.max(0, Math.min(length, current + direction));
+		this.consoleHistoryIndex = next === length ? -1 : next;
+		this.questionEl.value = next === length ? "" : this.consoleHistory[next];
+		const end = this.questionEl.value.length;
+		this.questionEl.setSelectionRange(end, end);
+	}
+
+	private rememberConsoleInput(raw: string): void {
+		if (this.consoleHistory[this.consoleHistory.length - 1] !== raw) {
+			this.consoleHistory = [...this.consoleHistory, raw].slice(-50);
+		}
+		this.consoleHistoryIndex = -1;
+	}
+
+	private updateConsoleCompletions(): void {
+		if (!this.isConsoleLayout() || !this.questionEl) {
+			this.closeConsoleCompletions();
+			return;
+		}
+		const value = this.questionEl.value;
+		const result = getConsoleCompletions(value, this.questionEl.selectionStart ?? value.length, this.consoleCommands);
+		if (result.items.length === 0) {
+			this.closeConsoleCompletions();
+			return;
+		}
+		this.consoleCompletion = { ...result, index: 0, navigated: false };
+		this.renderConsoleCompletions();
+	}
+
+	private renderConsoleCompletions(): void {
+		const list = this.consoleCompletionsEl;
+		const completion = this.consoleCompletion;
+		if (!list || !completion) {
+			return;
+		}
+		list.empty();
+		completion.items.forEach((item, index) => {
+			const option = list.createDiv({ cls: "askmate-console-completion", attr: { id: `${this.consoleIdPrefix}-option-${index}`, role: "option" } });
+			option.setAttribute("aria-selected", String(index === completion.index));
+			option.classList.toggle("is-selected", index === completion.index);
+			option.createSpan({ cls: "askmate-console-completion-label", text: item.label });
+			option.createSpan({ cls: "askmate-console-completion-detail", text: item.detail });
+			// mousedown keeps focus in the prompt, so the blur handler does not close the list before the click lands.
+			option.addEventListener("mousedown", (event) => {
+				event.preventDefault();
+				this.acceptConsoleCompletion(index);
+			});
+		});
+		list.hidden = false;
+		this.questionEl.setAttribute("aria-expanded", "true");
+		this.questionEl.setAttribute("aria-activedescendant", `${this.consoleIdPrefix}-option-${completion.index}`);
+	}
+
+	private acceptConsoleCompletion(index: number): void {
+		const completion = this.consoleCompletion;
+		const item = completion?.items[index];
+		if (!completion || !item) {
+			return;
+		}
+		const value = this.questionEl.value;
+		this.questionEl.value = `${value.slice(0, completion.from)}${item.insertText}${value.slice(completion.to)}`;
+		const caret = completion.from + item.insertText.length;
+		this.questionEl.setSelectionRange(caret, caret);
+		this.closeConsoleCompletions();
+		this.updateConsoleCompletions();
+		this.questionEl.focus();
+	}
+
+	private closeConsoleCompletions(): void {
+		this.consoleCompletion = null;
+		if (this.consoleCompletionsEl) {
+			this.consoleCompletionsEl.hidden = true;
+			this.consoleCompletionsEl.empty();
+		}
+		this.questionEl?.removeAttribute("aria-activedescendant");
+		if (this.isConsoleLayout()) {
+			this.questionEl?.setAttribute("aria-expanded", "false");
+		}
+	}
+
+	/** Echo of a typed command. Kept out of `messages`, so commands never become thread history. */
+	private echoConsoleCommand(raw: string): void {
+		const echo = this.createMessageEl("system", raw, false);
+		echo.wrapper.addClass("askmate-console-echo");
+	}
+
+	private printConsoleOutput(text: string, tone: "info" | "error" = "info"): void {
+		const output = this.createMessageEl("system", text, false);
+		output.wrapper.addClass("askmate-console-output");
+		output.wrapper.classList.toggle("is-error", tone === "error");
+	}
+
+	/** Maps @mentions onto the existing request options; throws when a mention cannot be honoured. */
+	private applyConsoleMentions(options: RunRequestOptions, mentions: ConsoleMentions): RunRequestOptions {
+		const baseFolder = options.folderContext ?? this.getFolderContextOptions();
+		const folderPath = mentions.folder === null ? baseFolder.path : mentions.folder || this.plugin.settings.folderContextPath || baseFolder.path;
+		if (mentions.folder !== null && !folderPath.trim()) {
+			throw new Error("@folder needs a folder. Use @folder:Path/To/Folder, or set a folder in AskMate settings.");
+		}
+		if (mentions.folder !== null && !(this.app.vault.getAbstractFileByPath(folderPath.trim().replace(/^\/+|\/+$/g, "")) instanceof TFolder)) {
+			throw new Error(`@folder: there is no folder called "${folderPath}" in this vault.`);
+		}
+		const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
+		const missing = mentions.notes.filter((note) => !this.app.metadataCache.getFirstLinkpathDest(note, sourcePath));
+		if (missing.length > 0) {
+			throw new Error(`No note found for ${missing.map((note) => `@[[${note}]]`).join(", ")}. Check the name and try again.`);
+		}
+		return {
+			...options,
+			additionalContextPaths: normalizeContextPathList([...(options.additionalContextPaths ?? this.additionalContextPaths), ...mentions.notes]),
+			folderContext: mentions.folder === null ? baseFolder : { ...baseFolder, enabled: true, path: folderPath },
+			contextScope: mentions.scope
+		};
+	}
+
+	private async submitConsoleInput(): Promise<void> {
+		const raw = this.questionEl.value.trim();
+		if (!raw) {
+			new Notice("Type a question, or /help for commands.");
+			return;
+		}
+		this.closeConsoleCompletions();
+		const action = parseConsoleInput(raw, this.consoleCommands);
+		const sendsRequest = action.kind === "ask" || action.kind === "image" || action.kind === "workflow";
+		if (sendsRequest && !this.ensureIdleForNewRequest()) {
+			return;
+		}
+		this.rememberConsoleInput(raw);
+
+		try {
+			await this.runConsoleAction(action, raw);
+		} catch (error) {
+			// Each action clears the prompt only after its risky work succeeded, so the typed text is still there to fix.
+			this.echoConsoleCommand(raw);
+			this.printConsoleOutput(this.plugin.getErrorMessage(error), "error");
+		}
+	}
+
+	/** Clears the prompt and echoes the command once the action is known to succeed. */
+	private commitConsoleCommand(raw: string, echo = true): void {
+		this.questionEl.value = "";
+		if (echo) {
+			this.echoConsoleCommand(raw);
+		}
+	}
+
+	private async switchLayout(layout: ComposerLayout): Promise<void> {
+		this.plugin.settings.composerLayout = layout;
+		await this.plugin.saveSettings();
+		this.plugin.refreshOpenAskMateViews();
+		new Notice(layout === "console"
+			? "AskMate layout: console. Type /layout compact to switch back."
+			: `AskMate layout: ${layout}. Type /layout console to come back.`);
+	}
+
+	private async runConsoleAction(action: ConsoleAction, raw: string): Promise<void> {
+		switch (action.kind) {
+			case "error":
+				this.echoConsoleCommand(raw);
+				this.printConsoleOutput(action.message, "error");
+				return;
+			case "help":
+				this.commitConsoleCommand(raw);
+				this.printConsoleOutput(formatConsoleHelp(this.consoleCommands));
+				return;
+			case "clear":
+				if (this.activeRun) {
+					throw new Error("Stop the current request before clearing the conversation.");
+				}
+				this.commitConsoleCommand(raw, false);
+				this.clearChat();
+				return;
+			case "mode":
+				if (this.activeRun) {
+					throw new Error("Wait for the current request to finish, or press Esc to stop it, before changing the output mode.");
+				}
+				await this.selectOutputMode(action.mode);
+				this.commitConsoleCommand(raw);
+				this.printConsoleOutput(`Output mode: ${formatOutputMode(action.mode)}.`);
+				return;
+			case "effort": {
+				if (action.effort) {
+					if (this.activeRun) {
+						throw new Error("Wait for the current request to finish, or press Esc to stop it, before changing reasoning effort.");
+					}
+					await this.selectReasoningEffort(action.effort);
+				}
+				this.commitConsoleCommand(raw);
+				const supported = this.plugin.supportsSelectedReasoningEffort();
+				this.printConsoleOutput(`Reasoning effort: ${this.plugin.getSelectedReasoningEffort()}.${supported ? "" : " The selected model does not use reasoning effort."}`);
+				return;
+			}
+			case "layout":
+				await this.switchLayout(action.layout);
+				this.commitConsoleCommand(raw, false);
+				return;
+			case "context": {
+				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
+				const lines = await this.describeConsoleContext(options);
+				this.commitConsoleCommand(raw);
+				this.printConsoleOutput(lines.text, lines.blocked ? "error" : "info");
+				return;
+			}
+			case "inspect": {
+				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
+				this.commitConsoleCommand(raw);
+				await this.openPromptInspector(action.question || "Preview request", options);
+				return;
+			}
+			case "history":
+				this.commitConsoleCommand(raw);
+				await this.showNoteHistory();
+				return;
+			case "ask": {
+				const draft = this.getRequestDraftOptions(false);
+				const withMode = action.outputMode ? { ...draft, outputMode: action.outputMode } : draft;
+				// A "//" line is sent as typed: "//image x" asks about "/image x" and never generates an image.
+				const options = this.applyConsoleMentions(action.literal ? { ...withMode, intentKind: "freeform_text" } : withMode, action.mentions);
+				if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before sending."))) {
+					return;
+				}
+				this.commitConsoleCommand(raw, false);
+				await this.runRequest(action.question, "AskMate Answer", options, undefined, raw);
+				return;
+			}
+			case "image": {
+				const options = this.applyConsoleMentions(this.getRequestDraftOptions(true), action.mentions);
+				if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured()))) {
+					return;
+				}
+				this.commitConsoleCommand(raw, false);
+				await this.runRequest(action.prompt, "AskMate Image", options, undefined, raw);
+				return;
+			}
+			case "workflow": {
+				const workflow = this.plugin.getAllWorkflows().find((candidate) => candidate.id === action.workflowId);
+				if (!workflow) {
+					throw new Error("That workflow no longer exists. Type /help to see the current list.");
+				}
+				if (this.plugin.getSelectedProviderModelRef().capability !== "text") {
+					throw new Error(IMAGE_WORKFLOW_MESSAGE);
+				}
+				// The runner rebuilds workflow prompts from the template, so extra text travels as its own option.
+				const options = this.applyConsoleMentions({ workflow, workflowExtra: action.extra || undefined }, action.mentions);
+				if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before running a workflow."))) {
+					return;
+				}
+				this.commitConsoleCommand(raw, false);
+				await this.runRequest(this.plugin.getWorkflowPrompt(workflow), workflow.name, options, undefined, raw);
+				return;
+			}
+		}
+	}
+
+	private async describeConsoleContext(options: RunRequestOptions): Promise<{ text: string; blocked: boolean }> {
+		const inspection = await this.plugin.inspectFinalPrompt("Preview request", "AskMate Answer", options);
+		const request = inspection.request;
+		const metadata = request.metadata;
+		const lines = [
+			`source    ${request.context.source}: ${request.context.file?.path ?? "unsaved note"}`,
+			`provider  ${inspection.providerName}: ${inspection.model}`,
+			`output    ${formatOutputMode(metadata.outputMode)}`,
+			`tokens    about ${inspection.estimatedInputTokens.toLocaleString()} input`,
+			`context   ${metadata.privacy.includeNoteContext
+				? `${metadata.promptContextCharacters.toLocaleString()}${metadata.contextTruncated ? ` of ${metadata.contextCharacters.toLocaleString()}` : ""} characters, ${metadata.contextBudgetMode} budget`
+				: "note text withheld by privacy settings"}`,
+			`attached  ${metadata.contextAttachmentSources.length > 0 ? metadata.contextAttachmentSources.join(", ") : "nothing else"}`,
+			`privacy   note text ${metadata.privacy.includeNoteContext ? "on" : "off"}, image links ${metadata.privacy.includeImageReferences ? "on" : "off"}`,
+			...inspection.blockers.map((blocker) => `blocked   ${blocker}`),
+			...inspection.warnings.map((warning) => `warning   ${warning}`)
+		];
+		return { text: lines.join("\n"), blocked: inspection.blockers.length > 0 };
 	}
 
 	private maybeScrollMessagesToBottom(): void {

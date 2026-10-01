@@ -82,7 +82,7 @@ describe("appendMarkdownBlockToContent", () => {
 		expect(appendMarkdownBlockToContent("Note body\r\n", "AI")).toBe("Note body\r\n\r\nAI\r\n");
 	});
 
-	test("recomputing append against concurrent edits preserves both changes", () => {
+	test("appending to the latest note text keeps edits made after the preview", () => {
 		const original = "Note body\n";
 		const concurrent = "Note body\n\nUser edit\n";
 		const block = "AI reply";

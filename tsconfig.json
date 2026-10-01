@@ -6,15 +6,15 @@
 		"module": "ESNext",
 		"target": "ES2018",
 		"allowJs": true,
-		"noImplicitAny": true,
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
 		"moduleResolution": "node",
 		"importHelpers": true,
 		"isolatedModules": true,
-		"strictNullChecks": true,
-		"strictFunctionTypes": true,
 		"lib": [
 			"DOM",
-			"ES2018"
+			"ES2022"
 		],
 		"types": [
 			"node"
@@ -25,7 +25,6 @@
 		"**/*.ts"
 	],
 	"exclude": [
-		"demo/remotion",
 		"node_modules",
 		"tests"
 	]

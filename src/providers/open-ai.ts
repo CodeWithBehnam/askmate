@@ -4,6 +4,9 @@ import {
 	DEFAULT_PROVIDER_SETTINGS,
 	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	getProviderLabel,
+	getSupportedReasoningEffort,
+	isGptImage2Model,
+	isOpenAITextModel,
 	OpenAIImageGenerationBody,
 	OpenAIResponseBody,
 	ReasoningEffort,
@@ -74,15 +77,31 @@ export async function requestOpenAIResponses(
 		abortSignal,
 		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 		timeoutMessage: "OpenAI generation timed out after 2 minutes.",
-		body: JSON.stringify({
-			model,
-			instructions,
-			input,
-			reasoning: {
-				effort: reasoningEffort
-			}
-		})
+		body: JSON.stringify(buildOpenAIResponsesBody({ model, instructions, input, reasoningEffort }))
 	});
+}
+
+export function buildOpenAIResponsesBody({
+	model,
+	instructions,
+	input,
+	reasoningEffort
+}: {
+	model: string;
+	instructions: string;
+	input: string;
+	reasoningEffort: ReasoningEffort;
+}): Record<string, unknown> {
+	const effort = getSupportedReasoningEffort(model, reasoningEffort);
+
+	return {
+		model,
+		instructions,
+		input,
+		// Note content should not be retained server-side; AskMate never chains responses by ID.
+		store: false,
+		...(effort ? { reasoning: { effort } } : {})
+	};
 }
 
 export async function requestOpenAIImageGeneration(
@@ -138,6 +157,20 @@ export function extractOpenAIText(body: OpenAIResponseBody | null): string {
 	return parts.join("\n").trim();
 }
 
+/** Responses API refusals arrive as `refusal` content parts with no `output_text`. */
+export function extractOpenAIRefusal(body: OpenAIResponseBody | null): string {
+	for (const item of body?.output ?? []) {
+		for (const part of item.content ?? []) {
+			const refusal = "refusal" in part ? part.refusal : undefined;
+			if (part.type === "refusal" && typeof refusal === "string" && refusal.trim()) {
+				return refusal.trim();
+			}
+		}
+	}
+
+	return "";
+}
+
 export async function fetchOpenAIModels(runtime: ProviderRuntime): Promise<string[]> {
 	const providerId = "openai";
 	const providerName = getProviderLabel(providerId);
@@ -148,7 +181,7 @@ export async function fetchOpenAIModels(runtime: ProviderRuntime): Promise<strin
 	}
 
 	const baseUrl = getOpenAIBaseUrl(runtime);
-	return await fetchModelList(runtime, {
+	const models = await fetchModelList(runtime, {
 		baseUrl,
 		providerName,
 		headers: {
@@ -156,4 +189,6 @@ export async function fetchOpenAIModels(runtime: ProviderRuntime): Promise<strin
 		},
 		timeoutMessage: `${providerName} model refresh timed out after 10 seconds.`
 	});
+	// gpt-image-2 stays because the model picker is also how image mode is chosen.
+	return models.filter((model) => isOpenAITextModel(model) || isGptImage2Model(model));
 }

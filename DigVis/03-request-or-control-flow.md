@@ -12,6 +12,8 @@ sequenceDiagram
   participant User as User
   participant View as AskMateView
   participant Plugin as AskMatePlugin
+  participant Context as ContextService
+  participant Runner as RequestRunner
   participant Provider as Provider adapter
   participant Obsidian as Obsidian APIs
 
@@ -19,16 +21,20 @@ sequenceDiagram
   View->>View: submitQuestion and parseComposerCommand
   View->>View: beginRun with AbortController
   View->>Plugin: buildRequest(question, title, options)
-  Plugin->>Obsidian: getNoteContext and build attachments
-  Plugin->>Plugin: buildPromptContextContent and evidence sources
+  Plugin->>Runner: buildRequest
+  Runner->>Context: getNoteContext and buildContextAttachments
+  Context->>Obsidian: editor, open view or vault.cachedRead
+  Runner->>Runner: buildPromptContextContent (primary note first) and evidence sources
   View->>Plugin: runOpenAIRequest(request)
-  Plugin->>Provider: streamOpenAI or completeProviderTextRequest
+  Plugin->>Runner: runOpenAIRequest
+  Runner->>Provider: requestOpenAIResponses or completeProviderTextRequest
   Provider->>Obsidian: requestUrl through ProviderRuntime
   Obsidian-->>Provider: provider response
-  Provider-->>Plugin: text and usage
-  Plugin->>Plugin: recordOperationUsage
-  Plugin-->>View: text result
-  View-->>User: Render answer and actions
+  Provider-->>Runner: text, usage and incompleteReason
+  Runner->>Plugin: recordOperationUsage (UsageService)
+  Runner-->>View: text result, with incompleteReason when cut short
+  View->>View: sanitise reply with renderSafety
+  View-->>User: Render answer, incomplete warning and actions
 ```
 
 ## Diagram: flow styling legend
@@ -72,10 +78,15 @@ flowchart TD
   TextOutput -- "Apply" --> Apply["applyResponseToContext"]
   TextOutput -- "Review" --> Queue["queueReviewItemFromRequest"]
   Queue --> Settings["Apply or dismiss in settings tab"]
+  Apply --> Incomplete{"Incomplete output and replace scope?"}
+  Incomplete -- "Yes" --> Refuse["Refuse replace, append still allowed"]
 
   Batch["Batch workflow in settings"] --> FileLoop["List Markdown files in folder"]
   FileLoop --> Text
   Batch --> Queue
+  Batch --> Kind{"Workflow outputKind"}
+  Kind -- "note-edit" --> QueueFull["Queue as full-note"]
+  Kind -- "new-content" --> QueueAppend["Queue as append"]
 
   classDef core fill:#E0F2FE,stroke:#0284C7,color:#0F172A
   classDef decision fill:#FEF3C7,stroke:#D97706,color:#0F172A
@@ -84,23 +95,24 @@ flowchart TD
   classDef user fill:#CCFBF1,stroke:#0F766E,color:#0F172A
 
   class Start,Plan,Image,Text,Apply,FileLoop core
-  class Intent,ImageOutput,TextOutput decision
-  class ImageNote,InsertImage,ResultNote,Queue,Settings store
+  class Intent,ImageOutput,TextOutput,Incomplete,Kind decision
+  class ImageNote,InsertImage,ResultNote,Queue,Settings,QueueFull,QueueAppend store
+  class Refuse risk
   class Batch,ChatImage,ChatText user
 ```
 
 ## Notes
 
-`AskMateView` gates concurrent requests with `activeRun` and an `AbortController`. `AskMatePlugin.buildRequest()` classifies intent, captures note context, applies privacy and context budget settings, builds context attachments, expands workflow prompts, and creates evidence sources for text requests. `runOpenAIRequest()` then chooses text or image behavior. Text requests go to OpenAI Responses for the OpenAI provider or to the provider dispatcher for other providers. Image requests use OpenAI image generation after optional prompt planning.
+`AskMateView` gates concurrent requests with `activeRun` and an `AbortController`. `AskMatePlugin.buildRequest()` delegates to `RequestRunner.buildRequest()`, which classifies intent (`classifyRequestIntent`, using `shouldGenerateImage` from `src/shared/imageIntent.ts` and the `autoImageIntentEnabled` setting), captures note context through `ContextService`, applies privacy and context budget settings, builds context attachments, expands workflow prompts, and creates evidence sources for text requests. `RequestRunner.runOpenAIRequest()` then chooses text or image behaviour. Text requests go to the OpenAI Responses API (`store: false`) for the OpenAI provider or to `completeProviderTextRequest()` for other providers. Every path reports an `incompleteReason` when the reply was cut short or filtered, and the runner copies it to `request.metadata.outputIncompleteReason`. Image requests always use OpenAI image generation after optional prompt planning, whichever chat provider is selected.
 
-Apply and review queue flows are safety-sensitive because they modify vault content. `applyResponseToContext()` chooses selected text, append, heading, or full-note behavior and routes through confirmations or diff previews depending on settings.
+Apply and review queue flows are safety-sensitive because they modify vault content. `applyResponseToContext()` chooses selected text, append, heading, or full-note behaviour and routes through confirmations or diff previews depending on settings. Replace scopes are refused when `outputIncompleteReason` is set and need confirmation when `primaryContextTruncated` is set. Review queue apply and dismiss update items by id on the live `settings.reviewQueue`.
 
 ## Traceability
 
 | Field | Details |
 | --- | --- |
-| Source files inspected | `src/ui/sidebar/AskMateView.ts`, `src/plugin/AskMatePlugin.ts`, `src/providers/index.ts`, `src/providers/open-ai.ts`, `src/shared/types.ts`, `src/ui/settings/AskMateSettingTab.ts` |
-| Key symbols | `submitQuestion`, `runRequest`, `beginRun`, `buildRequest`, `runOpenAIRequest`, `completeProviderTextRequest`, `prepareImagePrompt`, `generateOpenAIImage`, `applyResponseToContext`, `queueReviewItemFromRequest`, `runBatchWorkflow` |
-| Inferences | The batch path is simplified as a loop over Markdown files. The implementation records per-file success and failure details. |
+| Source files inspected | `src/ui/sidebar/AskMateView.ts`, `src/plugin/AskMatePlugin.ts`, `src/requests/RequestRunner.ts`, `src/requests/requestBuilders.ts`, `src/context/ContextService.ts`, `src/shared/imageIntent.ts`, `src/providers/index.ts`, `src/providers/open-ai.ts`, `src/shared/types.ts`, `src/ui/settings/AskMateSettingTab.ts` |
+| Key symbols | `submitQuestion`, `runRequest`, `beginRun`, `buildRequest`, `classifyRequestIntent`, `shouldGenerateImage`, `runOpenAIRequest`, `requestOpenAIResponses`, `completeProviderTextRequest`, `prepareImagePrompt`, `generateOpenAIImage`, `applyResponseToContext`, `queueReviewItemFromRequest`, `runBatchWorkflow` |
+| Inferences | The batch path is simplified as a loop over Markdown files. The implementation records per-file success and failure details, and counts an incomplete result as a failure. |
 | Confidence | confirmed |
 | Open questions | Manual cancellation behavior should be tested against slow real providers. |

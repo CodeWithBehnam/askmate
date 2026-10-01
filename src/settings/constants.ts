@@ -8,16 +8,15 @@ export const IMAGE_FILE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg
 export const MAX_CONTEXT_IMAGE_PREVIEWS = 4;
 export const DEFAULT_IMAGE_PROMPT = "Create a useful image inspired by the current note.";
 export const IMAGE_WORKFLOW_MESSAGE = "Quick workflows create text Markdown. Use the Image button or /image command for gpt-image-2 image generation.";
-export const ASKMATE_PROMPT_VERSION = "askmate-2026-05-11-workflow-hardening-v1";
+export const ASKMATE_PROMPT_VERSION = "askmate-2026-10-01-prompt-standard-v2";
 export const LEGACY_PROMPT_VERSION = "legacy-before-workflow-hardening";
-export const OPENAI_MODEL_REQUEST_TIMEOUT_MS = 10000;
 export const DEFAULT_MODEL_OPTIONS = [
 	"gpt-5.5",
 	GPT_IMAGE_2_MODEL_ID
 ];
 export const DEFAULT_OPENROUTER_MODEL_OPTIONS = [
 	"openai/gpt-5.5",
-	"anthropic/claude-3.5-sonnet",
+	"anthropic/claude-sonnet-5.5",
 	"google/gemini-2.5-pro"
 ];
 export const DEFAULT_AZURE_OPENAI_MODEL_OPTIONS: string[] = [];
@@ -25,9 +24,12 @@ export const DEFAULT_AZURE_AI_MODEL_OPTIONS = [
 	"mistral-large"
 ];
 export const DEFAULT_ANTHROPIC_MODEL_OPTIONS = [
-	"claude-3-5-sonnet-latest",
-	"claude-3-5-haiku-latest"
+	"claude-sonnet-5-5",
+	"claude-opus-5-5",
+	"claude-haiku-4-5-20251001"
 ];
+// Claude 3 and 3.5 models are retired and return errors; saved settings that still name them are migrated to the default.
+export const RETIRED_ANTHROPIC_MODEL_PATTERN = /^claude-3(?:-5)?-(?:sonnet|haiku|opus)(?:-|$)/;
 export const DEFAULT_GEMINI_MODEL_OPTIONS = [
 	"gemini-2.5-pro",
 	"gemini-2.5-flash"
@@ -75,7 +77,7 @@ export const DEFAULT_PROVIDER_SETTINGS: TextProviderSettings = {
 	},
 	anthropic: {
 		apiKeySecretName: "",
-		model: "claude-3-5-sonnet-latest",
+		model: "claude-sonnet-5-5",
 		modelOptions: DEFAULT_ANTHROPIC_MODEL_OPTIONS,
 		baseUrl: "https://api.anthropic.com/v1"
 	},
@@ -201,3 +203,8 @@ export const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
 export const RECENT_TOKEN_BAR_RECORD_LIMIT = 14;
 export const TOKEN_RUN_CHART_RECORD_LIMIT = 30;
 export const RECENT_TOKEN_TABLE_RECORD_LIMIT = 8;
+export const MAX_CUSTOM_WORKFLOWS = 30;
+// Per-record token counts above this are corrupt data; capping keeps sums finite so JSON never saves them as null.
+export const MAX_TOKEN_COUNT = 1_000_000_000_000;
+// Daily usage totals kept for budget checks (a little over a year).
+export const MAX_USAGE_TOTAL_DAYS = 400;

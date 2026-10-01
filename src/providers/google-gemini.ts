@@ -9,7 +9,7 @@ import {
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
-import { extractProviderError, formatProviderHttpError } from "./common";
+import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
 /** Default max output tokens for generateContent (API default can be too low for note workflows). */
@@ -58,15 +58,45 @@ export async function completeGeminiText(
 	const body = response.body;
 
 	if (!response.ok) {
-		throw new Error(formatProviderHttpError("Google Gemini", response.status, extractProviderError(body, "")));
+		throw new Error(formatProviderHttpError("Google Gemini", response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
+	const blockReason = getGeminiPromptBlockReason(body);
+	if (blockReason) {
+		throw new Error(`Google Gemini blocked this request (${blockReason}). Rephrase the question or reduce the note context.`);
+	}
+
+	const text = extractGeminiText(body);
+	const incompleteReason = getGeminiIncompleteReason(body);
+	assertProviderTextPresent("Google Gemini", text, incompleteReason);
+
 	return {
-		text: extractGeminiText(body),
+		text,
 		model: providerRef.model,
 		endpoint: "gemini_generate_content",
-		usage: normalizeGeminiUsage(body?.usageMetadata)
+		usage: normalizeGeminiUsage(body?.usageMetadata),
+		incompleteReason
 	};
+}
+
+export function getGeminiPromptBlockReason(body: Record<string, unknown> | null): string | null {
+	const feedback = body?.promptFeedback;
+	const blockReason = feedback && typeof feedback === "object"
+		? (feedback as { blockReason?: unknown }).blockReason
+		: null;
+
+	return typeof blockReason === "string" && blockReason && blockReason !== "BLOCK_REASON_UNSPECIFIED" ? blockReason : null;
+}
+
+/** Only STOP is a natural end; MAX_TOKENS, SAFETY, RECITATION and the rest leave the answer partial or empty. */
+export function getGeminiIncompleteReason(body: Record<string, unknown> | null): string | null {
+	const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
+	const first: unknown = candidates[0];
+	const finishReason = first && typeof first === "object"
+		? (first as { finishReason?: unknown }).finishReason
+		: null;
+
+	return typeof finishReason === "string" && finishReason && finishReason !== "STOP" ? finishReason : null;
 }
 
 export async function fetchGeminiModels(runtime: ProviderRuntime): Promise<string[]> {
@@ -77,28 +107,31 @@ export async function fetchGeminiModels(runtime: ProviderRuntime): Promise<strin
 	}
 
 	const baseUrl = getGeminiBaseUrl(runtime);
-	const response = await runtime.requestJson<GeminiModelListBody>(
-		`${baseUrl}/models`,
-		{
-			headers: {
-				"x-goog-api-key": apiKey
-			},
-			timeoutMs: 10000,
-			timeoutMessage: "Google Gemini model refresh timed out after 10 seconds."
-		}
+	return await collectModelPages<GeminiModelListPage | null>(
+		async (cursor) => {
+			const pageToken = cursor ? `&pageToken=${encodeURIComponent(cursor)}` : "";
+			const response = await runtime.requestJson<GeminiModelListPage>(`${baseUrl}/models?pageSize=1000${pageToken}`, {
+				headers: {
+					"x-goog-api-key": apiKey
+				},
+				timeoutMs: 10000,
+				timeoutMessage: "Google Gemini model refresh timed out after 10 seconds."
+			});
+
+			if (!response.ok) {
+				throw new Error(formatProviderHttpError("Google Gemini", response.status, describeProviderErrorBody(response, [apiKey])));
+			}
+
+			return response.body;
+		},
+		(page) => (page?.models ?? [])
+			.filter((model) => !Array.isArray(model.supportedGenerationMethods) || model.supportedGenerationMethods.includes("generateContent"))
+			.map((model) => (model.name ?? "").replace(/^models\//, "")),
+		(page) => page?.nextPageToken || null
 	);
-	const body = response.body;
-
-	if (!response.ok) {
-		throw new Error(formatProviderHttpError("Google Gemini", response.status, body?.error?.message ?? ""));
-	}
-
-	return (body?.models ?? [])
-		.filter((model) => !Array.isArray(model.supportedGenerationMethods) || model.supportedGenerationMethods.includes("generateContent"))
-		.map((model) => (model.name ?? "").replace(/^models\//, ""))
-		.filter(Boolean)
-		.sort((a, b) => a.localeCompare(b));
 }
+
+type GeminiModelListPage = GeminiModelListBody & { nextPageToken?: string };
 
 function getGeminiBaseUrl(runtime: ProviderRuntime): string {
 	return validateProviderBaseUrl(
@@ -146,14 +179,25 @@ function normalizeGeminiUsage(value: unknown): OpenAITokenUsage | null {
 		return null;
 	}
 
-	const usage = value as { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown };
+	const usage = value as {
+		promptTokenCount?: unknown;
+		candidatesTokenCount?: unknown;
+		thoughtsTokenCount?: unknown;
+		totalTokenCount?: unknown;
+	};
 	const inputTokens = getNonNegativeInteger(usage.promptTokenCount);
-	const outputTokens = getNonNegativeInteger(usage.candidatesTokenCount);
+	const candidateTokens = getNonNegativeInteger(usage.candidatesTokenCount);
+	// Thinking tokens are billed as output but reported apart from candidate tokens.
+	const thoughtTokens = getNonNegativeInteger(usage.thoughtsTokenCount);
+	const outputTokens = candidateTokens === null && thoughtTokens === null
+		? null
+		: (candidateTokens ?? 0) + (thoughtTokens ?? 0);
 	const totalTokens = getNonNegativeInteger(usage.totalTokenCount);
 
 	return {
 		input_tokens: inputTokens ?? undefined,
 		output_tokens: outputTokens ?? undefined,
-		total_tokens: totalTokens ?? undefined
+		total_tokens: totalTokens ?? undefined,
+		...(thoughtTokens !== null ? { output_tokens_details: { reasoning_tokens: thoughtTokens } } : {})
 	};
 }
