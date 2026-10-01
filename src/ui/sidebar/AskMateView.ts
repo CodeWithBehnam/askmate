@@ -1,5 +1,6 @@
 import { Component, ItemView, Keymap, MarkdownRenderer, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
+import { getStatusBarOverlap } from "./statusBarOverlap";
 import {
 	ActiveRun,
 	ASKMATE_VIEW_TYPE,
@@ -91,6 +92,7 @@ export class AskMateView extends ItemView {
 	private shouldFollowMessages = true;
 	private readonly autoScrollThresholdPx = 48;
 	private rootEl: HTMLElement | null = null;
+	private statusBarObserver: ResizeObserver | null = null;
 	private outputButtons: Partial<Record<OutputMode, HTMLButtonElement>> = {};
 	private workflowButtons: HTMLButtonElement[] = [];
 	private reasoningSelectEl: HTMLSelectElement | null = null;
@@ -225,6 +227,34 @@ export class AskMateView extends ItemView {
 				refreshContext();
 			})
 		);
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.updateStatusBarClearance()));
+		this.watchStatusBar();
+	}
+
+	/**
+	 * The status bar floats over the bottom-right of the window, so the composer would sit underneath it when AskMate is
+	 * docked there. Its size changes with the plugins and notes it reports on, so it is measured rather than assumed.
+	 */
+	private watchStatusBar(): void {
+		this.statusBarObserver?.disconnect();
+		this.statusBarObserver = null;
+		// Popout windows have no status bar, so there is nothing to watch there.
+		const statusBarEl = this.rootEl?.doc.querySelector(".status-bar");
+		if (statusBarEl) {
+			this.statusBarObserver = new ResizeObserver(() => this.updateStatusBarClearance());
+			this.statusBarObserver.observe(statusBarEl);
+		}
+		this.updateStatusBarClearance();
+	}
+
+	private updateStatusBarClearance(): void {
+		const rootEl = this.rootEl;
+		if (!rootEl || this.isClosed) {
+			return;
+		}
+		const statusBarEl = rootEl.doc.querySelector(".status-bar");
+		const overlap = getStatusBarOverlap(rootEl.getBoundingClientRect(), statusBarEl?.getBoundingClientRect() ?? null);
+		rootEl.setCssProps({ "--askmate-status-bar-clearance": `${overlap}px` });
 	}
 
 	/** MarkdownRenderer emits wikilinks as `a.internal-link` but leaves navigation to the host view. */
@@ -252,6 +282,7 @@ export class AskMateView extends ItemView {
 	onResize(): void {
 		// A collapsed sidebar skips preview builds; catch up when it is shown again.
 		this.scheduleRequestPreviewRefresh();
+		this.updateStatusBarClearance();
 	}
 
 	private renderWorkflowGrid(container: HTMLElement): void {
@@ -976,6 +1007,8 @@ export class AskMateView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.isClosed = true;
+		this.statusBarObserver?.disconnect();
+		this.statusBarObserver = null;
 		this.stopActiveRun(false);
 		this.activeRun = null;
 		this.activeActionKeys.clear();

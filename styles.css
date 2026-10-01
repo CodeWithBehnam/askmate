@@ -17,6 +17,8 @@
 	min-width: 0;
 	overflow: hidden;
 	padding: 8px;
+	/* Set by the view to the height of Obsidian's floating status bar where it covers the sidebar. */
+	padding-bottom: calc(8px + var(--askmate-status-bar-clearance, 0px));
 }
 
 .askmate-model-chip {
@@ -1815,6 +1817,7 @@
 	font-family: var(--font-monospace);
 	gap: 0;
 	padding: 0;
+	padding-bottom: var(--askmate-status-bar-clearance, 0px);
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-workflow-section,
