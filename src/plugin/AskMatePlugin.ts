@@ -85,7 +85,7 @@ import {
 	testProviderConnection as testProviderConnectionWithProvider
 } from "../providers";
 import type { ProviderRequestOptions, ProviderRuntime } from "../providers";
-import { UsageService, getLocalDayKey } from "../usage";
+import { UsageService, getLocalDayKey, sumUsageTotalsForMonth } from "../usage";
 import { HistoryService } from "../history";
 import { ContextService, cleanFolderPath } from "../context";
 import { RequestRunner, buildFallbackImagePrompt } from "../requests";
@@ -1947,17 +1947,21 @@ export class AskMatePlugin extends Plugin {
 		this.refreshOpenAskMateViews();
 	}
 
-	async moveWorkflowDisplayPreference(id: string, direction: "up" | "down"): Promise<void> {
-		const workflows = this.sortWorkflowsForSidebar(this.getAllWorkflows());
-		const ids = workflows.map((workflow) => workflow.id);
-		const index = ids.indexOf(id);
-		const targetIndex = direction === "up" ? index - 1 : index + 1;
-
-		if (index < 0 || targetIndex < 0 || targetIndex >= ids.length) {
+	/** Indices are positions in the sidebar order shown in settings, which lists favorites first. */
+	async reorderWorkflowDisplay(fromIndex: number, toIndex: number): Promise<void> {
+		const ids = this.sortWorkflowsForSidebar(this.getAllWorkflows()).map((workflow) => workflow.id);
+		const inRange = (index: number): boolean => Number.isInteger(index) && index >= 0 && index < ids.length;
+		if (fromIndex === toIndex || !inRange(fromIndex) || !inRange(toIndex)) {
+			return;
+		}
+		// Favorites always sort first, so a move across that boundary would be undone; ignoring it keeps keyboard focus on the same workflow.
+		const isFavorite = (index: number): boolean => Boolean(this.getWorkflowDisplayPreference(ids[index] ?? "")?.favorite);
+		if (isFavorite(fromIndex) !== isFavorite(toIndex)) {
 			return;
 		}
 
-		[ids[index], ids[targetIndex]] = [ids[targetIndex], ids[index]];
+		const [moved] = ids.splice(fromIndex, 1);
+		ids.splice(toIndex, 0, moved);
 		const existing = new Map(this.settings.workflowDisplayPreferences.map((preference) => [preference.id, preference]));
 		this.settings.workflowDisplayPreferences = ids.map((workflowId, order): WorkflowDisplayPreference => {
 			const preference = existing.get(workflowId);
@@ -1995,6 +1999,10 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	async addCustomWorkflow(): Promise<void> {
+		// Saving normalises the list down to the cap, so a workflow past it would vanish without a word.
+		if (this.settings.customWorkflows.length >= MAX_CUSTOM_WORKFLOWS) {
+			throw new Error(`AskMate already has the maximum of ${MAX_CUSTOM_WORKFLOWS} custom workflows. Delete one before adding another.`);
+		}
 		const now = new Date().toISOString();
 		this.settings.customWorkflows = [
 			...this.settings.customWorkflows,
@@ -2127,6 +2135,11 @@ export class AskMatePlugin extends Plugin {
 	/** Tokens counted towards today's budget (local calendar day). */
 	getTodayTokenUsage(): number {
 		return this.usageService.getUsageTotalsByDay()[getLocalDayKey(new Date())] ?? 0;
+	}
+
+	/** Tokens counted towards this month's budget (local calendar month). */
+	getMonthTokenUsage(): number {
+		return sumUsageTotalsForMonth(this.usageService.getUsageTotalsByDay(), getLocalDayKey(new Date()).slice(0, 7));
 	}
 
 	async resetTokenUsageStats(): Promise<void> {

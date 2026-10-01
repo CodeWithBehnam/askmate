@@ -1099,15 +1099,6 @@
 	justify-content: space-between;
 }
 
-.askmate-usage-copy h4,
-.askmate-chart-card h4,
-.askmate-usage-table-card h4 {
-	font-size: var(--font-ui-medium);
-	font-weight: 750;
-	letter-spacing: -0.01em;
-	margin: 0;
-}
-
 .askmate-usage-copy p,
 .askmate-chart-card p {
 	color: var(--text-muted);
@@ -1300,6 +1291,79 @@
 	color: var(--text-normal);
 }
 
+.askmate-budget-card {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	padding: 12px;
+}
+
+.askmate-budget-meters {
+	display: grid;
+	gap: 14px;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	margin-top: 8px;
+}
+
+.askmate-budget-meter {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.askmate-budget-meter-head {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 10px;
+	justify-content: space-between;
+}
+
+.askmate-budget-meter-name {
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	font-weight: 700;
+}
+
+.askmate-budget-meter-text {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+
+.askmate-budget-track {
+	background: var(--background-modifier-border);
+	border-radius: 999px;
+	height: 8px;
+	overflow: hidden;
+}
+
+.askmate-budget-fill {
+	background: var(--interactive-accent);
+	height: 100%;
+	width: var(--askmate-budget-fill, 0%);
+}
+
+.askmate-budget-meter.is-near .askmate-budget-fill {
+	background: var(--text-warning);
+}
+
+.askmate-budget-meter.is-over .askmate-budget-fill {
+	background: var(--text-error);
+}
+
+.askmate-budget-meter.is-near .askmate-budget-meter-text {
+	color: var(--text-warning);
+}
+
+.askmate-budget-meter.is-over .askmate-budget-meter-text {
+	color: var(--text-error);
+}
+
+.askmate-budget-note {
+	margin: 12px 0 0;
+}
+
 @keyframes askmate-pulse {
 	0%, 100% {
 		transform: scale(1);
@@ -1441,45 +1505,76 @@
 	max-width: 92px;
 }
 
-.askmate-workflow-display-list {
-	display: flex;
+.askmate-settings-feedback {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	margin-top: 4px;
+}
+
+/* Kept in the accessibility tree while empty, so its first message is announced; it only gives up its spacing. */
+.askmate-settings-feedback:empty {
+	margin-top: 0;
+}
+
+.askmate-settings-feedback.is-error {
+	color: var(--text-error);
+}
+
+.askmate-settings-feedback.is-success {
+	color: var(--text-success);
+}
+
+.askmate-settings-feedback.is-info {
+	color: var(--text-muted);
+}
+
+.askmate-settings-setup {
+	border-inline-start: 3px solid var(--text-warning);
+	padding-inline-start: 12px;
+}
+
+.askmate-settings-setup-list {
+	margin: 4px 0 0;
+	padding-inline-start: 18px;
+}
+
+.askmate-settings-note-row {
+	border: none;
+	padding-block: 4px;
+}
+
+.askmate-settings-note-row .askmate-settings-note {
+	margin: 0;
+}
+
+.askmate-settings-import .setting-item-control {
+	align-items: flex-end;
 	flex-direction: column;
 	gap: 8px;
-	margin: 8px 0 16px;
 }
 
-.askmate-workflow-display-card {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-m);
-	padding: 10px;
+.askmate-workflow-favorite.is-active {
+	color: var(--text-accent);
 }
 
-.askmate-workflow-display-title {
-	color: var(--text-normal);
-	font-weight: 700;
-	margin-bottom: 4px;
+.askmate-workflow-favorite.is-active svg {
+	fill: currentColor;
 }
 
-.askmate-custom-workflow-list {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	margin: 8px 0 16px;
+.askmate-workflow-row-hidden .setting-item-name {
+	color: var(--text-muted);
 }
 
-.askmate-custom-workflow-card {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-m);
-	padding: 12px;
+.askmate-workflow-icon-preview {
+	align-items: center;
+	color: var(--text-muted);
+	display: inline-flex;
+	justify-content: center;
+	min-width: 20px;
 }
 
-.askmate-custom-workflow-card h4 {
-	margin: 0 0 8px;
-}
-
-.askmate-custom-workflow-card textarea {
+.askmate-settings-prompt-input {
 	min-height: 160px;
 	width: 100%;
 }
@@ -1659,7 +1754,7 @@
 
 .askmate-batch-progress-fill {
 	height: 100%;
-	width: 0;
+	width: var(--askmate-batch-fill, 0%);
 	background: var(--interactive-accent);
 	transition: width 180ms ease;
 }
@@ -2090,5 +2185,23 @@
 	.askmate-chart-line,
 	.askmate-chart-average {
 		stroke: CanvasText;
+	}
+
+	/* Forced colours drop background colours, which would leave an empty bar. */
+	.askmate-budget-track,
+	.askmate-batch-progress-bar {
+		border: 1px solid CanvasText;
+	}
+
+	.askmate-batch-progress-fill {
+		background: Highlight;
+		forced-color-adjust: none;
+	}
+
+	.askmate-budget-fill,
+	.askmate-budget-meter.is-near .askmate-budget-fill,
+	.askmate-budget-meter.is-over .askmate-budget-fill {
+		background: Highlight;
+		forced-color-adjust: none;
 	}
 }

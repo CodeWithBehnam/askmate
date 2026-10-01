@@ -1,4 +1,24 @@
-import { ButtonComponent, debounce, Notice, PluginSettingTab, SecretComponent, Setting, SettingPage, type App, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionPage, type TextComponent, type ToggleComponent } from "obsidian";
+import {
+	ButtonComponent,
+	debounce,
+	Notice,
+	PluginSettingTab,
+	SecretComponent,
+	Setting,
+	SettingGroup,
+	SettingPage,
+	setIcon,
+	type App,
+	type DropdownComponent,
+	type ExtraButtonComponent,
+	type SettingDefinition,
+	type SettingDefinitionBase,
+	type SettingDefinitionItem,
+	type SettingDefinitionPage,
+	type TextAreaComponent,
+	type TextComponent,
+	type ToggleComponent
+} from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import {
 	CONTEXT_BUDGET_OPTIONS,
@@ -10,51 +30,57 @@ import {
 	DEFAULT_RESULT_NOTE_TEMPLATE,
 	DEFAULT_SETTINGS,
 	DEFAULT_TRANSLATION_TARGET_LANGUAGE,
-	formatApiEndpoint,
-	formatDuration,
-	formatOperationKind,
-	formatOperationStatus,
-	formatOutputMode,
-	formatTokenCount,
 	formatUsageTimestamp,
 	getProviderLabel,
 	MAX_CONTEXT_PATH_LENGTH,
 	MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH,
-	normalizeApplyApprovalMode,
-	normalizeApplyScope,
 	normalizeBatchWorkflowOutputMode,
-	normalizeBudgetEnforcementMode,
-	normalizeComposerLayout,
-	normalizeContextBudgetMode,
 	normalizeContextPathList,
-	normalizeFrontmatterApplyPolicy,
-	normalizeImagePromptPlanningProviderId,
 	normalizeOptionalString,
 	normalizeProviderModelOptions,
-	normalizeSendShortcut,
 	normalizeTemplateString,
 	normalizeTextProviderId,
 	normalizeTranslationTargetLanguage,
 	normalizeWorkflowAccent,
-	OutputMode,
 	REASONING_EFFORT_OPTIONS,
-	RECENT_TOKEN_BAR_RECORD_LIMIT,
-	RECENT_TOKEN_TABLE_RECORD_LIMIT,
 	TEXT_PROVIDER_IDS,
-	TOKEN_RUN_CHART_RECORD_LIMIT,
-	TokenUsageRecord,
-	TokenUsageSummary,
 	truncateLabel,
 	validateAzureOpenAIBaseUrl,
 	validateProviderBaseUrl,
 	WORKFLOW_ACCENTS,
+	type BatchWorkflowOutputMode,
 	type CustomWorkflow,
+	type Workflow,
 	type WorkflowOutputKind
 } from "../../shared/core";
 import { AskMateTextViewerModal, askMateConfirm } from "../modals/modals";
-import { formatIntegerRange, resolveBaseUrlInput, resolveFolderPathInput, resolveIntegerInput, type IntegerBounds } from "./settingsInputs";
+import { attachFolderSuggest, attachMarkdownFileSuggest, isPathSuggestOpen } from "./pathSuggest";
+import {
+	formatIntegerRange,
+	readSettingControl,
+	resolveBaseUrlInput,
+	resolveFolderPathInput,
+	resolveIntegerInput,
+	uniqueLabels,
+	writeSettingControl,
+	type IntegerBounds,
+	type SettingControlKey
+} from "./settingsInputs";
+import {
+	getUsageGuardrailStatus,
+	pluralise,
+	summarizeContextSources,
+	summarizeOutputApply,
+	summarizeProviderSetup,
+	summarizeRequestDefaults,
+	summarizeUsageGuardrails,
+	summarizeWorkflows
+} from "./settingsSummaries";
+import { renderUsageStatistics } from "./usageStatistics";
 
 type PageRenderer = (containerEl: HTMLElement, refresh: () => void) => void;
+type FeedbackKind = "error" | "success" | "info";
+type DefinitionExtras = Pick<SettingDefinitionBase, "aliases" | "visible">;
 
 interface IntegerInputOptions {
 	label: string;
@@ -69,6 +95,18 @@ interface FolderPathInputOptions {
 	setValue: (value: string) => void;
 }
 
+interface TemplateFieldOptions {
+	defaultValue: string;
+	multiline: boolean;
+	getValue: () => string;
+	setValue: (value: string) => void;
+}
+
+interface ImperativePageOptions {
+	displayValue?: () => string;
+	onHide?: () => void;
+}
+
 interface ActiveBatchState {
 	controller: AbortController;
 	message: string;
@@ -77,6 +115,7 @@ interface ActiveBatchState {
 
 interface BatchRunnerElements {
 	progress: HTMLElement;
+	bar: HTMLElement;
 	fill: HTMLElement;
 	runButton: ButtonComponent;
 	cancelButton: ButtonComponent;
@@ -85,6 +124,16 @@ interface BatchRunnerElements {
 type CustomWorkflowTextField = "name" | "shortName" | "description" | "icon" | "prompt" | "resultNoteTemplate";
 
 const TEXT_SAVE_DELAY_MS = 600;
+
+const BATCH_OUTPUT_LABELS: Record<BatchWorkflowOutputMode, string> = {
+	note: "Create result notes",
+	"review-queue": "Queue proposed note changes"
+};
+
+const WORKFLOW_OUTPUT_KIND_LABELS: Record<WorkflowOutputKind, string> = {
+	"note-edit": "Revised note",
+	"new-content": "New content"
+};
 
 // These mirror the bounds normalizeAskMateSettings applies on save, so the field shows the value that is kept.
 const THREADED_CHAT_MAX_TURNS_BOUNDS: IntegerBounds = { min: 1, max: 12 };
@@ -129,6 +178,8 @@ export class AskMateSettingTab extends PluginSettingTab {
 	private batchElements: BatchRunnerElements | null = null;
 	// The latest runner page to draw, so a batch that ends after its page was left and reopened refreshes the one on screen.
 	private batchRefresh: (() => void) | null = null;
+	// Shown on the runner after a batch ends, so the result outlives the notice and is still there when the page reopens.
+	private lastBatchSummary: string | null = null;
 	// Fields that save on blur or Enter and have unsaved edits. Leaving a page or closing settings commits them from here,
 	// because removing a focused field does not reliably fire blur.
 	private readonly pendingFieldCommits = new Map<HTMLElement, () => void>();
@@ -162,30 +213,102 @@ export class AskMateSettingTab extends PluginSettingTab {
 		}
 	}
 
-	// The visible container is not what receives keyboard focus; the checkbox inside it is, so that element carries the name.
-	private labelToggle(toggle: ToggleComponent, label: string): void {
-		const focusTarget = toggle.toggleEl.querySelector("input") ?? toggle.toggleEl;
-		focusTarget.setAttribute("aria-label", label);
+	/**
+	 * Obsidian focuses the toggle's container label, not the hidden checkbox inside it, and gives it no role or state,
+	 * so the container carries the name, the switch role and aria-checked. The value is set before the handler is attached
+	 * because ToggleComponent.setValue fires onChange whenever the value changes.
+	 */
+	private setupToggle(toggle: ToggleComponent, label: string, value: boolean, onChange: (value: boolean) => void | Promise<void>): void {
+		const switchEl = toggle.toggleEl;
+		switchEl.setAttribute("role", "switch");
+		switchEl.setAttribute("aria-label", label);
+		switchEl.querySelector("input")?.setAttribute("aria-hidden", "true");
+		toggle.setValue(value);
+		switchEl.setAttribute("aria-checked", String(value));
+		toggle.onChange(async (next) => {
+			switchEl.setAttribute("aria-checked", String(next));
+			await onChange(next);
+		});
 	}
 
-	// Re-rendering after failures too shows the state that was actually kept rather than the one the control displays.
-	private runSettingActionAndRender(action: () => Promise<void>, refresh: () => void): void {
-		void this.runSettingAction(action).then(refresh);
+	// Obsidian does not tie a row's name to its controls, so each control is named directly.
+	private labelControl(el: HTMLElement, label: string): void {
+		el.setAttribute("aria-label", label);
 	}
 
-	private bindCommitOnBlurOrEnter(inputEl: HTMLInputElement, commit: () => Promise<void>): void {
-		const run = (): void => {
-			this.pendingFieldCommits.delete(inputEl);
+	// Extra buttons are plain divs named only by their tooltip; the role and disabled state make them read as buttons.
+	private describeExtraButton(button: ExtraButtonComponent, label: string): void {
+		button.setTooltip(label);
+		button.extraSettingsEl.setAttribute("role", "button");
+		button.extraSettingsEl.setAttribute("aria-label", label);
+		button.extraSettingsEl.setAttribute("aria-disabled", "false");
+	}
+
+	private setExtraButtonDisabled(button: ExtraButtonComponent, disabled: boolean): void {
+		button.setDisabled(disabled);
+		button.extraSettingsEl.setAttribute("aria-disabled", String(disabled));
+	}
+
+	/**
+	 * Disabling a focused control drops focus to the page, so a keyboard user who started an action
+	 * gets focus back on the same control once it is enabled again.
+	 */
+	private async keepFocusWhileBusy(el: HTMLElement, setBusy: (busy: boolean) => void, action: () => Promise<void>): Promise<void> {
+		const hadFocus = el.ownerDocument.activeElement === el;
+		setBusy(true);
+		try {
+			await action();
+		} finally {
+			setBusy(false);
+			const active = el.ownerDocument.activeElement;
+			if (hadFocus && el.isConnected && (active === null || active === el.ownerDocument.body)) {
+				el.focus();
+			}
+		}
+	}
+
+	// Toggles and dropdowns read and write through these, so every change is normalised and saved like any other.
+	getControlValue(key: string): unknown {
+		return readSettingControl(this.plugin.settings, key);
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		writeSettingControl(this.plugin.settings, key, value);
+		await this.runSettingAction(() => this.saveUiSetting());
+	}
+
+	/**
+	 * Commits only after an edit, so Enter followed by blur, or a blur without changes, does not save or report twice.
+	 * Returns the commit so a path suggestion can save the moment it is picked.
+	 */
+	private bindCommitOnBlur(inputEl: HTMLInputElement | HTMLTextAreaElement, commit: () => Promise<void>, commitOnEnter: boolean): () => void {
+		const runCommit = (): void => {
 			void this.runSettingAction(commit);
 		};
-		inputEl.addEventListener("input", () => this.pendingFieldCommits.set(inputEl, run));
-		inputEl.addEventListener("blur", run);
-		inputEl.addEventListener("keydown", (event) => {
-			if (event.key === "Enter") {
-				event.preventDefault();
-				run();
+		const commitPending = (): void => {
+			if (this.pendingFieldCommits.delete(inputEl)) {
+				runCommit();
 			}
-		});
+		};
+		inputEl.addEventListener("input", () => this.pendingFieldCommits.set(inputEl, runCommit));
+		inputEl.addEventListener("blur", commitPending);
+		if (commitOnEnter) {
+			// Typed as HTMLElement so the listener receives a KeyboardEvent; the input and textarea union loses the event map.
+			const keyTarget: HTMLElement = inputEl;
+			keyTarget.addEventListener("keydown", (event) => {
+				// While a path suggestion list is open, Enter picks a suggestion instead of saving the half-typed path.
+				if (event.key !== "Enter" || isPathSuggestOpen(inputEl)) {
+					return;
+				}
+				event.preventDefault();
+				commitPending();
+			});
+		}
+		return commitPending;
+	}
+
+	private bindCommitOnBlurOrEnter(inputEl: HTMLInputElement, commit: () => Promise<void>): () => void {
+		return this.bindCommitOnBlur(inputEl, commit, true);
 	}
 
 	private flushPendingFieldCommits(): void {
@@ -196,27 +319,50 @@ export class AskMateSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private bindIntegerInput(text: TextComponent, options: IntegerInputOptions): void {
+	/**
+	 * Call from every render that can report feedback. A live region is announced only when its text changes after it exists,
+	 * so it is created empty up front; rows re-rendered in place keep their info area, so an old message is cleared here.
+	 */
+	private prepareFieldFeedback(setting: Setting): HTMLElement {
+		const existing = setting.infoEl.querySelector<HTMLElement>(":scope > .askmate-settings-feedback");
+		if (existing) {
+			existing.empty();
+			existing.removeClass("is-error", "is-success", "is-info");
+			return existing;
+		}
+		return setting.infoEl.createDiv({ cls: "askmate-settings-feedback", attr: { role: "status" } });
+	}
+
+	// One line under the description for errors, results and corrections alike, so the control never shifts.
+	private setFieldFeedback(setting: Setting, message: string | null, kind: FeedbackKind = "error"): void {
+		const feedbackEl = setting.infoEl.querySelector<HTMLElement>(":scope > .askmate-settings-feedback") ?? this.prepareFieldFeedback(setting);
+		feedbackEl.setText(message ?? "");
+		feedbackEl.toggleClass("is-error", message !== null && kind === "error");
+		feedbackEl.toggleClass("is-success", message !== null && kind === "success");
+		feedbackEl.toggleClass("is-info", message !== null && kind === "info");
+	}
+
+	private bindIntegerInput(setting: Setting, text: TextComponent, options: IntegerInputOptions): void {
 		const { bounds, label } = options;
 		const range = formatIntegerRange(bounds);
+		this.prepareFieldFeedback(setting);
 		text.inputEl.type = "number";
 		text.inputEl.min = String(bounds.min);
 		text.inputEl.max = String(bounds.max);
 		text.inputEl.step = "1";
 		text.inputEl.setAttribute("aria-label", `${label} (${range})`);
-		text.setPlaceholder(label).setValue(String(options.getValue()));
+		text.setPlaceholder(range).setValue(String(options.getValue()));
 		this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
 			const current = options.getValue();
 			const result = resolveIntegerInput(text.getValue(), bounds);
 			if (result.kind === "ignored") {
 				text.setValue(String(current));
+				this.setFieldFeedback(setting, `Enter a whole number from ${range}. AskMate kept ${current.toLocaleString("en-GB")}.`, "info");
 				return;
 			}
 
 			text.setValue(String(result.value));
-			if (result.clamped) {
-				new Notice(`${label} must be ${range}. AskMate saved ${result.value.toLocaleString("en-GB")}.`);
-			}
+			this.setFieldFeedback(setting, result.clamped ? `${label} must be ${range}. AskMate saved ${result.value.toLocaleString("en-GB")}.` : null, "info");
 			if (result.value === current) {
 				return;
 			}
@@ -227,17 +373,19 @@ export class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	// "." and ".." segments are refused here, because the save-time normaliser would otherwise replace them without telling the user.
-	private bindFolderPathInput(text: TextComponent, options: FolderPathInputOptions): void {
+	private bindFolderPathInput(setting: Setting, text: TextComponent, options: FolderPathInputOptions): void {
+		this.prepareFieldFeedback(setting);
 		text.setValue(options.getValue());
-		this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
+		const commit = this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
 			const current = options.getValue();
 			const result = resolveFolderPathInput(text.getValue());
 			if (result.kind === "unsafe") {
-				new Notice(`${options.label} cannot contain "." or ".." segments. AskMate kept the previous value${current ? `: ${current}` : ""}.`);
+				this.setFieldFeedback(setting, `${options.label} cannot contain "." or ".." segments. AskMate kept the previous value${current ? `: ${current}` : ""}.`);
 				text.setValue(current);
 				return;
 			}
 
+			this.setFieldFeedback(setting, null);
 			text.setValue(result.value);
 			if (result.value === current) {
 				return;
@@ -245,6 +393,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 			options.setValue(result.value);
 			await this.saveUiSetting();
 		});
+		attachFolderSuggest(this.app, text.inputEl, commit);
 	}
 
 	hide(): void {
@@ -256,912 +405,970 @@ export class AskMateSettingTab extends PluginSettingTab {
 	}
 
 	// Obsidian draws each row from its name and description, which also feed settings search; render adds the controls.
+	// Page summaries are functions, so the entries show current values each time a page is left and the list redraws.
 	getSettingDefinitions(): SettingDefinitionItem[] {
+		const settings = this.plugin.settings;
 		return [
 			{
 				type: "page",
 				name: "Providers and models",
-				desc: "API keys, provider routing, model selection, and reasoning effort.",
+				desc: "API keys, models, reasoning effort, and image generation.",
+				displayValue: () => summarizeProviderSetup(settings).displayValue,
+				status: () => summarizeProviderSetup(settings).status,
 				items: this.getProviderModelDefinitions()
 			},
 			{
 				type: "page",
 				name: "Request defaults",
-				desc: "Composer behavior, sidebar layout, output defaults, preview, privacy, and context budget.",
+				desc: "Sidebar layout, composer behavior, output defaults, privacy, and context budget.",
+				displayValue: () => summarizeRequestDefaults(settings),
 				items: this.getRequestDefaultDefinitions()
 			},
 			{
 				type: "page",
 				name: "Context sources",
 				desc: "Thread history, extra notes, folders, drawings, images, evidence, style guides, and glossaries.",
+				displayValue: () => summarizeContextSources(settings),
 				items: this.getContextSourceDefinitions()
 			},
 			{
 				type: "page",
 				name: "Output, Apply, and review",
-				desc: "Result notes, image output paths, Apply preview, frontmatter, placement, and review queue.",
+				desc: "Result notes, image output paths, Apply approval, frontmatter, placement, and review queue.",
+				displayValue: () => summarizeOutputApply(settings, this.plugin.getPendingReviewQueueItems().length),
 				items: this.getOutputApplyDefinitions()
 			},
 			{
 				type: "page",
 				name: "Workflows and automation",
-				desc: "Sidebar workflow organization, custom workflows, presets, and batch runs.",
+				desc: "Sidebar workflow organization, custom workflows, workflow defaults, presets, and batch runs.",
+				displayValue: () => summarizeWorkflows(settings),
 				items: this.getWorkflowAutomationDefinitions()
 			},
 			{
 				type: "page",
 				name: "Usage and guardrails",
 				desc: "Token budgets, warnings, operation statistics, charts, and reset controls.",
+				displayValue: () => summarizeUsageGuardrails(settings, this.plugin.getTodayTokenUsage(), this.plugin.getMonthTokenUsage()),
+				status: () => getUsageGuardrailStatus(settings, this.plugin.getTodayTokenUsage(), this.plugin.getMonthTokenUsage()),
 				items: this.getUsageDefinitions()
 			},
 			{
 				name: `AskMate ${this.plugin.manifest.version}`,
-				desc: "Text providers support OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints. Image generation still uses OpenAI gpt-image-2 and may require OpenAI organization verification."
+				desc: "Text providers: OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, and OpenAI-compatible local endpoints."
 			}
 		];
 	}
 
-	private imperativePage(name: string, desc: string, renderPage: PageRenderer): SettingDefinitionPage {
+	private imperativePage(name: string, desc: string, renderPage: PageRenderer, options: ImperativePageOptions = {}): SettingDefinitionPage {
 		return {
 			type: "page",
 			name,
 			desc,
-			page: () => new AskMateSettingsPage(name, renderPage, () => this.flushPendingFieldCommits())
+			displayValue: options.displayValue,
+			page: () => new AskMateSettingsPage(name, renderPage, () => {
+				this.flushPendingFieldCommits();
+				options.onHide?.();
+			})
 		};
 	}
 
-	private getProviderModelDefinitions(): SettingDefinition[] {
-		const selectedProviderId = this.plugin.getSelectedTextProviderId();
-		const selectedProvider = this.plugin.getProviderSettings(selectedProviderId);
-		const definitions: SettingDefinition[] = [];
+	// Render rows rather than declarative controls, because Obsidian gives declarative controls no accessible name.
+	// Rows that depend on the value use `visible`, so each change re-evaluates them with refreshDomState().
+	private toggleDefinition(key: SettingControlKey, name: string, desc: string, extras: DefinitionExtras = {}): SettingDefinition {
+		return {
+			name,
+			desc,
+			...extras,
+			render: (setting) => {
+				setting.addToggle((toggle) => {
+					this.setupToggle(toggle, name, this.getControlValue(key) === true, async (value) => {
+						await this.setControlValue(key, value);
+						this.refreshDomState();
+					});
+				});
+			}
+		};
+	}
 
-		definitions.push({
-			name: "Chat provider",
-			desc: "Choose the provider AskMate uses for text chat and workflows.",
+	private dropdownDefinition(key: SettingControlKey, name: string, desc: string, options: Record<string, string>, extras: DefinitionExtras = {}): SettingDefinition {
+		return {
+			name,
+			desc,
+			...extras,
 			render: (setting) => {
 				setting.addDropdown((dropdown) => {
-					for (const providerId of TEXT_PROVIDER_IDS) {
-						dropdown.addOption(providerId, getProviderLabel(providerId));
-					}
+					this.labelControl(dropdown.selectEl, name);
 					dropdown
-						.setValue(selectedProviderId)
+						.addOptions(options)
+						.setValue(String(this.getControlValue(key) ?? ""))
 						.onChange(async (value) => {
-							const providerId = normalizeTextProviderId(value);
-							this.plugin.settings.providerRoles.chatProviderId = providerId;
-							this.plugin.settings.selectedTextProvider = providerId;
-							await this.saveUiSetting();
-							this.update();
+							await this.setControlValue(key, value);
+							this.refreshDomState();
 						});
 				});
 			}
-		});
+		};
+	}
 
-		definitions.push({
-			name: "Image prompt planning provider",
-			desc: "Choose the text provider that improves image prompts before OpenAI gpt-image-2 generation. Image generation itself remains OpenAI-only.",
+	private integerDefinition(name: string, desc: string, options: Omit<IntegerInputOptions, "label">, extras: DefinitionExtras = {}): SettingDefinition {
+		return {
+			name,
+			desc,
+			...extras,
 			render: (setting) => {
-				setting.addDropdown((dropdown) => {
-					dropdown.addOption("same-as-chat", "Same as chat provider");
-					for (const providerId of TEXT_PROVIDER_IDS) {
-						dropdown.addOption(providerId, getProviderLabel(providerId));
-					}
-					dropdown
-						.setValue(this.plugin.settings.providerRoles.imagePromptPlanningProviderId)
-						.onChange(async (value) => {
-							this.plugin.settings.providerRoles.imagePromptPlanningProviderId = normalizeImagePromptPlanningProviderId(value);
-							await this.saveUiSetting();
-							this.update();
-						});
-				});
+				setting.addText((text) => this.bindIntegerInput(setting, text, { ...options, label: name }));
 			}
-		});
+		};
+	}
 
-		definitions.push({
-			name: `${getProviderLabel(selectedProviderId)} API key`,
-			desc: selectedProviderId === "openai-compatible"
-				? "Optional for local providers. Stored with Obsidian SecretStorage when provided."
-				: selectedProviderId === "azure-openai"
-					? "Azure OpenAI Phase 1 uses API-key auth. Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings."
-					: selectedProviderId === "azure-ai"
-						? "Azure AI Foundry uses API-key auth for this provider. Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings."
-						: "Stored with Obsidian SecretStorage. AskMate saves only the secret name in plugin settings.",
-			aliases: ["secret", "token", "credentials"],
+	private folderPathDefinition(name: string, desc: string, options: Omit<FolderPathInputOptions, "label"> & { placeholder: string }, extras: DefinitionExtras = {}): SettingDefinition {
+		return {
+			name,
+			desc,
+			...extras,
 			render: (setting) => {
-				setting.addComponent((el) => {
-					return new SecretComponent(this.app, el)
-						.setValue(selectedProvider.apiKeySecretName)
-						.onChange(async (value) => {
-							selectedProvider.apiKeySecretName = value;
-							await this.saveUiSetting();
-						});
+				setting.addText((text) => {
+					text.setPlaceholder(options.placeholder);
+					text.inputEl.setAttribute("aria-label", name);
+					this.bindFolderPathInput(setting, text, { ...options, label: name });
 				});
 			}
-		});
+		};
+	}
 
-		if (selectedProviderId === "openai-compatible" || selectedProviderId === "azure-openai" || selectedProviderId === "azure-ai") {
-			const isAzureOpenAI = selectedProviderId === "azure-openai";
-			const isAzureAI = selectedProviderId === "azure-ai";
-			const baseUrlFallback = DEFAULT_PROVIDER_SETTINGS[selectedProviderId].baseUrl;
-			const baseUrlPlaceholder = isAzureOpenAI
-				? "https://<resource>.openai.azure.com/openai/v1"
-				: isAzureAI
-					? "https://<resource>.services.ai.azure.com/models"
-					: DEFAULT_LOCAL_BASE_URL;
+	// A row that is only an explanation; it has no name, so it is kept out of settings search.
+	private noteDefinition(text: string): SettingDefinition {
+		return {
+			name: "",
+			searchable: false,
+			render: (setting) => {
+				setting.settingEl.empty();
+				setting.settingEl.addClass("askmate-settings-note-row");
+				setting.settingEl.createEl("p", { cls: "askmate-settings-note", text });
+			}
+		};
+	}
 
-			definitions.push({
-				name: isAzureOpenAI ? "Azure OpenAI base URL" : isAzureAI ? "Azure AI Foundry endpoint" : "Local provider base URL",
+	// Only OpenAI requests carry reasoning effort: chat on OpenAI, or image prompt planning set to OpenAI.
+	// Other providers are always text-capable, so planning never falls back to OpenAI behind the user's back.
+	private usesOpenAIReasoning(): boolean {
+		const chatProviderId = this.plugin.getSelectedTextProviderId();
+		const planningProviderId = this.plugin.settings.providerRoles.imagePromptPlanningProviderId;
+		return chatProviderId === "openai" || planningProviderId === "openai";
+	}
+
+	private getProviderModelDefinitions(): SettingDefinitionItem[] {
+		const providerId = this.plugin.getSelectedTextProviderId();
+		const provider = this.plugin.getProviderSettings(providerId);
+		const providerLabel = getProviderLabel(providerId);
+		const isAzureOpenAI = providerId === "azure-openai";
+		const isAzureAI = providerId === "azure-ai";
+		const modelLabel = isAzureOpenAI ? "Deployment" : "Model";
+		// The setup list is refilled in place and shown or hidden with refreshDomState(), so a commit never rebuilds the page under the user.
+		let setupList: HTMLElement | null = null;
+		const fillSetupList = (): void => {
+			if (!setupList) {
+				return;
+			}
+			setupList.empty();
+			for (const issue of summarizeProviderSetup(this.plugin.settings).issues) {
+				setupList.createEl("li", { text: issue });
+			}
+		};
+		const refreshSetup = (): void => {
+			fillSetupList();
+			this.refreshDomState();
+		};
+		// The model dropdown and the manual model field change each other, so both rows keep a handle on the other's control.
+		let modelDropdown: DropdownComponent | null = null;
+		let manualModelText: TextComponent | null = null;
+		const syncModelDropdown = (): void => {
+			if (!modelDropdown) {
+				return;
+			}
+			modelDropdown.selectEl.empty();
+			for (const model of provider.modelOptions) {
+				modelDropdown.addOption(model, model);
+			}
+			modelDropdown.setValue(this.plugin.getSelectedModel());
+		};
+
+		const setupRow: SettingDefinition = {
+			name: "Finish setup",
+			desc: "AskMate needs these before it can send requests.",
+			visible: () => summarizeProviderSetup(this.plugin.settings).issues.length > 0,
+			render: (setting) => {
+				setting.settingEl.addClass("askmate-settings-setup");
+				setting.descEl.querySelector(":scope > .askmate-settings-setup-list")?.remove();
+				setupList = setting.descEl.createEl("ul", { cls: "askmate-settings-setup-list" });
+				fillSetupList();
+			}
+		};
+
+		const connectionItems: SettingDefinition[] = [
+			{
+				name: "Chat provider",
+				desc: "Choose the provider AskMate uses for text chat and workflows.",
+				render: (setting) => {
+					setting.addDropdown((dropdown) => {
+						this.labelControl(dropdown.selectEl, "Chat provider");
+						for (const id of TEXT_PROVIDER_IDS) {
+							dropdown.addOption(id, getProviderLabel(id));
+						}
+						dropdown
+							.setValue(providerId)
+							.onChange(async (value) => {
+								const nextProviderId = normalizeTextProviderId(value);
+								this.plugin.settings.providerRoles.chatProviderId = nextProviderId;
+								this.plugin.settings.selectedTextProvider = nextProviderId;
+								await this.runSettingAction(() => this.saveUiSetting());
+								// Key, URL and model rows depend on the provider, so the page is rebuilt.
+								this.update();
+							});
+					});
+				}
+			},
+			{
+				name: `${providerLabel} API key`,
+				desc: providerId === "openai-compatible"
+					? "Optional for local servers. Stored in Obsidian SecretStorage when provided."
+					: isAzureOpenAI || isAzureAI
+						? "Uses API-key authentication. Stored in Obsidian SecretStorage; AskMate saves only the secret name in its settings."
+						: "Stored in Obsidian SecretStorage. AskMate saves only the secret name in its settings.",
+				aliases: ["secret", "token", "credentials"],
+				render: (setting) => {
+					setting.addComponent((el) => new SecretComponent(this.app, el)
+						.setValue(provider.apiKeySecretName)
+						.onChange(async (value) => {
+							provider.apiKeySecretName = value;
+							await this.runSettingAction(() => this.saveUiSetting());
+							refreshSetup();
+						}));
+				}
+			}
+		];
+
+		if (providerId === "openai-compatible" || isAzureOpenAI || isAzureAI) {
+			const baseUrlFallback = DEFAULT_PROVIDER_SETTINGS[providerId].baseUrl;
+			const baseUrlName = isAzureOpenAI ? "Azure OpenAI base URL" : isAzureAI ? "Azure AI Foundry endpoint" : "Local or self-hosted base URL";
+			connectionItems.push({
+				name: baseUrlName,
 				desc: isAzureOpenAI
-					? "Use the v1 base URL, for example https://<resource>.openai.azure.com/openai/v1. The model field is your Azure deployment name."
+					? "Use the v1 base URL, for example https://<resource>.openai.azure.com/openai/v1."
 					: isAzureAI
 						? "Use the Azure AI inference endpoint, for example https://<resource>.services.ai.azure.com/models. AskMate adds /models when it is omitted."
 						: "OpenAI-compatible endpoint, for example Ollama at http://localhost:11434/v1 or a self-hosted server.",
 				render: (setting) => {
+					this.prepareFieldFeedback(setting);
 					setting.addText((text) => {
+						this.labelControl(text.inputEl, baseUrlName);
 						text
-							.setPlaceholder(baseUrlPlaceholder)
-							.setValue(selectedProvider.baseUrl);
-						// Validating per keystroke stacked error notices and saved half-typed URLs, so commit only when editing ends.
-						let lastRejectedInput: string | null = null;
+							.setPlaceholder(isAzureOpenAI
+								? "https://<resource>.openai.azure.com/openai/v1"
+								: isAzureAI
+									? "https://<resource>.services.ai.azure.com/models"
+									: DEFAULT_LOCAL_BASE_URL)
+							.setValue(provider.baseUrl);
+						// Validating per keystroke saved half-typed URLs, so commit only when editing ends.
 						this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
-							const provider = this.plugin.getProviderSettings(selectedProviderId);
-							const input = text.getValue();
-							const result = resolveBaseUrlInput(input, baseUrlFallback, (value, fallback) => isAzureOpenAI
+							const result = resolveBaseUrlInput(text.getValue(), baseUrlFallback, (value, fallback) => isAzureOpenAI
 								? validateAzureOpenAIBaseUrl(value, fallback)
-								: validateProviderBaseUrl(value, fallback, getProviderLabel(selectedProviderId)));
+								: validateProviderBaseUrl(value, fallback, providerLabel));
 							if (result.kind === "invalid") {
-								// Enter followed by blur would otherwise report the same rejection twice.
-								if (input !== lastRejectedInput) {
-									new Notice(`${result.message} The previous URL is still saved.`);
-								}
-								lastRejectedInput = input;
+								this.setFieldFeedback(setting, `${result.message} The previous URL is still saved.`);
 								return;
 							}
-							lastRejectedInput = null;
 
 							text.setValue(result.value);
+							if (result.kind === "restore-default") {
+								this.setFieldFeedback(setting, result.value
+									? `Field cleared, so AskMate restored the default: ${result.value}`
+									: "Field cleared. Requests will fail until you enter a URL.", result.value ? "info" : "error");
+							} else {
+								this.setFieldFeedback(setting, null);
+							}
 							if (result.value === provider.baseUrl) {
 								return;
 							}
-							if (result.kind === "restore-default") {
-								new Notice(result.value
-									? `${getProviderLabel(selectedProviderId)} base URL cleared. AskMate restored the default: ${result.value}`
-									: `${getProviderLabel(selectedProviderId)} base URL cleared. Requests will fail until you enter one.`);
-							}
 							provider.baseUrl = result.value;
 							await this.saveUiSetting();
+							refreshSetup();
 						});
 					});
 				}
 			});
 		}
 
-		definitions.push({
-			name: "Test provider connection",
-			desc: selectedProviderId === "azure-openai"
+		connectionItems.push({
+			name: "Test connection",
+			desc: isAzureOpenAI
 				? "Sends a minimal text request to the selected Azure deployment. This may consume a small number of tokens. Times out after 10 seconds."
-				: selectedProviderId === "azure-ai"
+				: isAzureAI
 					? "Sends a minimal text request to the selected Azure AI Foundry model. This may consume a small number of tokens. Times out after 10 seconds."
 					: "Checks whether the selected provider can list models. Times out after 10 seconds.",
 			render: (setting) => {
+				this.prepareFieldFeedback(setting);
 				setting.addButton((button) => {
-					button.setButtonText("Test API").onClick(async () => {
-						button.setButtonText("Testing...");
-						button.setDisabled(true);
-						try {
-							const message = await this.plugin.testSelectedProviderConnection();
-							new Notice(message);
-						} catch (error) {
-							new Notice(this.plugin.getErrorMessage(error));
-						} finally {
-							button.setButtonText("Test API");
-							button.setDisabled(false);
-						}
-					});
-				});
-			}
-		});
-
-		// Azure OpenAI deployments cannot be listed with an API key, so a refresh button would only ever fail.
-		if (selectedProviderId !== "azure-openai") {
-			definitions.push({
-				name: "Refresh provider models",
-				desc: selectedProviderId === "azure-ai"
-					? "Best-effort model info for Azure AI Foundry. If listing fails or omits your deployment, keep using the manual model name below."
-					: "Loads model IDs visible to the selected provider. You can also type a manual model ID below.",
-				render: (setting) => {
-					setting.addButton((button) => {
-						button.setButtonText("Refresh models").onClick(async () => {
-							button.setButtonText("Refreshing...");
-							button.setDisabled(true);
+					button.setButtonText("Test connection").onClick(() => {
+						void this.keepFocusWhileBusy(button.buttonEl, (busy) => {
+							button.setButtonText(busy ? "Testing..." : "Test connection").setDisabled(busy);
+						}, async () => {
+							this.setFieldFeedback(setting, null);
 							try {
-								const models = await this.plugin.refreshSelectedProviderModels();
-								new Notice(`AskMate loaded ${models.length} model options.`);
-								this.update();
+								this.setFieldFeedback(setting, await this.plugin.testSelectedProviderConnection(), "success");
 							} catch (error) {
-								new Notice(this.plugin.getErrorMessage(error));
-							} finally {
-								button.setButtonText("Refresh models");
-								button.setDisabled(false);
+								this.setFieldFeedback(setting, this.plugin.getErrorMessage(error));
 							}
 						});
 					});
-				}
-			});
-		}
-
-		definitions.push({
-			name: "Model",
-			desc: selectedProviderId === "openai"
-				? "Choose any model ID returned by the OpenAI Models API. Text chat requires a model that supports the Responses API; gpt-image-2 is used for image generation."
-				: selectedProviderId === "azure-openai"
-					? "Choose a saved Azure OpenAI deployment for text chat, workflows, and image prompt planning. Add deployments by typing their names below. Image generation remains OpenAI-only."
-					: selectedProviderId === "azure-ai"
-						? "Choose the Azure AI Foundry model or deployment used for text chat, workflows, and image prompt planning. Image generation remains OpenAI-only."
-						: "Choose the selected provider model for text chat, workflows, and image prompt planning.",
-			render: (setting) => {
-				setting.addDropdown((dropdown) => {
-					for (const model of selectedProvider.modelOptions) {
-						dropdown.addOption(model, model);
-					}
-					dropdown
-						.setValue(this.plugin.getSelectedModel())
-						.onChange(async (value) => {
-							selectedProvider.model = value;
-							await this.saveUiSetting();
-						});
 				});
 			}
 		});
 
-		definitions.push({
-			name: selectedProviderId === "azure-openai" ? "Manual deployment name" : selectedProviderId === "azure-ai" ? "Manual model or deployment name" : "Manual model ID",
-			desc: selectedProviderId === "azure-openai"
-				? "Type your Azure OpenAI deployment name exactly as it appears in Azure AI Foundry. Deployments cannot be listed with an API key, so AskMate does not offer a refresh for this provider."
-				: selectedProviderId === "azure-ai"
-					? "Enter your Azure AI Foundry model or deployment name. Model refresh may not list every deployment."
-					: "Use this when a provider supports a model that is not returned by model refresh.",
+		const modelItems: SettingDefinition[] = [
+			{
+				name: modelLabel,
+				desc: providerId === "openai"
+					? "Choose any model ID returned by the OpenAI Models API. Text chat requires a model that supports the Responses API."
+					: isAzureOpenAI
+						? "Choose a saved Azure OpenAI deployment for text chat, workflows, and image prompt planning. Add deployments by typing their names below."
+						: isAzureAI
+							? "Choose the Azure AI Foundry model or deployment used for text chat, workflows, and image prompt planning. Use the refresh button for best-effort model info."
+							: "Choose the selected provider model for text chat, workflows, and image prompt planning. Use the refresh button to load the models the provider offers.",
+				render: (setting) => {
+					this.prepareFieldFeedback(setting);
+					setting.addDropdown((dropdown) => {
+						modelDropdown = dropdown;
+						this.labelControl(dropdown.selectEl, modelLabel);
+						syncModelDropdown();
+						dropdown.onChange(async (value) => {
+							provider.model = value;
+							manualModelText?.setValue(value);
+							await this.runSettingAction(() => this.saveUiSetting());
+							refreshSetup();
+						});
+					});
+					// Azure OpenAI deployments cannot be listed with an API key, so a refresh button would only ever fail.
+					if (isAzureOpenAI) {
+						return;
+					}
+					setting.addExtraButton((button) => {
+						this.describeExtraButton(button.setIcon("refresh-cw"), "Refresh models");
+						button.onClick(() => {
+							void this.refreshProviderModels(setting, button, () => {
+								syncModelDropdown();
+								manualModelText?.setValue(provider.model);
+								refreshSetup();
+							});
+						});
+					});
+				}
+			},
+			{
+				name: isAzureOpenAI ? "Manual deployment name" : isAzureAI ? "Manual model or deployment name" : "Manual model ID",
+				desc: isAzureOpenAI
+					? "Type your Azure OpenAI deployment name exactly as it appears in Azure AI Foundry. Deployments cannot be listed with an API key, so AskMate does not offer a refresh for this provider."
+					: isAzureAI
+						? "Enter your Azure AI Foundry model or deployment name. Model refresh may not list every deployment."
+						: "Use this when a provider supports a model that is not returned by model refresh.",
+				render: (setting) => {
+					this.prepareFieldFeedback(setting);
+					setting.addText((text) => {
+						manualModelText = text;
+						this.labelControl(text.inputEl, isAzureOpenAI ? "Manual deployment name" : "Manual model ID");
+						text
+							.setPlaceholder(isAzureOpenAI ? "my-gpt-deployment" : DEFAULT_PROVIDER_SETTINGS[providerId].model)
+							.setValue(provider.model);
+						this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
+							const model = text.getValue().trim();
+							if (!model) {
+								text.setValue(provider.model);
+								this.setFieldFeedback(setting, provider.model
+									? `Enter ${isAzureOpenAI ? "a deployment name" : "a model ID"}. AskMate kept ${provider.model}.`
+									: `Enter ${isAzureOpenAI ? "a deployment name" : "a model ID"}.`, "info");
+								return;
+							}
+							this.setFieldFeedback(setting, null);
+							if (model === provider.model) {
+								return;
+							}
+							provider.model = model;
+							provider.modelOptions = normalizeProviderModelOptions(provider.modelOptions, DEFAULT_PROVIDER_SETTINGS[providerId].modelOptions, model);
+							await this.saveUiSetting();
+							syncModelDropdown();
+							refreshSetup();
+						});
+					});
+				}
+			},
+			this.dropdownDefinition(
+				"reasoningEffort",
+				"Reasoning effort",
+				"How much reasoning OpenAI models use before answering, including image prompt planning on OpenAI. AskMate leaves it out for models that do not support the selected level.",
+				Object.fromEntries(REASONING_EFFORT_OPTIONS.map((option) => [option.value, option.label])),
+				{ visible: () => this.usesOpenAIReasoning() }
+			)
+		];
+
+		const imageItems: SettingDefinition[] = [
+			this.noteDefinition("Images are always generated with OpenAI gpt-image-2, whichever chat provider you use. It may require OpenAI organization verification.")
+		];
+		if (providerId !== "openai") {
+			imageItems.push({
+				name: "OpenAI image API key",
+				desc: "Add an OpenAI key to use the Image button or the /image command.",
+				render: (setting) => {
+					setting.addComponent((el) => new SecretComponent(this.app, el)
+						.setValue(this.plugin.getProviderSettings("openai").apiKeySecretName)
+						.onChange(async (value) => {
+							this.plugin.getProviderSettings("openai").apiKeySecretName = value;
+							await this.runSettingAction(() => this.saveUiSetting());
+						}));
+				}
+			});
+		}
+		imageItems.push(this.dropdownDefinition(
+			"imagePromptPlanningProviderId",
+			"Image prompt planning provider",
+			"Text provider that improves image prompts before generation.",
+			{
+				"same-as-chat": "Same as chat provider",
+				...Object.fromEntries(TEXT_PROVIDER_IDS.map((id) => [id, getProviderLabel(id)]))
+			}
+		));
+
+		return [
+			setupRow,
+			{ type: "group", heading: "Connection", items: connectionItems },
+			{ type: "group", heading: "Model", items: modelItems },
+			{ type: "group", heading: "Image generation", items: imageItems }
+		];
+	}
+
+	private async refreshProviderModels(setting: Setting, button: ExtraButtonComponent, onRefreshed: () => void): Promise<void> {
+		await this.keepFocusWhileBusy(button.extraSettingsEl, (busy) => this.setExtraButtonDisabled(button, busy), async () => {
+			this.setFieldFeedback(setting, null);
+			try {
+				const models = await this.plugin.refreshSelectedProviderModels();
+				onRefreshed();
+				this.setFieldFeedback(setting, `Loaded ${pluralise(models.length, "model")}.`, "success");
+			} catch (error) {
+				this.setFieldFeedback(setting, this.plugin.getErrorMessage(error));
+			}
+		});
+	}
+
+	private getRequestDefaultDefinitions(): SettingDefinitionItem[] {
+		const contextBudgetSummary = CONTEXT_BUDGET_OPTIONS
+			.map((option) => option.maxCharacters === null
+				? `${option.label} sends the whole note`
+				: `${option.label} up to ${option.maxCharacters.toLocaleString("en-GB")} characters`)
+			.join(", ");
+		return [
+			{
+				type: "group",
+				heading: "Sidebar and composer",
+				items: [
+					this.dropdownDefinition(
+						"composerLayout",
+						"Sidebar layout",
+						"Console is keyboard-first and monospaced (type /help for commands). Compact is denser. Expanded gives the composer more room.",
+						{ console: "Console", compact: "Compact", expanded: "Expanded" },
+						{ aliases: ["console", "compact", "expanded", "composer"] }
+					),
+					this.dropdownDefinition(
+						"sendShortcut",
+						"Send shortcut",
+						"Choose how the composer sends messages. When Enter sends, use Shift+Enter to insert a newline.",
+						{ enter: "Enter sends", "ctrl-enter": "Ctrl/Cmd+Enter sends" }
+					),
+					this.toggleDefinition(
+						"showRequestPreview",
+						"Show request preview",
+						"Shows source, context size, provider, output mode, and privacy controls in the sidebar composer."
+					),
+					{
+						name: "Onboarding tips",
+						desc: "Show a small first-use tip card in the sidebar until dismissed.",
+						render: (setting) => {
+							let onboardingToggle: ToggleComponent | null = null;
+							const saveOnboarding = async (show: boolean): Promise<void> => {
+								this.plugin.settings.showOnboardingTips = show;
+								if (show) {
+									this.plugin.settings.onboardingTipsDismissedAt = null;
+								}
+								await this.runSettingAction(() => this.saveUiSetting());
+							};
+							setting
+								.addToggle((toggle) => {
+									onboardingToggle = toggle;
+									this.setupToggle(toggle, "Show onboarding tips", this.plugin.settings.showOnboardingTips, saveOnboarding);
+								})
+								.addButton((button) => {
+									this.labelControl(button.buttonEl, "Show onboarding tips again");
+									button.setButtonText("Show again").onClick(() => {
+										// Switching the toggle on fires its own handler, which saves; only a tip already on but dismissed needs a save here.
+										if (onboardingToggle && !onboardingToggle.getValue()) {
+											onboardingToggle.setValue(true);
+											return;
+										}
+										void saveOnboarding(true);
+									});
+								});
+						}
+					}
+				]
+			},
+			{
+				type: "group",
+				heading: "Responses",
+				items: [
+					this.dropdownDefinition(
+						"outputMode",
+						"Default output",
+						"Choose whether responses stay in the sidebar, become new notes, or apply to the captured Markdown note or selection.",
+						{ chat: "Show in sidebar chat", note: "Create new note", apply: "Apply to captured note or selection" }
+					),
+					this.toggleDefinition(
+						"autoImageIntentEnabled",
+						"Detect image requests automatically",
+						"Treat questions that start with an image request, such as \"Draw me a cat\", as image generation. When off, AskMate answers in text; the /image command and Image button always generate images."
+					)
+				]
+			},
+			{
+				type: "group",
+				heading: "Privacy and context",
+				items: [
+					this.toggleDefinition(
+						"includeNoteContext",
+						"Include note and attached context by default",
+						"Include the captured note and its attachments in new requests. When off, the note's path and title are withheld too. You can override this per request."
+					),
+					this.toggleDefinition(
+						"includeImageReferences",
+						"Include image references by default",
+						"Include Markdown image references in new requests. You can override this per request."
+					),
+					this.dropdownDefinition(
+						"contextBudgetMode",
+						"Default context budget",
+						`How much of the note AskMate sends by default. ${contextBudgetSummary}.`,
+						Object.fromEntries(CONTEXT_BUDGET_OPTIONS.map((option) => [option.value, option.label]))
+					)
+				]
+			}
+		];
+	}
+
+	private getContextSourceDefinitions(): SettingDefinitionItem[] {
+		const settings = this.plugin.settings;
+		return [
+			{
+				type: "group",
+				heading: "Conversation",
+				items: [
+					this.toggleDefinition(
+						"threadedChatEnabled",
+						"Threaded chat mode",
+						"Send recent AskMate user and assistant turns as extra context for follow-up requests."
+					),
+					this.integerDefinition(
+						"Threaded chat turns",
+						`How many recent turns threaded chat sends (${formatIntegerRange(THREADED_CHAT_MAX_TURNS_BOUNDS)}).`,
+						{
+							bounds: THREADED_CHAT_MAX_TURNS_BOUNDS,
+							getValue: () => settings.threadedChatMaxTurns,
+							setValue: (value) => {
+								settings.threadedChatMaxTurns = value;
+							}
+						},
+						{ visible: () => settings.threadedChatEnabled }
+					),
+					this.toggleDefinition(
+						"noteHistoryEnabled",
+						"Store note-specific history",
+						"Keep successful AskMate turns for each source note. Turn this off to stop recording new turns."
+					),
+					this.toggleDefinition(
+						"noteHistoryIncludeInContext",
+						"Include note history in context",
+						"Send the stored AskMate history for the source note as context with future requests.",
+						{ visible: () => settings.noteHistoryEnabled }
+					)
+				]
+			},
+			{
+				type: "group",
+				heading: "Extra notes and folders",
+				items: [
+					{
+						name: "Default additional note paths",
+						desc: "Optional explicit multi-note context. Enter one Markdown path or wikilink per line. Sidebar preview can override this per request.",
+						render: (setting) => {
+							setting.addTextArea((text) => {
+								text.inputEl.rows = 4;
+								this.labelControl(text.inputEl, "Default additional note paths");
+								text.setValue(settings.additionalContextPaths.join("\n")).onChange((value) => {
+									settings.additionalContextPaths = normalizeContextPathList(value);
+									this.scheduleSave();
+								});
+							});
+						}
+					},
+					this.integerDefinition(
+						"Additional note character limit",
+						`Hard cap across additional notes before the normal request context budget is applied (${formatIntegerRange(ADDITIONAL_CONTEXT_MAX_CHARACTERS_BOUNDS)} characters).`,
+						{
+							bounds: ADDITIONAL_CONTEXT_MAX_CHARACTERS_BOUNDS,
+							getValue: () => settings.additionalContextMaxCharacters,
+							setValue: (value) => {
+								settings.additionalContextMaxCharacters = value;
+							}
+						}
+					),
+					this.toggleDefinition(
+						"folderContextEnabled",
+						"Default folder context",
+						"Send Markdown notes from one folder as context. It is off by default and bounded by file and character limits."
+					),
+					this.folderPathDefinition(
+						"Folder context path",
+						"The folder whose Markdown notes are sent.",
+						{
+							placeholder: "Folder path",
+							getValue: () => settings.folderContextPath,
+							setValue: (value) => {
+								settings.folderContextPath = value;
+							}
+						},
+						{ visible: () => settings.folderContextEnabled }
+					),
+					this.integerDefinition(
+						"Folder context file limit",
+						`Maximum notes read from the folder (${formatIntegerRange(FOLDER_CONTEXT_MAX_FILES_BOUNDS)}).`,
+						{
+							bounds: FOLDER_CONTEXT_MAX_FILES_BOUNDS,
+							getValue: () => settings.folderContextMaxFiles,
+							setValue: (value) => {
+								settings.folderContextMaxFiles = value;
+							}
+						},
+						{ visible: () => settings.folderContextEnabled }
+					),
+					this.integerDefinition(
+						"Folder context character limit",
+						`Maximum characters read from the folder before the normal request context budget is applied (${formatIntegerRange(FOLDER_CONTEXT_MAX_CHARACTERS_BOUNDS)}).`,
+						{
+							bounds: FOLDER_CONTEXT_MAX_CHARACTERS_BOUNDS,
+							getValue: () => settings.folderContextMaxCharacters,
+							setValue: (value) => {
+								settings.folderContextMaxCharacters = value;
+							}
+						},
+						{ visible: () => settings.folderContextEnabled }
+					)
+				]
+			},
+			{
+				type: "group",
+				heading: "Attachments",
+				items: [
+					this.toggleDefinition(
+						"includeExcalidrawSummaries",
+						"Excalidraw summaries",
+						"Extract readable text and embedded references from Excalidraw files as text context. This is not pixel-level visual analysis."
+					),
+					this.integerDefinition(
+						"Excalidraw character limit",
+						`Maximum characters taken from each drawing (${formatIntegerRange(EXCALIDRAW_SUMMARY_MAX_CHARACTERS_BOUNDS)}).`,
+						{
+							bounds: EXCALIDRAW_SUMMARY_MAX_CHARACTERS_BOUNDS,
+							getValue: () => settings.excalidrawSummaryMaxCharacters,
+							setValue: (value) => {
+								settings.excalidrawSummaryMaxCharacters = value;
+							}
+						},
+						{ visible: () => settings.includeExcalidrawSummaries }
+					),
+					this.toggleDefinition(
+						"includeImageManifests",
+						"Image manifest context",
+						"Include image paths, labels, extensions, file sizes, and reference lines as metadata context when image references are allowed. This does not send image pixels."
+					)
+				]
+			},
+			{
+				type: "group",
+				heading: "Evidence",
+				items: [
+					this.toggleDefinition(
+						"evidenceLinkedAnswersEnabled",
+						"Evidence-linked answers",
+						"Ask text models to cite evidence sources like [S1], then show jump-to-source actions on cited replies."
+					),
+					this.integerDefinition(
+						"Evidence source limit",
+						`Maximum evidence sources offered to the model (${formatIntegerRange(EVIDENCE_MAX_SOURCES_BOUNDS)}).`,
+						{
+							bounds: EVIDENCE_MAX_SOURCES_BOUNDS,
+							getValue: () => settings.evidenceMaxSources,
+							setValue: (value) => {
+								settings.evidenceMaxSources = value;
+							}
+						},
+						{ visible: () => settings.evidenceLinkedAnswersEnabled }
+					)
+				]
+			},
+			{
+				type: "group",
+				heading: "Pinned notes",
+				items: [
+					this.toggleDefinition(
+						"includeStyleGuideContext",
+						"Style guide note",
+						"Pin a Markdown note as a persistent style guide context attachment."
+					),
+					this.notePathDefinition(
+						"Style guide note path",
+						() => settings.styleGuideContextPath,
+						(value) => {
+							settings.styleGuideContextPath = value;
+						},
+						{ visible: () => settings.includeStyleGuideContext }
+					),
+					this.toggleDefinition(
+						"includeGlossaryContext",
+						"Glossary note",
+						"Pin a Markdown note as a persistent glossary or terminology context attachment."
+					),
+					this.notePathDefinition(
+						"Glossary note path",
+						() => settings.glossaryContextPath,
+						(value) => {
+							settings.glossaryContextPath = value;
+						},
+						{ visible: () => settings.includeGlossaryContext }
+					)
+				]
+			}
+		];
+	}
+
+	private notePathDefinition(name: string, getValue: () => string, setValue: (value: string) => void, extras: DefinitionExtras): SettingDefinition {
+		return {
+			name,
+			desc: "Type a path to browse notes folder by folder, or enter a wikilink.",
+			...extras,
 			render: (setting) => {
 				setting.addText((text) => {
-					text
-						.setPlaceholder(selectedProviderId === "azure-openai" ? "my-gpt-deployment" : DEFAULT_PROVIDER_SETTINGS[selectedProviderId].model)
-						.setValue(selectedProvider.model);
-					this.bindCommitOnBlurOrEnter(text.inputEl, async () => {
-						const model = text.getValue().trim();
-						if (!model || model === selectedProvider.model) return;
-						selectedProvider.model = model;
-						selectedProvider.modelOptions = normalizeProviderModelOptions(selectedProvider.modelOptions, DEFAULT_PROVIDER_SETTINGS[selectedProviderId].modelOptions, model);
-						await this.saveUiSetting();
+					text.setPlaceholder("Path or wikilink").setValue(getValue()).onChange((value) => {
+						setValue(normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH));
+						this.scheduleSave();
 					});
+					this.labelControl(text.inputEl, name);
+					// A picked note is a finished edit, so it saves at once instead of waiting for the typing delay.
+					attachMarkdownFileSuggest(this.app, text.inputEl, () => this.debouncedSave.run());
 				});
 			}
-		});
+		};
+	}
 
-		if (selectedProviderId !== "openai") {
-			definitions.push({
-				name: "OpenAI image API key",
-				desc: "Image generation still uses OpenAI gpt-image-2. Add an OpenAI key here if you use the Image button or /image command.",
-				render: (setting) => {
-					setting.addComponent((el) => {
-						return new SecretComponent(this.app, el)
-							.setValue(this.plugin.getProviderSettings("openai").apiKeySecretName)
-							.onChange(async (value) => {
-								this.plugin.getProviderSettings("openai").apiKeySecretName = value;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			});
-		}
-
-		definitions.push({
-			name: "Reasoning effort",
-			desc: "Controls OpenAI GPT-5.5 reasoning effort. Other providers ignore this setting.",
+	private templateDefinition(name: string, desc: string, options: TemplateFieldOptions): SettingDefinition {
+		return {
+			name,
+			desc,
 			render: (setting) => {
-				setting.addDropdown((dropdown) => {
-					for (const option of REASONING_EFFORT_OPTIONS) {
-						dropdown.addOption(option.value, option.label);
-					}
-
-					dropdown
-						.setValue(this.plugin.getSelectedReasoningEffort())
-						.onChange((value) => {
-							void this.runSettingAction(async () => {
-								await this.plugin.setReasoningEffort(value);
-								// The sidebar shows its own reasoning selector, which must follow this setting.
-								this.plugin.refreshOpenAskMateViews();
-							});
+				this.prepareFieldFeedback(setting);
+				let field: TextComponent | TextAreaComponent | null = null;
+				let restoreButton: ExtraButtonComponent | null = null;
+				const isDefault = (): boolean => options.getValue() === options.defaultValue;
+				const bindField = (component: TextComponent | TextAreaComponent): void => {
+					field = component;
+					this.labelControl(component.inputEl, name);
+					component.setValue(options.getValue()).onChange((value) => {
+						options.setValue(normalizeTemplateString(value, options.defaultValue));
+						if (restoreButton) {
+							this.setExtraButtonDisabled(restoreButton, isDefault());
+						}
+						this.setFieldFeedback(setting, null);
+						this.scheduleSave();
+					});
+					// An empty template is saved as the default, so the field shows what was kept once editing ends.
+					component.inputEl.addEventListener("blur", () => {
+						if (!component.getValue().trim() && options.getValue() === options.defaultValue) {
+							component.setValue(options.defaultValue);
+							this.setFieldFeedback(setting, "Empty template replaced with the default.", "info");
+						}
+					});
+				};
+				if (options.multiline) {
+					setting.addTextArea((text) => {
+						text.inputEl.rows = 8;
+						text.inputEl.addClass("askmate-settings-template-input");
+						bindField(text);
+					});
+				} else {
+					setting.addText((text) => {
+						text.setPlaceholder(options.defaultValue);
+						bindField(text);
+					});
+				}
+				setting.addExtraButton((button) => {
+					restoreButton = button;
+					this.describeExtraButton(button.setIcon("rotate-ccw"), `Restore default ${name.toLowerCase()}`);
+					this.setExtraButtonDisabled(button, isDefault());
+					button.onClick(() => {
+						void this.runSettingAction(async () => {
+							if (isDefault()) {
+								return;
+							}
+							if (!(await askMateConfirm(this.app, `Restore the default ${name.toLowerCase()}? Your current version will be replaced.`))) {
+								return;
+							}
+							field?.setValue(options.defaultValue);
+							options.setValue(options.defaultValue);
+							this.setExtraButtonDisabled(button, true);
+							await this.plugin.saveSettings();
+							this.setFieldFeedback(setting, "Restored the default.", "success");
 						});
+					});
 				});
 			}
-		});
-
-		return definitions;
-	}
-
-	private getRequestDefaultDefinitions(): SettingDefinition[] {
-		return [
-			{
-				name: "Send shortcut",
-				desc: "Choose how the composer sends messages. When Enter sends, use Shift+Enter to insert a newline.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						dropdown
-							.addOption("enter", "Enter sends")
-							.addOption("ctrl-enter", "Ctrl/Cmd+Enter sends")
-							.setValue(this.plugin.settings.sendShortcut)
-							.onChange(async (value) => {
-								this.plugin.settings.sendShortcut = normalizeSendShortcut(value);
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Translation target language",
-				desc: "Used by Translate Preserve. Persian is the default. Use a language name such as Persian, German, Brazilian Portuguese, or فارسی.",
-				render: (setting) => {
-					setting.addText((text) => {
-						text
-							.setPlaceholder(DEFAULT_TRANSLATION_TARGET_LANGUAGE)
-							.setValue(normalizeTranslationTargetLanguage(this.plugin.settings.translationTargetLanguage))
-							.onChange((value) => {
-								this.plugin.settings.translationTargetLanguage = normalizeTranslationTargetLanguage(value);
-								this.scheduleSave();
-							});
-
-						text.inputEl.addEventListener("blur", () => {
-							text.setValue(this.plugin.settings.translationTargetLanguage);
-						});
-					});
-				}
-			},
-			{
-				name: "Default output",
-				desc: "Choose whether responses stay in the sidebar, become new notes, or apply to the captured Markdown note or selection.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						dropdown
-							.addOption("chat", "Show in sidebar chat")
-							.addOption("note", "Create new note")
-							.addOption("apply", "Apply to captured note or selection")
-							.setValue(this.plugin.settings.outputMode)
-							.onChange(async (value) => {
-								this.plugin.settings.outputMode = value as OutputMode;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Detect image requests automatically",
-				desc: "When on, questions that start with a request to create an image, such as \"Draw me a cat\", generate an image instead of a text answer. When off, AskMate answers in text. The /image command and the Image button always generate images.",
-				render: (setting) => {
-					setting.addToggle((toggle) => {
-						this.labelToggle(toggle, "Detect image requests automatically");
-						toggle
-							.setValue(this.plugin.settings.autoImageIntentEnabled)
-							.onChange(async (value) => {
-								this.plugin.settings.autoImageIntentEnabled = value;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Sidebar layout",
-				desc: "Console is a keyboard-first, monospaced layout: type /help in it for commands, or /layout compact to switch. Compact keeps the dense sidebar controls. Expanded gives the composer more spacing and a taller text box.",
-				aliases: ["console", "compact", "expanded", "composer"],
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						dropdown
-							.addOption("console", "Console")
-							.addOption("compact", "Compact")
-							.addOption("expanded", "Expanded")
-							.setValue(this.plugin.settings.composerLayout)
-							.onChange(async (value) => {
-								this.plugin.settings.composerLayout = normalizeComposerLayout(value);
-								await this.plugin.saveSettings();
-								this.plugin.refreshOpenAskMateViews();
-							});
-					});
-				}
-			},
-			{
-				name: "Onboarding tips",
-				desc: "Show a small first-use tip card in the sidebar until dismissed.",
-				render: (setting) => {
-					let onboardingToggle: ToggleComponent | null = null;
-					setting
-						.addToggle((toggle) => {
-							onboardingToggle = toggle;
-							this.labelToggle(toggle, "Show onboarding tips");
-							toggle
-								.setValue(this.plugin.settings.showOnboardingTips)
-								.onChange(async (value) => {
-									this.plugin.settings.showOnboardingTips = value;
-									if (value) {
-										this.plugin.settings.onboardingTipsDismissedAt = null;
-									}
-									await this.plugin.saveSettings();
-									this.plugin.refreshOpenAskMateViews();
-								});
-						})
-						.addButton((button) => {
-							button.setButtonText("Show again").onClick(() => {
-								void this.runSettingAction(async () => {
-									this.plugin.settings.onboardingTipsDismissedAt = null;
-									this.plugin.settings.showOnboardingTips = true;
-									await this.saveUiSetting();
-									onboardingToggle?.setValue(true);
-								});
-							});
-						});
-				}
-			},
-			{
-				name: "Show request preview",
-				desc: "Shows source, context size, provider, output mode, and privacy controls in the sidebar composer.",
-				render: (setting) => {
-					setting.addToggle((toggle) => {
-						toggle
-							.setValue(this.plugin.settings.showRequestPreview)
-							.onChange(async (value) => {
-								this.plugin.settings.showRequestPreview = value;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Include note and attached context by default",
-				desc: "Controls whether new requests include the captured note and note-derived attachments. When off, the note's path and title are withheld too. You can override this per request.",
-				render: (setting) => {
-					setting.addToggle((toggle) => {
-						toggle
-							.setValue(this.plugin.settings.requestPrivacyDefaults.includeNoteContext)
-							.onChange(async (value) => {
-								this.plugin.settings.requestPrivacyDefaults.includeNoteContext = value;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Default image reference privacy",
-				desc: "Controls whether new requests include Markdown image references by default. You can override this per request.",
-				render: (setting) => {
-					setting.addToggle((toggle) => {
-						toggle
-							.setValue(this.plugin.settings.requestPrivacyDefaults.includeImageReferences)
-							.onChange(async (value) => {
-								this.plugin.settings.requestPrivacyDefaults.includeImageReferences = value;
-								await this.saveUiSetting();
-							});
-					});
-				}
-			},
-			{
-				name: "Default context budget",
-				desc: "Choose how much note context AskMate sends by default. Expanded preserves the previous full-context behavior.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						for (const option of CONTEXT_BUDGET_OPTIONS) {
-							dropdown.addOption(option.value, option.label);
-						}
-						dropdown
-							.setValue(this.plugin.settings.contextBudgetMode)
-							.onChange(async (value) => {
-								this.plugin.settings.contextBudgetMode = normalizeContextBudgetMode(value);
-								await this.saveUiSetting();
-							});
-					});
-				}
-			}
-		];
-	}
-
-	private getContextSourceDefinitions(): SettingDefinition[] {
-		return [
-			{
-				name: "Threaded chat mode",
-				desc: `Opt in to sending recent AskMate user and assistant turns as extra context for follow-up requests. The number sets how many recent turns are sent (${formatIntegerRange(THREADED_CHAT_MAX_TURNS_BOUNDS)}).`,
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Enable threaded chat mode");
-							toggle.setValue(this.plugin.settings.threadedChatEnabled).onChange(async (value) => {
-								this.plugin.settings.threadedChatEnabled = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Max turns",
-								bounds: THREADED_CHAT_MAX_TURNS_BOUNDS,
-								getValue: () => this.plugin.settings.threadedChatMaxTurns,
-								setValue: (value) => {
-									this.plugin.settings.threadedChatMaxTurns = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Default additional note paths",
-				desc: "Optional explicit multi-note context. Enter one Markdown path or wikilink per line. Sidebar preview can override this per request.",
-				render: (setting) => {
-					setting.addTextArea((text) => {
-						text.inputEl.rows = 4;
-						text.setValue(this.plugin.settings.additionalContextPaths.join("\n")).onChange((value) => {
-							this.plugin.settings.additionalContextPaths = normalizeContextPathList(value);
-							this.scheduleSave();
-						});
-					});
-				}
-			},
-			{
-				name: "Additional note character limit",
-				desc: `Hard cap across additional notes before the normal request context budget is applied (${formatIntegerRange(ADDITIONAL_CONTEXT_MAX_CHARACTERS_BOUNDS)} characters).`,
-				render: (setting) => {
-					setting.addText((text) => {
-						this.bindIntegerInput(text, {
-							label: "Max characters",
-							bounds: ADDITIONAL_CONTEXT_MAX_CHARACTERS_BOUNDS,
-							getValue: () => this.plugin.settings.additionalContextMaxCharacters,
-							setValue: (value) => {
-								this.plugin.settings.additionalContextMaxCharacters = value;
-							}
-						});
-					});
-				}
-			},
-			{
-				name: "Default folder context",
-				desc: "Explicit folder-level Markdown context. It is off by default and bounded by file and character limits.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Enable default folder context");
-							toggle.setValue(this.plugin.settings.folderContextEnabled).onChange(async (value) => {
-								this.plugin.settings.folderContextEnabled = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => {
-							text.inputEl.setAttribute("aria-label", "Default folder context path");
-							text.setPlaceholder("Folder path");
-							this.bindFolderPathInput(text, {
-								label: "Folder context path",
-								getValue: () => this.plugin.settings.folderContextPath,
-								setValue: (value) => {
-									this.plugin.settings.folderContextPath = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Folder context limits",
-				desc: `Maximum files (${formatIntegerRange(FOLDER_CONTEXT_MAX_FILES_BOUNDS)}) and characters (${formatIntegerRange(FOLDER_CONTEXT_MAX_CHARACTERS_BOUNDS)}) read from the folder before the normal request context budget is applied.`,
-				render: (setting) => {
-					setting
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Max files",
-								bounds: FOLDER_CONTEXT_MAX_FILES_BOUNDS,
-								getValue: () => this.plugin.settings.folderContextMaxFiles,
-								setValue: (value) => {
-									this.plugin.settings.folderContextMaxFiles = value;
-								}
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Max characters",
-								bounds: FOLDER_CONTEXT_MAX_CHARACTERS_BOUNDS,
-								getValue: () => this.plugin.settings.folderContextMaxCharacters,
-								setValue: (value) => {
-									this.plugin.settings.folderContextMaxCharacters = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Excalidraw summaries",
-				desc: `Extract readable text and embedded references from Excalidraw files as text context. This is not pixel-level visual analysis. The number caps characters per drawing (${formatIntegerRange(EXCALIDRAW_SUMMARY_MAX_CHARACTERS_BOUNDS)}).`,
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Include Excalidraw summaries");
-							toggle.setValue(this.plugin.settings.includeExcalidrawSummaries).onChange(async (value) => {
-								this.plugin.settings.includeExcalidrawSummaries = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Max characters",
-								bounds: EXCALIDRAW_SUMMARY_MAX_CHARACTERS_BOUNDS,
-								getValue: () => this.plugin.settings.excalidrawSummaryMaxCharacters,
-								setValue: (value) => {
-									this.plugin.settings.excalidrawSummaryMaxCharacters = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Image manifest context",
-				desc: "Include image paths, labels, extensions, file sizes, and reference lines as metadata context when image references are allowed. This does not send image pixels.",
-				render: (setting) => {
-					setting.addToggle((toggle) => {
-						toggle.setValue(this.plugin.settings.includeImageManifests).onChange(async (value) => {
-							this.plugin.settings.includeImageManifests = value;
-							await this.saveUiSetting();
-						});
-					});
-				}
-			},
-			{
-				name: "Evidence-linked answers",
-				desc: `Ask text models to cite evidence sources like [S1], then show jump-to-source actions on cited replies. The number caps how many sources are offered (${formatIntegerRange(EVIDENCE_MAX_SOURCES_BOUNDS)}).`,
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Enable evidence-linked answers");
-							toggle.setValue(this.plugin.settings.evidenceLinkedAnswersEnabled).onChange(async (value) => {
-								this.plugin.settings.evidenceLinkedAnswersEnabled = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Max sources",
-								bounds: EVIDENCE_MAX_SOURCES_BOUNDS,
-								getValue: () => this.plugin.settings.evidenceMaxSources,
-								setValue: (value) => {
-									this.plugin.settings.evidenceMaxSources = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Note-specific AskMate history",
-				desc: "First switch: store successful AskMate turns per source note. Second switch: include that history as context for future requests.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Store note-specific history");
-							toggle.setValue(this.plugin.settings.noteHistoryEnabled).onChange(async (value) => {
-								this.plugin.settings.noteHistoryEnabled = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Include note history in context");
-							toggle.setValue(this.plugin.settings.noteHistoryIncludeInContext).onChange(async (value) => {
-								this.plugin.settings.noteHistoryIncludeInContext = value;
-								await this.saveUiSetting();
-							});
-						});
-				}
-			},
-			{
-				name: "Style guide context role",
-				desc: "Pin a Markdown note as a persistent style guide context attachment.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Include style guide context");
-							toggle.setValue(this.plugin.settings.includeStyleGuideContext).onChange(async (value) => {
-								this.plugin.settings.includeStyleGuideContext = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => text.setPlaceholder("Path or wikilink").then((component) => component.inputEl.setAttribute("aria-label", "Style guide note path")).setValue(this.plugin.settings.styleGuideContextPath).onChange((value) => {
-							this.plugin.settings.styleGuideContextPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
-							this.scheduleSave();
-						}));
-				}
-			},
-			{
-				name: "Glossary context role",
-				desc: "Pin a Markdown note as a persistent glossary or terminology context attachment.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Include glossary context");
-							toggle.setValue(this.plugin.settings.includeGlossaryContext).onChange(async (value) => {
-								this.plugin.settings.includeGlossaryContext = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addText((text) => text.setPlaceholder("Path or wikilink").then((component) => component.inputEl.setAttribute("aria-label", "Glossary note path")).setValue(this.plugin.settings.glossaryContextPath).onChange((value) => {
-							this.plugin.settings.glossaryContextPath = normalizeOptionalString(value, MAX_CONTEXT_PATH_LENGTH);
-							this.scheduleSave();
-						}));
-				}
-			}
-		];
+		};
 	}
 
 	private getOutputApplyDefinitions(): SettingDefinitionItem[] {
+		const settings = this.plugin.settings;
 		return [
 			{
-				name: "Result folder",
-				desc: "Folder for notes created by AskMate.",
-				render: (setting) => {
-					setting.addText((text) => {
-						text.setPlaceholder(DEFAULT_SETTINGS.resultFolder);
-						this.bindFolderPathInput(text, {
-							label: "Result folder",
-							getValue: () => this.plugin.settings.resultFolder,
+				type: "group",
+				heading: "Result notes",
+				items: [
+					this.folderPathDefinition(
+						"Result folder",
+						"Folder for notes created by AskMate.",
+						{
+							placeholder: DEFAULT_SETTINGS.resultFolder,
+							getValue: () => settings.resultFolder,
 							setValue: (value) => {
-								this.plugin.settings.resultFolder = value;
+								settings.resultFolder = value;
 							}
-						});
-					});
-				}
+						}
+					),
+					this.toggleDefinition(
+						"smartResultPlacementEnabled",
+						"Place result notes beside the source note",
+						"Create result notes in an AskMate subfolder next to the source note instead of the result folder."
+					),
+					this.toggleDefinition(
+						"appendResultBacklinkToSource",
+						"Link result notes from the source note",
+						"Append a link to each new result note at the end of its source note."
+					),
+					this.templateDefinition(
+						"Result note template",
+						"Markdown template for text result notes. Variables include {{title}}, {{sourceLink}}, {{providerName}}, {{model}}, {{request}}, and {{response}}.",
+						{
+							defaultValue: DEFAULT_RESULT_NOTE_TEMPLATE,
+							multiline: true,
+							getValue: () => settings.resultNoteTemplate,
+							setValue: (value) => {
+								settings.resultNoteTemplate = value;
+							}
+						}
+					)
+				]
 			},
 			{
-				name: "Result note template",
-				desc: "Markdown template for text result notes. Variables include {{title}}, {{sourceLink}}, {{providerName}}, {{model}}, {{request}}, and {{response}}.",
-				render: (setting) => {
-					setting.addTextArea((text) => {
-						text.inputEl.rows = 8;
-						text.inputEl.addClass("askmate-settings-template-input");
-						text
-							.setValue(this.plugin.settings.resultNoteTemplate)
-							.onChange((value) => {
-								this.plugin.settings.resultNoteTemplate = normalizeTemplateString(value, DEFAULT_RESULT_NOTE_TEMPLATE);
-								this.scheduleSave();
-							});
-					});
-				}
+				type: "group",
+				heading: "Image output",
+				items: [
+					this.templateDefinition(
+						"Image result note template",
+						"Markdown template for generated image notes. Variables include {{imageEmbed}}, {{imagePrompt}}, {{revisedPromptSection}}, and {{planningModel}}.",
+						{
+							defaultValue: DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE,
+							multiline: true,
+							getValue: () => settings.imageResultNoteTemplate,
+							setValue: (value) => {
+								settings.imageResultNoteTemplate = value;
+							}
+						}
+					),
+					this.templateDefinition(
+						"Image folder template",
+						"Folder template for generated PNG files. Use {{resultFolder}}, {{date}}, {{noteTitle}}, or {{workflowName}}.",
+						{
+							defaultValue: DEFAULT_IMAGE_FOLDER_TEMPLATE,
+							multiline: false,
+							getValue: () => settings.imageFolderTemplate,
+							setValue: (value) => {
+								settings.imageFolderTemplate = value;
+							}
+						}
+					),
+					this.templateDefinition(
+						"Image file name template",
+						"Base file name template for generated PNG files. AskMate still adds a timestamp and resolves duplicates.",
+						{
+							defaultValue: DEFAULT_IMAGE_FILE_NAME_TEMPLATE,
+							multiline: false,
+							getValue: () => settings.imageFileNameTemplate,
+							setValue: (value) => {
+								settings.imageFileNameTemplate = value;
+							}
+						}
+					)
+				]
 			},
 			{
-				name: "Image result note template",
-				desc: "Markdown template for generated image notes. Variables include {{imageEmbed}}, {{imagePrompt}}, {{revisedPromptSection}}, and {{planningModel}}.",
-				render: (setting) => {
-					setting.addTextArea((text) => {
-						text.inputEl.rows = 8;
-						text.inputEl.addClass("askmate-settings-template-input");
-						text
-							.setValue(this.plugin.settings.imageResultNoteTemplate)
-							.onChange((value) => {
-								this.plugin.settings.imageResultNoteTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
-								this.scheduleSave();
-							});
-					});
-				}
-			},
-			{
-				name: "Image folder template",
-				desc: "Folder template for generated PNG files. Use {{resultFolder}}, {{date}}, {{noteTitle}}, or {{workflowName}}.",
-				render: (setting) => {
-					setting.addText((text) => {
-						text
-							.setPlaceholder(DEFAULT_IMAGE_FOLDER_TEMPLATE)
-							.setValue(this.plugin.settings.imageFolderTemplate)
-							.onChange((value) => {
-								this.plugin.settings.imageFolderTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FOLDER_TEMPLATE);
-								this.scheduleSave();
-							});
-					});
-				}
-			},
-			{
-				name: "Image file name template",
-				desc: "Base file name template for generated PNG files. AskMate still adds a timestamp and resolves duplicates.",
-				render: (setting) => {
-					setting.addText((text) => {
-						text
-							.setPlaceholder(DEFAULT_IMAGE_FILE_NAME_TEMPLATE)
-							.setValue(this.plugin.settings.imageFileNameTemplate)
-							.onChange((value) => {
-								this.plugin.settings.imageFileNameTemplate = normalizeTemplateString(value, DEFAULT_IMAGE_FILE_NAME_TEMPLATE);
-								this.scheduleSave();
-							});
-					});
-				}
-			},
-			{
-				name: "Default partial Apply scope",
-				desc: "Auto replaces captured selected text, otherwise appends to the captured note. Choose full-note replacement only for intentional whole-note rewrites.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						dropdown
-							.addOption("auto", "Auto")
-							.addOption("selected-block", "Selected block")
-							.addOption("heading-section", "Heading section")
-							.addOption("full-note", "Full note replacement")
-							.setValue(this.plugin.settings.partialApplyDefaultScope)
-							.onChange(async (value) => {
-								this.plugin.settings.partialApplyDefaultScope = normalizeApplyScope(value);
-								await this.plugin.saveSettings();
-							});
-					});
-				}
-			},
-			{
-				name: "Apply approval mode",
-				desc: "Controls when AskMate asks before writing generated text into notes. Auto approve skips selected-text, append, and heading-section diff previews, but still confirms full-note replacement. Full approves full-note and heading-section replacements. Manual approves every text Apply write with a diff. All modes keep truncated-context, frontmatter, captured-file, and exact-match safeguards.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => {
-						dropdown
-							.addOption("auto-approve", "Auto approve")
-							.addOption("full", "Full")
-							.addOption("manual", "Manual")
-							.setValue(this.plugin.settings.applyApprovalMode)
-							.onChange(async (value) => {
-								this.plugin.settings.applyApprovalMode = normalizeApplyApprovalMode(value, this.plugin.settings.showApplyPreview);
-								await this.plugin.saveSettings();
-							});
-					});
-				}
-			},
-			{
-				name: "Frontmatter Apply handling",
-				desc: "Controls how full-note Apply handles YAML frontmatter.",
-				render: (setting) => {
-					setting.addDropdown((dropdown) => dropdown
-						.addOption("preserve", "Preserve original frontmatter")
-						.addOption("confirm", "Confirm frontmatter changes")
-						.addOption("replace", "Replace from AI output")
-						.setValue(this.plugin.settings.frontmatterApplyPolicy)
-						.onChange(async (value) => {
-							this.plugin.settings.frontmatterApplyPolicy = normalizeFrontmatterApplyPolicy(value);
-							await this.plugin.saveSettings();
-						}));
-				}
-			},
-			{
-				name: "Smart result-note placement",
-				desc: "First switch: create result notes under an AskMate subfolder beside the source note. Second switch: append a backlink to the result note in the source note.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Place result notes beside the source note");
-							toggle.setValue(this.plugin.settings.smartResultPlacementEnabled).onChange(async (value) => {
-								this.plugin.settings.smartResultPlacementEnabled = value;
-								await this.plugin.saveSettings();
-							});
-						})
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Append result backlink to the source note");
-							toggle.setValue(this.plugin.settings.appendResultBacklinkToSource).onChange(async (value) => {
-								this.plugin.settings.appendResultBacklinkToSource = value;
-								await this.plugin.saveSettings();
-							});
-						});
-				}
+				type: "group",
+				heading: "Apply",
+				items: [
+					this.dropdownDefinition(
+						"applyApprovalMode",
+						"Apply approval mode",
+						"Controls when AskMate shows a diff before writing generated text into a note. Auto approve confirms only full-note replacement, Full also confirms heading-section replacement, and Manual confirms every write. Truncated-context, frontmatter, captured-file, and exact-match safeguards apply in every mode.",
+						{ "auto-approve": "Auto approve", full: "Full", manual: "Manual" },
+						{ aliases: ["preview", "confirm", "diff"] }
+					),
+					this.dropdownDefinition(
+						"partialApplyDefaultScope",
+						"Default partial Apply scope",
+						"Auto replaces captured selected text, otherwise appends to the captured note. Append to note never replaces text. Choose full-note replacement only for intentional whole-note rewrites.",
+						{ auto: "Auto", append: "Append to note", "selected-block": "Selected block", "heading-section": "Heading section", "full-note": "Full note replacement" }
+					),
+					this.dropdownDefinition(
+						"frontmatterApplyPolicy",
+						"Frontmatter Apply handling",
+						"Controls how full-note Apply handles YAML frontmatter.",
+						{ preserve: "Preserve original frontmatter", confirm: "Confirm frontmatter changes", replace: "Replace from AI output" }
+					)
+				]
 			},
 			{
 				type: "group",
 				heading: "Review queue",
 				items: [
-					{
-						name: "Review queue max items",
-						desc: `Limits how many items the queue keeps (${formatIntegerRange(REVIEW_QUEUE_MAX_ITEMS_BOUNDS)}). Pending items are never discarded: lowering the limit only removes older applied or dismissed items, and new items cannot be queued while the pending count is at the limit.`,
-						render: (setting) => {
-							setting.addText((text) => {
-								this.bindIntegerInput(text, {
-									label: "Max items",
-									bounds: REVIEW_QUEUE_MAX_ITEMS_BOUNDS,
-									getValue: () => this.plugin.settings.reviewQueueMaxItems,
-									setValue: (value) => {
-										this.plugin.settings.reviewQueueMaxItems = value;
-									}
-								});
-							});
+					this.integerDefinition(
+						"Review queue max items",
+						`Limits how many items the queue keeps (${formatIntegerRange(REVIEW_QUEUE_MAX_ITEMS_BOUNDS)}). Lowering it removes older applied or dismissed items; pending items are never discarded, and new items cannot be queued while the pending count is at the limit.`,
+						{
+							bounds: REVIEW_QUEUE_MAX_ITEMS_BOUNDS,
+							getValue: () => settings.reviewQueueMaxItems,
+							setValue: (value) => {
+								settings.reviewQueueMaxItems = value;
+							}
 						}
-					},
+					),
 					this.imperativePage(
 						"Pending reviews",
 						"Apply, dismiss, or inspect AI-suggested note changes waiting for review.",
-						(containerEl, refresh) => this.renderPendingReviews(containerEl, refresh)
+						(containerEl, refresh) => this.renderPendingReviews(containerEl, refresh),
+						{ displayValue: () => `${this.plugin.getPendingReviewQueueItems().length.toLocaleString("en-GB")} pending` }
 					)
 				]
 			}
@@ -1170,158 +1377,550 @@ export class AskMateSettingTab extends PluginSettingTab {
 
 	private getWorkflowAutomationDefinitions(): SettingDefinitionItem[] {
 		return [
-			this.imperativePage(
-				"Workflow sidebar",
-				"Favorite, hide, or reorder workflows in the sidebar. Built-in command palette workflows are not changed.",
-				(containerEl, refresh) => this.renderWorkflowDisplaySettings(containerEl, refresh)
-			),
 			{
-				name: "Workflow custom instructions",
-				desc: "Optional preferences added to every workflow, built-in and custom. Custom workflows can choose where they go with {{customInstructions}}; otherwise they are appended at the end.",
-				render: (setting) => {
-					setting.addTextArea((text) => {
-						text.inputEl.rows = 4;
-						text
-							.setValue(this.plugin.settings.workflowCustomInstructions)
-							.onChange((value) => {
-								this.plugin.settings.workflowCustomInstructions = normalizeOptionalString(value, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
-								this.scheduleSave();
-							});
-					});
-				}
+				type: "group",
+				heading: "Sidebar",
+				items: [
+					{
+						type: "page",
+						name: "Workflow sidebar",
+						desc: "Favorite, hide, or reorder workflows in the sidebar. Built-in command palette workflows are not changed.",
+						displayValue: () => `${this.plugin.getVisibleWorkflows().length.toLocaleString("en-GB")} of ${this.plugin.getAllWorkflows().length.toLocaleString("en-GB")} shown`,
+						items: this.getWorkflowSidebarDefinitions()
+					},
+					{
+						type: "page",
+						name: "Custom workflows",
+						desc: "Create and edit your own sidebar workflows, and export or import workflow presets.",
+						displayValue: () => pluralise(this.plugin.settings.customWorkflows.length, "workflow"),
+						items: this.getCustomWorkflowDefinitions()
+					}
+				]
 			},
-			this.imperativePage(
-				"Custom workflows",
-				"Create and edit your own sidebar workflows, and export or import workflow presets.",
-				(containerEl, refresh) => this.renderCustomWorkflows(containerEl, refresh)
-			),
-			this.imperativePage(
-				"Batch workflow runner",
-				"Run one workflow separately for each Markdown note in a folder.",
-				(containerEl, refresh) => this.renderBatchWorkflowRunner(containerEl, refresh)
-			)
+			{
+				type: "group",
+				heading: "Workflow defaults",
+				items: [
+					{
+						name: "Workflow custom instructions",
+						desc: "Optional preferences added to every workflow, built-in and custom. Custom workflows can choose where they go with {{customInstructions}}; otherwise they are appended at the end.",
+						render: (setting) => {
+							setting.addTextArea((text) => {
+								text.inputEl.rows = 4;
+								text.inputEl.addClass("askmate-settings-prompt-input");
+								this.labelControl(text.inputEl, "Workflow custom instructions");
+								text
+									.setValue(this.plugin.settings.workflowCustomInstructions)
+									.onChange((value) => {
+										this.plugin.settings.workflowCustomInstructions = normalizeOptionalString(value, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
+										this.scheduleSave();
+									});
+							});
+						}
+					},
+					{
+						name: "Translation target language",
+						desc: "Language used by Translate Preserve (default: Persian). Enter a language name such as German, Brazilian Portuguese, or فارسی.",
+						render: (setting) => {
+							setting.addText((text) => {
+								this.labelControl(text.inputEl, "Translation target language");
+								text
+									.setPlaceholder(DEFAULT_TRANSLATION_TARGET_LANGUAGE)
+									.setValue(normalizeTranslationTargetLanguage(this.plugin.settings.translationTargetLanguage))
+									.onChange((value) => {
+										this.plugin.settings.translationTargetLanguage = normalizeTranslationTargetLanguage(value);
+										this.scheduleSave();
+									});
+
+								text.inputEl.addEventListener("blur", () => {
+									text.setValue(this.plugin.settings.translationTargetLanguage);
+								});
+							});
+						}
+					}
+				]
+			},
+			{
+				type: "group",
+				heading: "Automation",
+				items: [
+					this.imperativePage(
+						"Batch workflow runner",
+						"Run one workflow separately for each Markdown note in a folder.",
+						(containerEl, refresh) => this.renderBatchWorkflowRunner(containerEl, refresh)
+					)
+				]
+			}
 		];
 	}
 
+	private getWorkflowSidebarDefinitions(): SettingDefinitionItem[] {
+		const workflows = this.plugin.getSidebarWorkflowOrderForSettings();
+		const labels = uniqueLabels(workflows.map((workflow) => workflow.name));
+		return [
+			this.noteDefinition("Drag a row by its handle, or focus a row and press Alt+Up or Alt+Down, to change the order. Favorites always appear first. Hidden built-in workflows stay available from the command palette."),
+			{
+				type: "list",
+				heading: "Sidebar order",
+				onReorder: (fromIndex, toIndex) => {
+					// Favorites re-sort to the top and row descriptions change, so the list is rebuilt from the new order.
+					this.applyWorkflowDisplayChange(this.plugin.reorderWorkflowDisplay(fromIndex, toIndex));
+				},
+				items: workflows.map((workflow, index) => this.workflowSidebarRow(workflow, labels[index] ?? workflow.name))
+			}
+		];
+	}
+
+	private workflowSidebarRow(workflow: Workflow, label: string): SettingDefinition {
+		const preference = this.plugin.getWorkflowDisplayPreference(workflow.id);
+		const customWorkflow = workflow.isCustom
+			? this.plugin.settings.customWorkflows.find((item) => item.id === workflow.id)
+			: undefined;
+		const isFavorite = Boolean(preference?.favorite);
+		const isHidden = Boolean(preference?.hidden) || Boolean(customWorkflow?.hidden);
+		return {
+			name: label,
+			desc: [workflow.isCustom ? "Custom" : "Built-in", isFavorite ? "Favorite" : null, isHidden ? "Hidden" : null]
+				.filter((part): part is string => part !== null)
+				.join(" · "),
+			render: (setting) => {
+				setting.settingEl.toggleClass("askmate-workflow-row-hidden", isHidden);
+				setting.addExtraButton((button) => {
+					this.describeExtraButton(button.setIcon("star"), isFavorite ? `Remove ${workflow.name} from favorites` : `Add ${workflow.name} to favorites`);
+					button.extraSettingsEl.setAttribute("aria-pressed", String(isFavorite));
+					button.onClick(() => {
+						this.applyWorkflowDisplayChange(this.plugin.updateWorkflowDisplayPreference(workflow.id, { favorite: !isFavorite }));
+					});
+					button.extraSettingsEl.addClass("askmate-workflow-favorite");
+					button.extraSettingsEl.toggleClass("is-active", isFavorite);
+				});
+				setting.addExtraButton((button) => {
+					this.describeExtraButton(button.setIcon(isHidden ? "eye-off" : "eye"), isHidden ? `Show ${workflow.name} in the sidebar` : `Hide ${workflow.name} from the sidebar`);
+					button.onClick(() => {
+						// Both updates mutate settings before their first await, and saves are chained, so they can start together.
+						this.applyWorkflowDisplayChange(Promise.all([
+							workflow.isCustom ? this.plugin.updateCustomWorkflow(workflow.id, { hidden: !isHidden }) : Promise.resolve(),
+							this.plugin.updateWorkflowDisplayPreference(workflow.id, { hidden: !isHidden })
+						]));
+					});
+				});
+			}
+		};
+	}
+
+	/**
+	 * Takes a change that has already mutated settings synchronously and is now saving. The list is rebuilt at once,
+	 * because Obsidian moves focus to the new row position straight after a keyboard reorder.
+	 */
+	private applyWorkflowDisplayChange(saving: Promise<unknown>): void {
+		this.update();
+		void this.runSettingAction(async () => {
+			await saving;
+		});
+	}
+
+	private getCustomWorkflowDefinitions(): SettingDefinitionItem[] {
+		const workflows = this.plugin.settings.customWorkflows;
+		const labels = uniqueLabels(workflows.map((workflow) => workflow.name));
+		return [
+			this.noteDefinition("Select a workflow to edit it. Delete a workflow from its page, or focus its row and press Delete."),
+			{
+				type: "list",
+				heading: "Your workflows",
+				emptyState: "No custom workflows yet.",
+				addItem: {
+					name: "Add workflow",
+					action: () => {
+						void this.runSettingAction(() => this.plugin.addCustomWorkflow()).then(() => this.update());
+					}
+				},
+				onDelete: (index) => {
+					void this.deleteCustomWorkflowAt(index);
+				},
+				items: workflows.map((workflow, index) => this.customWorkflowPage(workflow.id, labels[index] ?? workflow.name, workflow.description))
+			},
+			{
+				type: "group",
+				heading: "Presets",
+				items: [
+					{
+						name: "Export presets",
+						desc: "Show your custom workflows as JSON you can copy and share.",
+						render: (setting) => {
+							setting.addButton((button) => {
+								button
+									.setButtonText("Show export JSON")
+									.setDisabled(this.plugin.settings.customWorkflows.length === 0)
+									.onClick(() => {
+										new AskMateTextViewerModal(this.app, "AskMate workflow preset export", this.plugin.exportCustomWorkflowPresets()).open();
+									});
+							});
+						}
+					},
+					{
+						name: "Import presets",
+						desc: "Paste an AskMate workflow preset export, then select Import. Imported workflows are added and never replace existing ones.",
+						render: (setting) => {
+							let importJson = "";
+							let importButton: ButtonComponent | null = null;
+							this.prepareFieldFeedback(setting);
+							setting.settingEl.addClass("askmate-settings-import");
+							setting.addTextArea((text) => {
+								text.inputEl.rows = 6;
+								text.inputEl.addClass("askmate-settings-template-input");
+								this.labelControl(text.inputEl, "Preset JSON");
+								text.setPlaceholder("{\n  \"version\": 1,\n  \"source\": \"AskMate\",\n  \"workflows\": []\n}");
+								text.onChange((value) => {
+									importJson = value;
+									importButton?.setDisabled(!value.trim());
+									this.setFieldFeedback(setting, null);
+								});
+							});
+							setting.addButton((button) => {
+								importButton = button;
+								button.setButtonText("Import").setDisabled(true).onClick(async () => {
+									try {
+										const count = await this.plugin.importCustomWorkflowPresets(importJson);
+										new Notice(`AskMate imported ${pluralise(count, "custom workflow")}.`);
+										this.update();
+									} catch (error) {
+										this.setFieldFeedback(setting, this.plugin.getErrorMessage(error));
+									}
+								});
+							});
+						}
+					}
+				]
+			}
+		];
+	}
+
+	private async deleteCustomWorkflowAt(index: number): Promise<void> {
+		const workflow = this.plugin.settings.customWorkflows[index];
+		if (!workflow || !(await askMateConfirm(this.app, `Delete custom workflow "${workflow.name}"?`))) {
+			return;
+		}
+
+		await this.runSettingAction(() => this.plugin.deleteCustomWorkflow(workflow.id));
+		this.update();
+	}
+
+	// What the workflow list shows for one workflow; leaving its editor rebuilds the list only when this changed.
+	private getCustomWorkflowListSignature(workflowId: string): string {
+		const workflow = this.plugin.settings.customWorkflows.find((item) => item.id === workflowId);
+		const hiddenPreference = this.plugin.getWorkflowDisplayPreference(workflowId)?.hidden ?? false;
+		return workflow ? JSON.stringify([workflow.name, workflow.description, workflow.hidden, workflow.outputKind, hiddenPreference]) : "";
+	}
+
+	// Definitions are cached until the next update(), so everything here reads the live workflow by id.
+	private customWorkflowPage(workflowId: string, label: string, description: string): SettingDefinitionPage {
+		const signature = this.getCustomWorkflowListSignature(workflowId);
+		return this.imperativePage(
+			label,
+			description,
+			(containerEl, refresh) => this.renderCustomWorkflowEditor(containerEl, workflowId, refresh),
+			{
+				displayValue: () => {
+					const workflow = this.plugin.settings.customWorkflows.find((item) => item.id === workflowId);
+					if (!workflow) {
+						return "";
+					}
+					const kind = WORKFLOW_OUTPUT_KIND_LABELS[workflow.outputKind ?? "new-content"];
+					const isHidden = workflow.hidden || Boolean(this.plugin.getWorkflowDisplayPreference(workflowId)?.hidden);
+					return isHidden ? `Hidden · ${kind}` : kind;
+				},
+				onHide: () => {
+					if (this.getCustomWorkflowListSignature(workflowId) !== signature) {
+						this.update();
+					}
+				}
+			}
+		);
+	}
+
+	private renderCustomWorkflowEditor(containerEl: HTMLElement, workflowId: string, refresh: () => void): void {
+		const workflow = this.plugin.settings.customWorkflows.find((item) => item.id === workflowId);
+		if (!workflow) {
+			containerEl.createEl("p", { cls: "askmate-settings-note", text: "This workflow no longer exists." });
+			return;
+		}
+
+		containerEl.createEl("p", {
+			cls: "askmate-settings-note",
+			text: "Custom workflows appear in the AskMate sidebar and the command palette. Variables available in prompts: {{noteTitle}}, {{sourcePath}}, {{contextSource}}, {{selectedText}}, {{currentDate}}, {{currentDateTime}}, and {{customInstructions}}."
+		});
+
+		new SettingGroup(containerEl)
+			.setHeading("Details")
+			.addSetting((setting) => {
+				setting.setName("Name").setDesc("Also used as the command palette name.").addText((text) => {
+					this.labelControl(text.inputEl, "Name");
+					text.setValue(workflow.name);
+					this.bindCustomWorkflowField(workflow.id, text.inputEl, "name", true);
+				});
+			})
+			.addSetting((setting) => {
+				setting.setName("Short name").setDesc("Label on the sidebar workflow button, and the base of its console command.").addText((text) => {
+					this.labelControl(text.inputEl, "Short name");
+					text.setValue(workflow.shortName);
+					this.bindCustomWorkflowField(workflow.id, text.inputEl, "shortName", true);
+				});
+			})
+			.addSetting((setting) => {
+				setting.setName("Description").setDesc("Shown under the short name on the sidebar workflow button.").addText((text) => {
+					this.labelControl(text.inputEl, "Description");
+					text.setValue(workflow.description);
+					this.bindCustomWorkflowField(workflow.id, text.inputEl, "description", true);
+				});
+			})
+			.addSetting((setting) => {
+				setting.setName("Icon").setDesc("Lucide icon name, for example wand-2, lightbulb, or file-text.");
+				const preview = setting.controlEl.createSpan({ cls: "askmate-workflow-icon-preview", attr: { "aria-hidden": "true" } });
+				const showPreview = (icon: string): void => {
+					preview.empty();
+					setIcon(preview, icon.trim());
+				};
+				showPreview(workflow.icon);
+				setting.addText((text) => {
+					this.labelControl(text.inputEl, "Icon");
+					text.setValue(workflow.icon);
+					text.inputEl.addEventListener("input", () => showPreview(text.getValue()));
+					this.bindCustomWorkflowField(workflow.id, text.inputEl, "icon", true);
+				});
+			})
+			.addSetting((setting) => {
+				setting.setName("Accent").addDropdown((dropdown) => {
+					for (const accent of WORKFLOW_ACCENTS) {
+						dropdown.addOption(accent, `${accent.charAt(0).toUpperCase()}${accent.slice(1)}`);
+					}
+					this.labelControl(dropdown.selectEl, "Accent");
+					dropdown.setValue(workflow.accent).onChange((value) => {
+						void this.runSettingAction(() => this.plugin.updateCustomWorkflow(workflow.id, { accent: normalizeWorkflowAccent(value) }));
+					});
+				});
+			});
+
+		new SettingGroup(containerEl)
+			.setHeading("Prompt and output")
+			.addSetting((setting) => {
+				setting
+					.setName("Prompt")
+					.setDesc("Use outcome-first instructions. AskMate will provide the current note or selection as context.")
+					.addTextArea((text) => {
+						text.inputEl.rows = 8;
+						text.inputEl.addClass("askmate-settings-prompt-input");
+						this.labelControl(text.inputEl, "Prompt");
+						text.setValue(workflow.prompt);
+						this.bindCustomWorkflowField(workflow.id, text.inputEl, "prompt", false);
+					});
+			})
+			.addSetting((setting) => {
+				setting
+					.setName("Output kind")
+					.setDesc("Revised note: the output is a full revised version of the note and may replace it, for example in batch review. New content: summaries, analysis, or other new material that is appended or saved as a note.")
+					.addDropdown((dropdown) => {
+						this.labelControl(dropdown.selectEl, "Output kind");
+						dropdown
+							.addOption("note-edit", WORKFLOW_OUTPUT_KIND_LABELS["note-edit"])
+							.addOption("new-content", WORKFLOW_OUTPUT_KIND_LABELS["new-content"])
+							.setValue(workflow.outputKind ?? "new-content")
+							.onChange((value) => {
+								const outputKind: WorkflowOutputKind = value === "note-edit" ? "note-edit" : "new-content";
+								void this.runSettingAction(() => this.plugin.updateCustomWorkflow(workflow.id, { outputKind }));
+							});
+					});
+			})
+			.addSetting((setting) => {
+				setting
+					.setName("Result note template")
+					.setDesc("Optional per-workflow Markdown template. Leave empty to use the global result note template.")
+					.addTextArea((text) => {
+						text.inputEl.rows = 6;
+						text.inputEl.addClass("askmate-settings-template-input");
+						this.labelControl(text.inputEl, "Result note template");
+						text.setValue(workflow.resultNoteTemplate);
+						this.bindCustomWorkflowField(workflow.id, text.inputEl, "resultNoteTemplate", false, (value) => normalizeTemplateString(value, ""));
+					});
+			});
+
+		const isHidden = workflow.hidden || Boolean(this.plugin.getWorkflowDisplayPreference(workflow.id)?.hidden);
+		new SettingGroup(containerEl)
+			.setHeading("Manage")
+			.addSetting((setting) => {
+				setting
+					.setName("Hide from sidebar")
+					.setDesc("Hide this workflow from the sidebar without deleting it. Its command palette entry and hotkey keep working.")
+					.addToggle((toggle) => {
+						// The page is not redrawn after a rename, so labels name "this workflow" rather than a name that can go stale.
+						this.setupToggle(toggle, "Hide this workflow from the sidebar", isHidden, (value) => {
+							void this.runSettingAction(async () => {
+								await this.plugin.updateCustomWorkflow(workflow.id, { hidden: value });
+								await this.plugin.updateWorkflowDisplayPreference(workflow.id, { hidden: value });
+							});
+						});
+					});
+			})
+			.addSetting((setting) => {
+				setting
+					.setName("Delete workflow")
+					.setDesc("Removes this workflow, its sidebar button, and its command. This cannot be undone.")
+					.addButton((button) => {
+						this.labelControl(button.buttonEl, "Delete this workflow");
+						button.setButtonText("Delete").setDestructive().onClick(() => {
+							void this.runSettingAction(async () => {
+								const currentName = this.plugin.settings.customWorkflows.find((item) => item.id === workflow.id)?.name ?? workflow.name;
+								if (!(await askMateConfirm(this.app, `Delete custom workflow "${currentName}"?`))) {
+									return;
+								}
+								// Uncommitted edits on this page still flush on hide, but find no workflow and save nothing.
+								await this.plugin.deleteCustomWorkflow(workflow.id);
+								refresh();
+							});
+						});
+					});
+			});
+	}
+
+	// Each workflow update re-registers commands and refreshes every sidebar, so commit when editing ends, not per keystroke.
+	private bindCustomWorkflowField(
+		workflowId: string,
+		inputEl: HTMLInputElement | HTMLTextAreaElement,
+		field: CustomWorkflowTextField,
+		commitOnEnter: boolean,
+		normalize: (value: string) => string = (value) => value
+	): void {
+		this.bindCommitOnBlur(inputEl, async () => {
+			const workflow = this.plugin.settings.customWorkflows.find((item) => item.id === workflowId);
+			const value = normalize(inputEl.value);
+			if (!workflow || workflow[field] === value) {
+				return;
+			}
+			const patch: Partial<Pick<CustomWorkflow, CustomWorkflowTextField>> = {};
+			patch[field] = value;
+			await this.plugin.updateCustomWorkflow(workflowId, patch);
+		}, commitOnEnter);
+	}
+
 	private getUsageDefinitions(): SettingDefinitionItem[] {
+		const settings = this.plugin.settings;
+		const guardrailsOn = (): boolean => settings.usageGuardrailsEnabled;
 		return [
 			{
-				name: "Usage budgets and guardrails",
-				desc: "Warn or block requests before they use a large context or exceed daily or monthly token budgets.",
-				render: (setting) => {
-					setting
-						.addToggle((toggle) => {
-							this.labelToggle(toggle, "Enable usage budgets and guardrails");
-							toggle.setValue(this.plugin.settings.usageGuardrailsEnabled).onChange(async (value) => {
-								this.plugin.settings.usageGuardrailsEnabled = value;
-								await this.saveUiSetting();
-							});
-						})
-						.addDropdown((dropdown) => dropdown.then((component) => component.selectEl.setAttribute("aria-label", "Budget enforcement")).addOption("warn", "Warn").addOption("block", "Block budgets").setValue(this.plugin.settings.usageBudgetEnforcement).onChange(async (value) => {
-							this.plugin.settings.usageBudgetEnforcement = normalizeBudgetEnforcementMode(value);
-							await this.saveUiSetting();
-						}));
-				}
-			},
-			{
-				name: "Token budgets",
-				desc: `Daily (${formatIntegerRange(DAILY_TOKEN_BUDGET_BOUNDS)}) and monthly (${formatIntegerRange(MONTHLY_TOKEN_BUDGET_BOUNDS)}) token budgets. Use 0 to disable a limit. Values are estimated before sending and recorded after completion.`,
-				render: (setting) => {
-					setting
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Daily budget",
-								bounds: DAILY_TOKEN_BUDGET_BOUNDS,
-								getValue: () => this.plugin.settings.usageDailyTokenBudget,
-								setValue: (value) => {
-									this.plugin.settings.usageDailyTokenBudget = value;
-								}
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Monthly budget",
-								bounds: MONTHLY_TOKEN_BUDGET_BOUNDS,
-								getValue: () => this.plugin.settings.usageMonthlyTokenBudget,
-								setValue: (value) => {
-									this.plugin.settings.usageMonthlyTokenBudget = value;
-								}
-							});
-						});
-				}
-			},
-			{
-				name: "Per-request thresholds",
-				desc: `Warn above the warning threshold. Hard limit always blocks. Each accepts ${formatIntegerRange(PER_REQUEST_TOKEN_BOUNDS)} tokens; use 0 to disable.`,
-				render: (setting) => {
-					setting
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Warning threshold",
-								bounds: PER_REQUEST_TOKEN_BOUNDS,
-								getValue: () => this.plugin.settings.usagePerRequestWarningTokens,
-								setValue: (value) => {
-									this.plugin.settings.usagePerRequestWarningTokens = value;
-								}
-							});
-						})
-						.addText((text) => {
-							this.bindIntegerInput(text, {
-								label: "Hard limit",
-								bounds: PER_REQUEST_TOKEN_BOUNDS,
-								getValue: () => this.plugin.settings.usagePerRequestHardLimitTokens,
-								setValue: (value) => {
-									this.plugin.settings.usagePerRequestHardLimitTokens = value;
-								}
-							});
-						});
-				}
+				type: "group",
+				heading: "Guardrails",
+				items: [
+					this.toggleDefinition(
+						"usageGuardrailsEnabled",
+						"Usage budgets and guardrails",
+						"Warn or block requests before they use a large context or exceed daily or monthly token budgets."
+					),
+					this.dropdownDefinition(
+						"usageBudgetEnforcement",
+						"Budget enforcement",
+						"Choose whether going over a daily or monthly budget shows a warning or blocks the request. The per-request hard limit always blocks.",
+						{ warn: "Warn", block: "Block" },
+						{ visible: guardrailsOn }
+					),
+					this.integerDefinition(
+						"Daily token budget",
+						`Tokens per local calendar day (${formatIntegerRange(DAILY_TOKEN_BUDGET_BOUNDS)}). Use 0 for no daily limit. Values are estimated before sending and recorded after completion.`,
+						{
+							bounds: DAILY_TOKEN_BUDGET_BOUNDS,
+							getValue: () => settings.usageDailyTokenBudget,
+							setValue: (value) => {
+								settings.usageDailyTokenBudget = value;
+							}
+						},
+						{ visible: guardrailsOn }
+					),
+					this.integerDefinition(
+						"Monthly token budget",
+						`Tokens per calendar month (${formatIntegerRange(MONTHLY_TOKEN_BUDGET_BOUNDS)}). Use 0 for no monthly limit.`,
+						{
+							bounds: MONTHLY_TOKEN_BUDGET_BOUNDS,
+							getValue: () => settings.usageMonthlyTokenBudget,
+							setValue: (value) => {
+								settings.usageMonthlyTokenBudget = value;
+							}
+						},
+						{ visible: guardrailsOn }
+					),
+					this.integerDefinition(
+						"Per-request warning threshold",
+						`Warn when a request is estimated above this many input tokens (${formatIntegerRange(PER_REQUEST_TOKEN_BOUNDS)}). Use 0 to turn off.`,
+						{
+							bounds: PER_REQUEST_TOKEN_BOUNDS,
+							getValue: () => settings.usagePerRequestWarningTokens,
+							setValue: (value) => {
+								settings.usagePerRequestWarningTokens = value;
+							}
+						},
+						{ visible: guardrailsOn }
+					),
+					this.integerDefinition(
+						"Per-request hard limit",
+						`Block requests estimated above this many input tokens (${formatIntegerRange(PER_REQUEST_TOKEN_BOUNDS)}). Use 0 to turn off.`,
+						{
+							bounds: PER_REQUEST_TOKEN_BOUNDS,
+							getValue: () => settings.usagePerRequestHardLimitTokens,
+							setValue: (value) => {
+								settings.usagePerRequestHardLimitTokens = value;
+							}
+						},
+						{ visible: guardrailsOn }
+					)
+				]
 			},
 			this.imperativePage(
 				"Usage statistics",
-				"Operation counts, token charts, recent operations, and a reset control.",
-				(containerEl, refresh) => this.renderUsageStatistics(containerEl, refresh)
+				"Budgets, operation counts, token charts, recent operations, and a reset control.",
+				(containerEl, refresh) => this.renderUsageStatisticsPage(containerEl, refresh),
+				{ displayValue: () => pluralise(this.plugin.getTokenUsageRecords().length, "operation") }
 			)
 		];
 	}
 
 	private renderBatchWorkflowRunner(containerEl: HTMLElement, refresh: () => void): void {
 		const box = containerEl.createDiv({ cls: "askmate-batch-runner" });
-		const progress = box.createDiv({ cls: "askmate-batch-progress", text: this.activeBatch?.message ?? "Idle." });
-		const bar = box.createDiv({ cls: "askmate-batch-progress-bar" });
+		const progress = box.createDiv({ cls: "askmate-batch-progress", attr: { role: "status" } });
+		const bar = box.createDiv({
+			cls: "askmate-batch-progress-bar",
+			attr: { role: "progressbar", "aria-label": "Batch progress", "aria-valuemin": "0", "aria-valuemax": "100" }
+		});
 		const fill = bar.createDiv({ cls: "askmate-batch-progress-fill" });
-		fill.style.width = `${this.activeBatch?.percent ?? 0}%`;
 
-		new Setting(box)
+		const folderSetting = new Setting(box)
 			.setName("Batch folder")
-			.setDesc("Run one workflow separately for each Markdown note in this folder.")
-			.addText((text) => {
-				text.setPlaceholder("Folder path");
-				this.bindFolderPathInput(text, {
-					label: "Batch folder",
-					getValue: () => this.plugin.settings.batchWorkflowFolderPath,
-					setValue: (value) => {
-						this.plugin.settings.batchWorkflowFolderPath = value;
-					}
-				});
+			.setDesc("Run one workflow separately for each Markdown note in this folder.");
+		folderSetting.addText((text) => {
+			text.setPlaceholder("Folder path");
+			this.labelControl(text.inputEl, "Batch folder");
+			this.bindFolderPathInput(folderSetting, text, {
+				label: "Batch folder",
+				getValue: () => this.plugin.settings.batchWorkflowFolderPath,
+				setValue: (value) => {
+					this.plugin.settings.batchWorkflowFolderPath = value;
+				}
 			});
+		});
 
-		new Setting(box)
+		const workflowSetting = new Setting(box)
 			.setName("Batch workflow")
-			.setDesc(`Workflow to run, and the maximum number of notes to process (${formatIntegerRange(BATCH_WORKFLOW_MAX_FILES_BOUNDS)}).`)
+			.setDesc(`Workflow to run, and the maximum number of notes to process (${formatIntegerRange(BATCH_WORKFLOW_MAX_FILES_BOUNDS)}).`);
+		workflowSetting
 			.addDropdown((dropdown) => {
 				for (const workflow of this.plugin.getAllWorkflows()) {
 					dropdown.addOption(workflow.id, workflow.name);
 				}
-				dropdown.selectEl.setAttribute("aria-label", "Batch workflow");
+				this.labelControl(dropdown.selectEl, "Batch workflow");
 				dropdown.setValue(this.plugin.settings.batchWorkflowId).onChange((value) => {
 					this.plugin.settings.batchWorkflowId = value;
 					void this.runSettingAction(() => this.plugin.saveSettings());
 				});
 			})
 			.addText((text) => {
-				this.bindIntegerInput(text, {
-					label: "Max files",
+				this.bindIntegerInput(workflowSetting, text, {
+					label: "Max notes",
 					bounds: BATCH_WORKFLOW_MAX_FILES_BOUNDS,
 					getValue: () => this.plugin.settings.batchWorkflowMaxFiles,
 					setValue: (value) => {
@@ -1332,28 +1931,31 @@ export class AskMateSettingTab extends PluginSettingTab {
 
 		const outputSetting = new Setting(box)
 			.setName("Batch output")
-			.addDropdown((dropdown) => dropdown
-				.addOption("note", "Create result notes")
-				.addOption("review-queue", "Queue proposed note changes")
-				.setValue(this.plugin.settings.batchWorkflowOutputMode)
-				.onChange((value) => {
-					this.plugin.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(value);
-					void this.runSettingAction(() => this.plugin.saveSettings());
-				}));
+			.setDesc("Each note is a separate request to your chat provider and uses tokens.")
+			.addDropdown((dropdown) => {
+				this.labelControl(dropdown.selectEl, "Batch output");
+				dropdown
+					.addOptions(BATCH_OUTPUT_LABELS)
+					.setValue(this.plugin.settings.batchWorkflowOutputMode)
+					.onChange((value) => {
+						this.plugin.settings.batchWorkflowOutputMode = normalizeBatchWorkflowOutputMode(value);
+						void this.runSettingAction(() => this.plugin.saveSettings());
+					});
+			});
 		const runButton = new ButtonComponent(outputSetting.controlEl)
 			.setButtonText("Run batch")
-			.setDisabled(this.activeBatch !== null)
+			.setCta()
 			.onClick(() => {
 				void this.runBatch();
 			});
 		const cancelButton = new ButtonComponent(outputSetting.controlEl)
 			.setButtonText("Cancel")
-			.setDisabled(this.activeBatch === null)
 			.onClick(() => {
 				this.activeBatch?.controller.abort();
 			});
-		this.batchElements = { progress, fill, runButton, cancelButton };
+		this.batchElements = { progress, bar, fill, runButton, cancelButton };
 		this.batchRefresh = refresh;
+		this.renderBatchProgress();
 	}
 
 	private async runBatch(): Promise<void> {
@@ -1362,6 +1964,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		// The plugin confirms the run itself with the real note count, so the tab does not ask first.
 		const batch: ActiveBatchState = { controller: new AbortController(), message: "Starting batch...", percent: 0 };
 		this.activeBatch = batch;
 		this.renderBatchProgress();
@@ -1380,11 +1983,15 @@ export class AskMateSettingTab extends PluginSettingTab {
 			const counts = `${summary.completed} completed, ${summary.failed} failed${summary.queuedReviews > 0 ? `, ${summary.queuedReviews} queued for review` : ""}.`;
 			const firstFailure = summary.failures[0];
 			const failureDetail = firstFailure ? ` First failure: ${firstFailure.path}: ${firstFailure.reason}` : "";
-			new Notice(summary.stoppedReason
-				? `AskMate batch stopped: ${summary.stoppedReason} ${counts}${failureDetail}`
-				: `AskMate batch complete: ${counts}${failureDetail}`, 10000);
+			const result = summary.stoppedReason
+				? `Batch stopped: ${summary.stoppedReason} ${counts}${failureDetail}`
+				: `Batch complete: ${counts}${failureDetail}`;
+			this.lastBatchSummary = `Last run: ${result}`;
+			new Notice(`AskMate ${result.charAt(0).toLowerCase()}${result.slice(1)}`, 10000);
 		} catch (error) {
-			new Notice(this.plugin.getErrorMessage(error));
+			const message = this.plugin.getErrorMessage(error);
+			this.lastBatchSummary = `Last run failed: ${message}`;
+			new Notice(message);
 		} finally {
 			this.activeBatch = null;
 			// The batch can finish while the user is editing a field that saves on blur; commit it before the re-render drops it.
@@ -1406,8 +2013,10 @@ export class AskMateSettingTab extends PluginSettingTab {
 		}
 
 		const batch = this.activeBatch;
-		elements.progress.setText(batch?.message ?? "Idle.");
-		elements.fill.style.width = `${batch?.percent ?? 0}%`;
+		const percent = batch?.percent ?? 0;
+		elements.progress.setText(batch?.message ?? this.lastBatchSummary ?? "Idle.");
+		elements.bar.setAttribute("aria-valuenow", String(percent));
+		elements.fill.setCssProps({ "--askmate-batch-fill": `${percent}%` });
 		elements.runButton.setDisabled(batch !== null);
 		elements.cancelButton.setDisabled(batch === null);
 	}
@@ -1417,7 +2026,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 		const pending = this.plugin.getPendingReviewQueueItems();
 		queue.createEl("p", {
 			cls: "askmate-settings-note",
-			text: `${pending.length} pending AI-suggested note change${pending.length === 1 ? "" : "s"} of at most ${this.plugin.settings.reviewQueueMaxItems}.`
+			text: `${pluralise(pending.length, "pending AI-suggested note change")} (limit ${this.plugin.settings.reviewQueueMaxItems.toLocaleString("en-GB")}).`
 		});
 		if (pending.length === 0) {
 			queue.createDiv({ cls: "askmate-usage-empty", text: "No queued reviews yet." });
@@ -1428,7 +2037,8 @@ export class AskMateSettingTab extends PluginSettingTab {
 			card.createDiv({ cls: "askmate-review-item-meta", text: `${formatUsageTimestamp(item.createdAt)} · ${item.sourcePath} · ${item.workflowName ?? item.title}` });
 			card.createDiv({ cls: "askmate-review-excerpt", text: truncateLabel(item.proposedText, 360) });
 			const actions = card.createDiv({ cls: "askmate-review-item-actions" });
-			const apply = actions.createEl("button", { cls: "mod-cta", text: "Apply" });
+			// Every card repeats the same three buttons, so each name says which note it acts on.
+			const apply = actions.createEl("button", { cls: "mod-cta", text: "Apply", attr: { "aria-label": `Apply change to ${item.sourcePath}` } });
 			apply.type = "button";
 			apply.addEventListener("click", () => {
 				apply.disabled = true;
@@ -1441,7 +2051,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 					dismiss.disabled = false;
 				});
 			});
-			const dismiss = actions.createEl("button", { text: "Dismiss" });
+			const dismiss = actions.createEl("button", { text: "Dismiss", attr: { "aria-label": `Dismiss change to ${item.sourcePath}` } });
 			dismiss.type = "button";
 			dismiss.addEventListener("click", () => {
 				apply.disabled = true;
@@ -1453,301 +2063,29 @@ export class AskMateSettingTab extends PluginSettingTab {
 					dismiss.disabled = false;
 				});
 			});
-			const showProposal = actions.createEl("button", { text: "Show proposal" });
+			const showProposal = actions.createEl("button", { text: "Show proposal", attr: { "aria-label": `Show proposal for ${item.sourcePath}` } });
 			showProposal.type = "button";
 			showProposal.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate review proposal", item.proposedText).open());
 		}
 	}
 
-	private renderWorkflowDisplaySettings(containerEl: HTMLElement, refresh: () => void): void {
-		containerEl.createEl("p", {
-			cls: "askmate-settings-note",
-			text: "Favorite, hide, or reorder workflows in the sidebar. Built-in command palette workflows are not changed."
-		});
-
-		const list = containerEl.createDiv({ cls: "askmate-workflow-display-list" });
-		const workflows = this.plugin.getSidebarWorkflowOrderForSettings();
-
-		for (const workflow of workflows) {
-			const preference = this.plugin.getWorkflowDisplayPreference(workflow.id);
-			const customWorkflow = workflow.isCustom
-				? this.plugin.settings.customWorkflows.find((item) => item.id === workflow.id)
-				: null;
-			const isHidden = Boolean(preference?.hidden) || Boolean(customWorkflow?.hidden);
-			const card = list.createDiv({ cls: "askmate-workflow-display-card" });
-			card.createDiv({ cls: "askmate-workflow-display-title", text: workflow.name });
-
-			new Setting(card)
-				.setName("Favorite")
-				.addToggle((toggle) => {
-					this.labelToggle(toggle, `Favorite ${workflow.name}`);
-					toggle.setValue(Boolean(preference?.favorite)).onChange((value) => {
-						this.runSettingActionAndRender(() => this.plugin.updateWorkflowDisplayPreference(workflow.id, { favorite: value }), refresh);
-					});
-				})
-				.addButton((button) => {
-					button.buttonEl.setAttribute("aria-label", `Move ${workflow.name} up`);
-					button.setButtonText("Up").onClick(() => {
-						this.runSettingActionAndRender(() => this.plugin.moveWorkflowDisplayPreference(workflow.id, "up"), refresh);
-					});
-				})
-				.addButton((button) => {
-					button.buttonEl.setAttribute("aria-label", `Move ${workflow.name} down`);
-					button.setButtonText("Down").onClick(() => {
-						this.runSettingActionAndRender(() => this.plugin.moveWorkflowDisplayPreference(workflow.id, "down"), refresh);
-					});
-				});
-
-			new Setting(card)
-				.setName("Hide from sidebar")
-				.setDesc(workflow.isCustom ? "This only affects the sidebar workflow panel." : "Built-in command palette commands remain available.")
-				.addToggle((toggle) => {
-					this.labelToggle(toggle, `Hide ${workflow.name} from sidebar`);
-					toggle.setValue(isHidden).onChange((value) => {
-						this.runSettingActionAndRender(async () => {
-							if (workflow.isCustom) {
-								await this.plugin.updateCustomWorkflow(workflow.id, { hidden: value });
-							}
-							await this.plugin.updateWorkflowDisplayPreference(workflow.id, { hidden: value });
-						}, refresh);
-					});
-				});
-		}
-	}
-
-	private renderCustomWorkflows(containerEl: HTMLElement, refresh: () => void): void {
-		containerEl.createEl("p", {
-			cls: "askmate-settings-note",
-			text: "Custom workflows appear in the AskMate sidebar. Built-in workflows remain available from the command palette. Variables available in workflow prompts: {{noteTitle}}, {{sourcePath}}, {{contextSource}}, {{selectedText}}, {{currentDate}}, {{currentDateTime}}, and {{customInstructions}}."
-		});
-
-		let importJson = "";
-		new Setting(containerEl)
-			.setName("Workflow presets")
-			.setDesc("Export custom workflows as JSON, or paste a preset JSON export and import it. Imports append workflows and do not overwrite existing ones.")
-			.addButton((button) => {
-				button.setButtonText("Show export JSON").onClick(() => {
-					new AskMateTextViewerModal(this.app, "AskMate workflow preset export", this.plugin.exportCustomWorkflowPresets()).open();
-				});
-			})
-			.addButton((button) => {
-				button.setButtonText("Import pasted JSON").onClick(async () => {
-					try {
-						const count = await this.plugin.importCustomWorkflowPresets(importJson);
-						new Notice(`AskMate imported ${count} custom workflow${count === 1 ? "" : "s"}.`);
-						refresh();
-					} catch (error) {
-						new Notice(this.plugin.getErrorMessage(error));
-					}
-				});
-			});
-
-		new Setting(containerEl)
-			.setName("Preset JSON")
-			.setDesc("Paste an AskMate workflow preset export here before clicking Import pasted JSON.")
-			.addTextArea((text) => {
-				text.inputEl.rows = 6;
-				text.inputEl.addClass("askmate-settings-template-input");
-				text.setPlaceholder("{\n  \"version\": 1,\n  \"source\": \"AskMate\",\n  \"workflows\": []\n}");
-				text.onChange((value) => {
-					importJson = value;
-				});
-			});
-
-		new Setting(containerEl)
-			.setName("Add custom workflow")
-			.setDesc("Create a sidebar workflow you can edit below.")
-			.addButton((button) => {
-				button.setButtonText("Add workflow").onClick(() => {
-					this.runSettingActionAndRender(() => this.plugin.addCustomWorkflow(), refresh);
-				});
-			});
-
-		const list = containerEl.createDiv({ cls: "askmate-custom-workflow-list" });
-
-		if (this.plugin.settings.customWorkflows.length === 0) {
-			list.createDiv({
-				cls: "askmate-usage-empty",
-				text: "No custom workflows yet."
-			});
-			return;
-		}
-
-		for (const workflow of this.plugin.settings.customWorkflows) {
-			const card = list.createDiv({ cls: "askmate-custom-workflow-card" });
-			new Setting(card).setName(workflow.name).setHeading();
-
-			new Setting(card)
-				.setName("Name")
-				.addText((text) => {
-					text.setValue(workflow.name);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "name");
-				});
-
-			new Setting(card)
-				.setName("Short name")
-				.addText((text) => {
-					text.setValue(workflow.shortName);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "shortName");
-				});
-
-			new Setting(card)
-				.setName("Description")
-				.addText((text) => {
-					text.setValue(workflow.description);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "description");
-				});
-
-			new Setting(card)
-				.setName("Icon")
-				.setDesc("Lucide icon name, for example wand-2, lightbulb, or file-text.")
-				.addText((text) => {
-					text.setValue(workflow.icon);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "icon");
-				});
-
-			new Setting(card)
-				.setName("Accent")
-				.addDropdown((dropdown) => {
-					for (const accent of WORKFLOW_ACCENTS) {
-						dropdown.addOption(accent, accent);
-					}
-					dropdown.selectEl.setAttribute("aria-label", `Accent for ${workflow.name}`);
-					dropdown.setValue(workflow.accent).onChange((value) => {
-						void this.runSettingAction(() => this.plugin.updateCustomWorkflow(workflow.id, { accent: normalizeWorkflowAccent(value) }));
-					});
-				});
-
-			new Setting(card)
-				.setName("Prompt")
-				.setDesc("Use outcome-first instructions. AskMate will provide the current note or selection as context.")
-				.addTextArea((text) => {
-					text.inputEl.rows = 8;
-					text.setValue(workflow.prompt);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "prompt");
-				});
-
-			new Setting(card)
-				.setName("Output kind")
-				.setDesc("Revised note: the output is a full revised version of the note and may replace it, for example in batch review. New content: summaries, analysis, or other new material that is appended or saved as a note.")
-				.addDropdown((dropdown) => {
-					dropdown.selectEl.setAttribute("aria-label", `Output kind for ${workflow.name}`);
-					dropdown
-						.addOption("note-edit", "Revised note")
-						.addOption("new-content", "New content")
-						.setValue(workflow.outputKind ?? "new-content")
-						.onChange((value) => {
-							const outputKind: WorkflowOutputKind = value === "note-edit" ? "note-edit" : "new-content";
-							void this.runSettingAction(() => this.plugin.updateCustomWorkflow(workflow.id, { outputKind }));
-						});
-				});
-
-			new Setting(card)
-				.setName("Result note template")
-				.setDesc("Optional per-workflow Markdown template. Leave empty to use the global result note template.")
-				.addTextArea((text) => {
-					text.inputEl.rows = 6;
-					text.inputEl.addClass("askmate-settings-template-input");
-					text.setValue(workflow.resultNoteTemplate);
-					this.bindCustomWorkflowField(workflow.id, text.inputEl, "resultNoteTemplate", (value) => normalizeTemplateString(value, ""));
-				});
-
-			const hiddenPreference = this.plugin.getWorkflowDisplayPreference(workflow.id);
-			const isHidden = workflow.hidden || Boolean(hiddenPreference?.hidden);
-
-			new Setting(card)
-				.setName("Hidden")
-				.setDesc("Hide this workflow from the sidebar without deleting it.")
-				.addToggle((toggle) => {
-					this.labelToggle(toggle, `Hide ${workflow.name}`);
-					toggle.setValue(isHidden).onChange((value) => {
-						this.runSettingActionAndRender(async () => {
-							await this.plugin.updateCustomWorkflow(workflow.id, { hidden: value });
-							await this.plugin.updateWorkflowDisplayPreference(workflow.id, { hidden: value });
-						}, refresh);
-					});
-				})
-				.addButton((button) => {
-					button.setDestructive();
-					button.buttonEl.setAttribute("aria-label", `Delete ${workflow.name}`);
-					button.setButtonText("Delete").onClick(async () => {
-						if (!(await askMateConfirm(this.app, `Delete custom workflow "${workflow.name}"?`))) {
-							return;
-						}
-
-						this.runSettingActionAndRender(() => this.plugin.deleteCustomWorkflow(workflow.id), refresh);
-					});
-				});
-		}
-	}
-
-	// Each workflow update re-registers commands and refreshes every sidebar, so commit when editing ends, not per keystroke.
-	private bindCustomWorkflowField(
-		workflowId: string,
-		inputEl: HTMLInputElement | HTMLTextAreaElement,
-		field: CustomWorkflowTextField,
-		normalize: (value: string) => string = (value) => value
-	): void {
-		const commit = async (): Promise<void> => {
-			const workflow = this.plugin.settings.customWorkflows.find((item) => item.id === workflowId);
-			const value = normalize(inputEl.value);
-			if (!workflow || workflow[field] === value) {
-				return;
+	private renderUsageStatisticsPage(containerEl: HTMLElement, refresh: () => void): void {
+		const settings = this.plugin.settings;
+		renderUsageStatistics(containerEl, {
+			records: this.plugin.getTokenUsageRecords(),
+			summary: this.plugin.getTokenUsageSummary(),
+			budget: {
+				guardrailsEnabled: settings.usageGuardrailsEnabled,
+				enforcement: settings.usageBudgetEnforcement,
+				dailyUsed: this.plugin.getTodayTokenUsage(),
+				dailyBudget: settings.usageDailyTokenBudget,
+				monthlyUsed: this.plugin.getMonthTokenUsage(),
+				monthlyBudget: settings.usageMonthlyTokenBudget
+			},
+			onReset: () => {
+				void this.resetUsageStatistics(refresh);
 			}
-			const patch: Partial<Pick<CustomWorkflow, CustomWorkflowTextField>> = {};
-			patch[field] = value;
-			await this.plugin.updateCustomWorkflow(workflowId, patch);
-		};
-
-		if (inputEl instanceof HTMLTextAreaElement) {
-			const run = (): void => {
-				this.pendingFieldCommits.delete(inputEl);
-				void this.runSettingAction(commit);
-			};
-			inputEl.addEventListener("input", () => this.pendingFieldCommits.set(inputEl, run));
-			inputEl.addEventListener("blur", run);
-			return;
-		}
-		this.bindCommitOnBlurOrEnter(inputEl, commit);
-	}
-
-	private renderUsageStatistics(containerEl: HTMLElement, refresh: () => void): void {
-		const records = this.plugin.getTokenUsageRecords();
-		const summary = this.plugin.getTokenUsageSummary();
-
-		const statsEl = containerEl.createDiv({ cls: "askmate-usage-stats" });
-		const header = statsEl.createDiv({ cls: "askmate-usage-header" });
-		const copy = header.createDiv({ cls: "askmate-usage-copy" });
-		new Setting(copy).setName("Operation usage").setHeading();
-		copy.createEl("p", {
-			text: "Tracks AskMate API operations by provider, including text responses, image prompt planning, and image generation. Images API rows may show zero tokens."
 		});
-
-		const actions = header.createDiv({ cls: "askmate-usage-actions" });
-		const resetButton = actions.createEl("button", {
-			cls: "mod-warning",
-			text: "Reset statistics"
-		});
-		resetButton.type = "button";
-		resetButton.disabled = records.length === 0;
-		resetButton.addEventListener("click", () => {
-			void this.resetUsageStatistics(refresh);
-		});
-
-		this.renderSummaryCards(statsEl, summary);
-
-		if (records.length === 0) {
-			statsEl.createDiv({
-				cls: "askmate-usage-empty",
-				text: "No usage has been recorded yet. Ask a question or run a workflow to populate the charts."
-			});
-			return;
-		}
-
-		const chartGrid = statsEl.createDiv({ cls: "askmate-chart-grid" });
-		this.renderRecentTokenBarChart(chartGrid, records.slice(-RECENT_TOKEN_BAR_RECORD_LIMIT));
-		this.renderTokenRunChart(chartGrid, records.slice(-TOKEN_RUN_CHART_RECORD_LIMIT));
-		this.renderRecentUsageTable(statsEl, records.slice(-RECENT_TOKEN_TABLE_RECORD_LIMIT).reverse());
 	}
 
 	private async resetUsageStatistics(refresh: () => void): Promise<void> {
@@ -1762,351 +2100,5 @@ export class AskMateSettingTab extends PluginSettingTab {
 			new Notice(this.plugin.getErrorMessage(error));
 		}
 		refresh();
-	}
-
-	private renderSummaryCards(parent: HTMLElement, summary: TokenUsageSummary): void {
-		const grid = parent.createDiv({ cls: "askmate-stat-grid" });
-		this.createStatCard(grid, "Operations", formatTokenCount(summary.requests), "Recorded AskMate API operations");
-		this.createStatCard(grid, "Sent", formatTokenCount(summary.inputTokens), "Responses API input tokens");
-		this.createStatCard(grid, "Received", formatTokenCount(summary.outputTokens), "Responses API output tokens");
-		this.createStatCard(grid, "Total", formatTokenCount(summary.totalTokens), "Tracked tokens");
-		this.createStatCard(grid, "Avg operation", formatTokenCount(summary.averageTotalTokens), "Tokens per operation");
-		this.createStatCard(grid, "Avg time", formatDuration(summary.averageDurationMs), "Operation duration");
-
-		if (summary.completedOperations > 0) {
-			this.createStatCard(grid, "Completed", formatTokenCount(summary.completedOperations), "Completed operations");
-		}
-
-		if (summary.failedOperations > 0) {
-			this.createStatCard(grid, "Failed", formatTokenCount(summary.failedOperations), "Failed operations");
-		}
-
-		if (summary.abortedOperations > 0) {
-			this.createStatCard(grid, "Aborted", formatTokenCount(summary.abortedOperations), "Stopped operations");
-		}
-
-		if (summary.fallbackOperations > 0) {
-			this.createStatCard(grid, "Fallback", formatTokenCount(summary.fallbackOperations), "Operations that used fallback behavior");
-		}
-
-		if (summary.imageOperations > 0) {
-			this.createStatCard(grid, "Image ops", formatTokenCount(summary.imageOperations), "Images API generations");
-		}
-
-		if (summary.cachedInputTokens > 0) {
-			this.createStatCard(grid, "Cached", formatTokenCount(summary.cachedInputTokens), "Cached input tokens");
-		}
-
-		if (summary.reasoningOutputTokens > 0) {
-			this.createStatCard(grid, "Reasoning", formatTokenCount(summary.reasoningOutputTokens), "Reasoning output tokens");
-		}
-
-		if (summary.estimatedRecords > 0) {
-			this.createStatCard(grid, "Estimated", formatTokenCount(summary.estimatedRecords), "Operations with estimated or unavailable usage");
-		}
-
-		if (summary.lastRecord) {
-			this.createStatCard(grid, "Latest", formatUsageTimestamp(summary.lastRecord.timestamp), truncateLabel(summary.lastRecord.title, 36));
-		}
-	}
-
-	private createStatCard(parent: HTMLElement, label: string, value: string, description: string): void {
-		const card = parent.createDiv({ cls: "askmate-stat-card" });
-		card.createDiv({ cls: "askmate-stat-label", text: label });
-		card.createDiv({ cls: "askmate-stat-value", text: value });
-		card.createDiv({ cls: "askmate-stat-desc", text: description });
-	}
-
-	private renderRecentTokenBarChart(parent: HTMLElement, records: TokenUsageRecord[]): void {
-		const card = this.createChartCard(
-			parent,
-			"Recent sent vs received tokens",
-			"Stacked bars show input and output tokens for recent operations. Images API rows may be zero."
-		);
-		this.renderChartLegend(card, [
-			["Sent", "askmate-chart-legend-input"],
-			["Received", "askmate-chart-legend-output"]
-		]);
-
-		const width = 640;
-		const height = 300;
-		const margin = { top: 24, right: 20, bottom: 70, left: 62 };
-		const bottom = height - margin.bottom;
-		const plotWidth = width - margin.left - margin.right;
-		const yMax = this.getNiceChartMax(records.reduce((max, record) => Math.max(max, record.totalTokens, record.inputTokens + record.outputTokens), 1));
-		const yScale = (value: number) => bottom - (Math.max(0, value) / yMax) * (bottom - margin.top);
-		const svg = this.createChartSvg(card, width, height, "Recent token mix bar chart");
-
-		this.renderChartYAxis(svg, margin.left, margin.top, bottom, width - margin.right, yMax, yScale);
-
-		const count = Math.max(1, records.length);
-		const step = plotWidth / count;
-		const barWidth = Math.max(6, Math.min(34, step * 0.72));
-		const labelEvery = Math.max(1, Math.ceil(records.length / 8));
-		this.appendSvgLine(svg, margin.left, bottom, width - margin.right, bottom, "askmate-chart-axis-line");
-
-		records.forEach((record, index) => {
-			const x = margin.left + index * step + (step - barWidth) / 2;
-			const inputY = yScale(record.inputTokens);
-			const totalY = yScale(record.inputTokens + record.outputTokens);
-			const inputHeight = Math.max(0, bottom - inputY);
-			const outputHeight = Math.max(0, inputY - totalY);
-
-			const inputBar = this.appendSvgElement(svg, "rect", {
-				class: "askmate-chart-bar-input",
-				x,
-				y: inputY,
-				width: barWidth,
-				height: inputHeight
-			});
-			this.appendSvgTitle(inputBar, this.formatBarTooltip(record));
-
-			const outputBar = this.appendSvgElement(svg, "rect", {
-				class: "askmate-chart-bar-output",
-				x,
-				y: totalY,
-				width: barWidth,
-				height: outputHeight
-			});
-			this.appendSvgTitle(outputBar, this.formatBarTooltip(record));
-
-			if (index % labelEvery === 0 || index === records.length - 1) {
-				const label = this.appendSvgText(svg, x + barWidth / 2, bottom + 18, formatUsageTimestamp(record.timestamp), "askmate-chart-axis-label");
-				label.setAttribute("transform", `rotate(-30 ${x + barWidth / 2} ${bottom + 18})`);
-				label.setAttribute("text-anchor", "end");
-			}
-		});
-	}
-
-	private renderTokenRunChart(parent: HTMLElement, records: TokenUsageRecord[]): void {
-		type RunChartDatum = {
-			record: TokenUsageRecord;
-			date: Date;
-			totalTokens: number;
-		};
-
-		const card = this.createChartCard(
-			parent,
-			"Token run chart",
-			"Line chart of total tokens per operation over time."
-		);
-		const data = records
-			.map((record): RunChartDatum => ({
-				record,
-				date: new Date(record.timestamp),
-				totalTokens: record.totalTokens
-			}))
-			.filter((datum) => !Number.isNaN(datum.date.getTime()))
-			.sort((a, b) => a.date.getTime() - b.date.getTime());
-		const width = 640;
-		const height = 300;
-		const margin = { top: 24, right: 22, bottom: 58, left: 62 };
-		const bottom = height - margin.bottom;
-		const firstDate = data[0]?.date ?? new Date();
-		const lastDate = data[data.length - 1]?.date ?? firstDate;
-		const domainStart = firstDate.getTime() === lastDate.getTime()
-			? new Date(firstDate.getTime() - 60 * 60 * 1000)
-			: firstDate;
-		const domainEnd = firstDate.getTime() === lastDate.getTime()
-			? new Date(lastDate.getTime() + 60 * 60 * 1000)
-			: lastDate;
-		const timeSpan = Math.max(1, domainEnd.getTime() - domainStart.getTime());
-		const yMax = this.getNiceChartMax(data.reduce((max, datum) => Math.max(max, datum.totalTokens), 1));
-		const xScale = (date: Date) => margin.left + ((date.getTime() - domainStart.getTime()) / timeSpan) * (width - margin.left - margin.right);
-		const yScale = (value: number) => bottom - (Math.max(0, value) / yMax) * (bottom - margin.top);
-		const svg = this.createChartSvg(card, width, height, "Token run chart");
-		const average = data.length > 0
-			? data.reduce((sum, datum) => sum + datum.totalTokens, 0) / data.length
-			: 0;
-
-		this.renderChartYAxis(svg, margin.left, margin.top, bottom, width - margin.right, yMax, yScale);
-		this.appendSvgLine(svg, margin.left, bottom, width - margin.right, bottom, "askmate-chart-axis-line");
-		this.renderTimeAxisLabels(svg, domainStart, domainEnd, margin.left, width - margin.right, bottom);
-		this.appendSvgLine(svg, margin.left, yScale(average), width - margin.right, yScale(average), "askmate-chart-average");
-
-		if (data.length > 0) {
-			this.appendSvgElement(svg, "path", {
-				class: "askmate-chart-line",
-				d: data.map((datum, index) => `${index === 0 ? "M" : "L"}${xScale(datum.date).toFixed(2)},${yScale(datum.totalTokens).toFixed(2)}`).join(" ")
-			});
-		}
-
-		for (const datum of data) {
-			const dot = this.appendSvgElement(svg, "circle", {
-				class: "askmate-chart-dot",
-				cx: xScale(datum.date),
-				cy: yScale(datum.totalTokens),
-				r: 4
-			});
-			this.appendSvgTitle(dot, [
-				`${datum.record.title} (${formatUsageTimestamp(datum.record.timestamp)})`,
-				`Operation: ${formatOperationKind(datum.record.operationKind)}`,
-				`Status: ${formatOperationStatus(datum.record.status)}`,
-				`Total: ${formatTokenCount(datum.record.totalTokens)}`,
-				`Duration: ${formatDuration(datum.record.durationMs)}`
-			].join("\n"));
-		}
-	}
-
-	private renderRecentUsageTable(parent: HTMLElement, records: TokenUsageRecord[]): void {
-		const card = parent.createDiv({ cls: "askmate-usage-table-card" });
-		new Setting(card).setName("Recent operations").setHeading();
-		const wrapper = card.createDiv({ cls: "askmate-usage-table-wrapper" });
-		const table = wrapper.createEl("table", { cls: "askmate-usage-table" });
-		const thead = table.createEl("thead");
-		const headerRow = thead.createEl("tr");
-
-		for (const heading of ["Time", "Task", "Operation", "Status", "Provider", "Endpoint", "Output", "Model", "Sent", "Received", "Total", "Duration", "Source", "Usage"] as const) {
-			headerRow.createEl("th", { text: heading });
-		}
-
-		const tbody = table.createEl("tbody");
-
-		for (const record of records) {
-			const row = tbody.createEl("tr");
-			row.createEl("td", { text: formatUsageTimestamp(record.timestamp) });
-			row.createEl("td", { text: truncateLabel(record.title, 30) });
-			row.createEl("td", { text: formatOperationKind(record.operationKind) });
-			const statusCell = row.createEl("td", { text: formatOperationStatus(record.status) });
-			if (record.errorMessage) {
-				statusCell.setAttribute("title", record.errorMessage);
-			}
-			row.createEl("td", { text: truncateLabel(record.providerName, 20) });
-			row.createEl("td", { text: formatApiEndpoint(record.endpoint) });
-			row.createEl("td", { text: formatOutputMode(record.outputMode) });
-			row.createEl("td", { text: truncateLabel(record.model, 24) });
-			row.createEl("td", { text: formatTokenCount(record.inputTokens) });
-			row.createEl("td", { text: formatTokenCount(record.outputTokens) });
-			row.createEl("td", { text: formatTokenCount(record.totalTokens) });
-			row.createEl("td", { text: formatDuration(record.durationMs) });
-			const sourceLabel = record.sourcePath
-				? `${record.contextSource}: ${truncateLabel(record.sourcePath, 38)}`
-				: record.contextSource;
-			const sourceCell = row.createEl("td", { text: sourceLabel });
-			sourceCell.setAttribute("title", record.sourcePath || record.contextSource);
-			row.createEl("td", { text: record.estimated ? "Estimated" : "API" });
-		}
-	}
-
-	private createChartCard(parent: HTMLElement, title: string, description: string): HTMLElement {
-		const card = parent.createDiv({ cls: "askmate-chart-card" });
-		new Setting(card).setName(title).setHeading();
-		card.createEl("p", { text: description });
-		return card;
-	}
-
-	private createChartSvg(parent: HTMLElement, width: number, height: number, label: string): SVGSVGElement {
-		const svg = parent.createSvg("svg");
-		const id = `askmate-chart-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-		svg.setAttribute("class", "askmate-chart-svg");
-		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-		svg.setAttribute("role", "img");
-		svg.setAttribute("aria-labelledby", `${id}-title ${id}-desc`);
-		const title = svg.createSvg("title");
-		title.id = `${id}-title`;
-		title.textContent = label;
-		const description = svg.createSvg("desc");
-		description.id = `${id}-desc`;
-		description.textContent = `${label}. Detailed operation data is available in the recent operations table below.`;
-		return svg;
-	}
-
-	private appendSvgElement<K extends keyof SVGElementTagNameMap>(
-		parent: SVGElement,
-		tagName: K,
-		attributes: Record<string, string | number>
-	): SVGElementTagNameMap[K] {
-		const element = parent.createSvg(tagName);
-		for (const [key, value] of Object.entries(attributes)) {
-			element.setAttribute(key, String(value));
-		}
-		return element;
-	}
-
-	private appendSvgLine(parent: SVGElement, x1: number, y1: number, x2: number, y2: number, className: string): SVGLineElement {
-		return this.appendSvgElement(parent, "line", {
-			class: className,
-			x1,
-			y1,
-			x2,
-			y2
-		});
-	}
-
-	private appendSvgText(parent: SVGElement, x: number, y: number, text: string, className: string): SVGTextElement {
-		const element = this.appendSvgElement(parent, "text", {
-			class: className,
-			x,
-			y
-		});
-		element.textContent = text;
-		return element;
-	}
-
-	private appendSvgTitle(parent: SVGElement, text: string): void {
-		parent.createSvg("title").textContent = text;
-	}
-
-	private renderChartYAxis(
-		svg: SVGSVGElement,
-		x: number,
-		top: number,
-		bottom: number,
-		right: number,
-		yMax: number,
-		yScale: (value: number) => number
-	): void {
-		this.appendSvgLine(svg, x, top, x, bottom, "askmate-chart-axis-line");
-		for (let index = 0; index <= 4; index += 1) {
-			const value = Math.round((yMax / 4) * index);
-			const y = yScale(value);
-			this.appendSvgLine(svg, x - 4, y, right, y, index === 0 ? "askmate-chart-grid-line askmate-chart-grid-line-base" : "askmate-chart-grid-line");
-			const label = this.appendSvgText(svg, x - 8, y + 4, formatTokenCount(value), "askmate-chart-axis-label");
-			label.setAttribute("text-anchor", "end");
-		}
-	}
-
-	private renderTimeAxisLabels(svg: SVGSVGElement, start: Date, end: Date, left: number, right: number, bottom: number): void {
-		for (let index = 0; index <= 4; index += 1) {
-			const ratio = index / 4;
-			const x = left + (right - left) * ratio;
-			const date = new Date(start.getTime() + (end.getTime() - start.getTime()) * ratio);
-			const label = this.appendSvgText(svg, x, bottom + 22, formatUsageTimestamp(date.toISOString()), "askmate-chart-axis-label");
-			label.setAttribute("text-anchor", index === 0 ? "start" : index === 4 ? "end" : "middle");
-		}
-	}
-
-	private getNiceChartMax(value: number): number {
-		if (!Number.isFinite(value) || value <= 0) {
-			return 1;
-		}
-
-		const exponent = Math.floor(Math.log10(value));
-		const base = 10 ** exponent;
-		const normalized = value / base;
-		const niceNormalized = normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
-		return niceNormalized * base;
-	}
-
-	private formatBarTooltip(record: TokenUsageRecord): string {
-		return [
-			`${record.title} (${formatUsageTimestamp(record.timestamp)})`,
-			`Operation: ${formatOperationKind(record.operationKind)}`,
-			`Status: ${formatOperationStatus(record.status)}`,
-			`Sent: ${formatTokenCount(record.inputTokens)}`,
-			`Received: ${formatTokenCount(record.outputTokens)}`,
-			`Total: ${formatTokenCount(record.totalTokens)}`,
-			record.estimated ? "Usage is estimated or unavailable" : "Usage is from the API"
-		].join("\n");
-	}
-
-	private renderChartLegend(parent: HTMLElement, items: Array<[string, string]>): void {
-		const legend = parent.createDiv({ cls: "askmate-chart-legend" });
-
-		for (const [label, swatchClass] of items) {
-			const item = legend.createDiv({ cls: "askmate-chart-legend-item" });
-			item.createSpan({ cls: `askmate-chart-legend-swatch ${swatchClass}` });
-			item.createSpan({ text: label });
-		}
 	}
 }

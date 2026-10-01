@@ -154,12 +154,12 @@ YourVault/.obsidian/plugins/askmate/
 
 ### Quick Setup
 
-1. Open AskMate settings in Obsidian.
+1. Open AskMate settings in Obsidian and go to `Providers and models`. A `Finish setup` list at the top shows what is still missing.
 2. Choose a chat provider: OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, or Local or self-hosted.
 3. Add or select the provider API key secret.
 4. For Azure OpenAI, set the v1 base URL, for example `https://<resource>.openai.azure.com/openai/v1`, and type your Azure deployment name as the model. For Azure AI Foundry, set the inference endpoint, for example `https://<resource>.services.ai.azure.com/models`, and enter the model or deployment name. For local endpoints, set the OpenAI-compatible base URL, for example `http://localhost:11434/v1`. Remote base URLs must use `https://`; plain `http://` is accepted only for localhost and private network addresses (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `*.local`).
-5. Click `Test API`. For Azure OpenAI and Azure AI Foundry this sends a minimal text request that may use a few tokens.
-6. Click `Refresh models`, or enter a model ID manually. Azure OpenAI has no model refresh, because deployments cannot be listed with an API key.
+5. Click `Test connection`. The result appears under the button. For Azure OpenAI and Azure AI Foundry this sends a minimal text request that may use a few tokens.
+6. Click the refresh button next to `Model` (`Refresh models`), or enter a model ID manually. Azure OpenAI has no model refresh, because deployments cannot be listed with an API key.
 7. Choose your default text model.
 8. Optional: configure image prompt planning and add an OpenAI key for `gpt-image-2`.
 9. Optional: configure workflows, output templates, context budgets, send shortcut, usage budgets, and privacy defaults.
@@ -239,7 +239,9 @@ Image generation always goes to the OpenAI Images API with `gpt-image-2`, even w
 
 AskMate includes workflows for summaries, action plans, simple explanations, question drills, critiques, pros and cons, meeting notes, decision briefs, translation, quote extraction, rewriting, and more.
 
-You can also create custom workflows in settings. Custom workflows can use variables such as:
+To favorite, hide or reorder sidebar workflows, open `Workflows and automation` → `Workflow sidebar` in settings. Drag a row by its handle, or focus it and press Alt+Up or Alt+Down. Favorites always appear first.
+
+You can also create custom workflows under `Workflows and automation` → `Custom workflows` in settings. Each workflow opens in its own editor page, which also has `Delete workflow`. Custom workflows can use variables such as:
 
 ```text
 {{noteTitle}}
@@ -300,7 +302,7 @@ Keys: `Tab` or `Enter` accepts the highlighted suggestion, `↑` recalls earlier
 > Privacy-first defaults:
 >
 > - No telemetry and no AskMate server.
-> - Contacts AI providers only when you run a request, click `Test API` or `Refresh models`, or run the `Test provider connection` command. Note content is sent only with requests.
+> - Contacts AI providers only when you run a request, click `Test connection` or `Refresh models`, or run the `Test provider connection` command. Note content is sent only with requests.
 > - API keys are stored through Obsidian `SecretStorage`.
 > - Prompt inspector is local and does not contact a provider by itself.
 > - Note history, the review queue and usage statistics are stored in the plugin's `data.json` inside your vault.
@@ -311,7 +313,7 @@ AskMate talks only to the services you configure: OpenAI, Azure OpenAI, Azure AI
 
 - Requests you run (questions, workflows, batch runs, image generation). Depending on your settings and request, a request can include your prompt, selected text, the current note, workflow instructions, opted-in extra context such as other notes, folders, a style guide, a glossary, image metadata or note history, image prompt planning content, or generated image prompts. Text requests go to the chat provider you choose; image prompt planning goes to the planning provider you choose.
 - Image generation always goes to the OpenAI Images API with `gpt-image-2`, even when another chat provider is selected.
-- `Test API`, `Refresh models` and the `Test provider connection` command send your API key to the selected provider to check the connection or list models. They send no note content. For Azure OpenAI and Azure AI Foundry, the test sends a minimal text request that may use a few tokens.
+- `Test connection`, `Refresh models` and the `Test provider connection` command send your API key to the selected provider to check the connection or list models. They send no note content. For Azure OpenAI and Azure AI Foundry, the test sends a minimal text request that may use a few tokens.
 
 OpenAI text requests use the Responses API with `store: false`, so OpenAI is asked not to keep the response for later retrieval. Each provider's own retention and abuse-monitoring policies still apply.
 
@@ -327,7 +329,7 @@ Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores se
 
 The plugin's settings file, `.obsidian/plugins/askmate/data.json` in your vault, also stores:
 
-- Note history: the question and answer of successful AskMate turns per note (up to 12 turns per note by default). It is on by default. Turn it off with the first switch of `Note-specific AskMate history` in settings, or clear one note's history with `Clear note history` in the sidebar's note history view. Including that history in future requests is a separate switch and is off by default.
+- Note history: the question and answer of successful AskMate turns per note (up to 12 turns per note by default). It is on by default. Turn it off with `Store note-specific history` under `Context sources` in settings, or clear one note's history with `Clear note history` in the sidebar's note history view. Including that history in future requests is a separate switch and is off by default.
 - The review queue: pending suggestions keep the proposed text and a snapshot of the original text until you apply or dismiss them. Applied and dismissed items keep only metadata.
 - Usage statistics: per-request token counts, provider, model, title and note path, plus per-day token totals. They contain no note text. Clear them with `Reset statistics` under `Usage and guardrails` → `Usage statistics` in AskMate settings.
 
@@ -395,7 +397,7 @@ AskMate only applies selected-text output when it can safely find the original s
 
 ### My model is not listed
 
-Click `Refresh models` after adding or changing an API key. If the provider does not list the model you need, enter the model ID manually.
+Click the refresh button next to `Model` (`Refresh models`) after adding or changing an API key. If the provider does not list the model you need, enter the model ID manually.
 
 ### Image generation fails
 

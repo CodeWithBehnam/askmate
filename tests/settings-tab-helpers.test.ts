@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatIntegerRange, resolveBaseUrlInput, resolveFolderPathInput, resolveIntegerInput } from "../src/ui/settings/settingsInputs";
+import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { formatIntegerRange, readSettingControl, resolveBaseUrlInput, resolveFolderPathInput, resolveIntegerInput, uniqueLabels, writeSettingControl } from "../src/ui/settings/settingsInputs";
 
 const bounds = { min: 1, max: 200 };
 
@@ -87,5 +88,53 @@ describe("resolveBaseUrlInput", () => {
 			throw "bad url";
 		};
 		expect(resolveBaseUrlInput("x", "", throwsString)).toEqual({ kind: "invalid", message: "bad url" });
+	});
+});
+
+describe("uniqueLabels", () => {
+	test("keeps distinct labels unchanged", () => {
+		expect(uniqueLabels(["Summarise", "Translate"])).toEqual(["Summarise", "Translate"]);
+	});
+
+	test("numbers repeats so Obsidian can key each row and page by name", () => {
+		expect(uniqueLabels(["New custom workflow", "New custom workflow", "New custom workflow"])).toEqual([
+			"New custom workflow",
+			"New custom workflow (2)",
+			"New custom workflow (3)"
+		]);
+	});
+
+	test("skips a counter that another label already uses", () => {
+		expect(uniqueLabels(["Draft", "Draft (2)", "Draft"])).toEqual(["Draft", "Draft (2)", "Draft (3)"]);
+	});
+});
+
+describe("setting controls", () => {
+	const freshSettings = () => structuredClone(DEFAULT_SETTINGS);
+
+	test("reads top-level and nested settings by control key", () => {
+		const settings = freshSettings();
+		settings.requestPrivacyDefaults.includeNoteContext = false;
+		expect(readSettingControl(settings, "sendShortcut")).toBe(settings.sendShortcut);
+		expect(readSettingControl(settings, "includeNoteContext")).toBe(false);
+		expect(readSettingControl(settings, "imagePromptPlanningProviderId")).toBe(settings.providerRoles.imagePromptPlanningProviderId);
+	});
+
+	test("normalises written values instead of storing what the control sent", () => {
+		const settings = freshSettings();
+		writeSettingControl(settings, "composerLayout", "expanded");
+		expect(settings.composerLayout).toBe("expanded");
+		writeSettingControl(settings, "composerLayout", "not-a-layout");
+		expect(settings.composerLayout).toBe("compact");
+		writeSettingControl(settings, "threadedChatEnabled", "yes");
+		expect(settings.threadedChatEnabled).toBe(false);
+		writeSettingControl(settings, "includeImageReferences", true);
+		expect(settings.requestPrivacyDefaults.includeImageReferences).toBe(true);
+	});
+
+	test("fails fast on an unknown key, including object prototype names", () => {
+		const settings = freshSettings();
+		expect(() => readSettingControl(settings, "missing")).toThrow("no settings control");
+		expect(() => writeSettingControl(settings, "toString", true)).toThrow("no settings control");
 	});
 });
