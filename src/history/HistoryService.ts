@@ -14,6 +14,7 @@ import {
 	normalizeReviewQueueItems,
 	resolveApplyScope
 } from "../shared/core";
+import { getReplaceBlockReason, isOriginalSelectionNote } from "../output/applyGuards";
 import { isSameNoteText } from "../output/sectionSplice";
 
 export type HistoryServiceHost = {
@@ -85,21 +86,28 @@ export class HistoryService {
 		if (incompleteReason && normalizedScope !== "append") {
 			throw new Error(`This reply is incomplete (${incompleteReason}), so AskMate will not queue it to replace note text. Ask again, or Apply it as an append.`);
 		}
-		const selectionIdentity = normalizedScope === "selected-block" ? request.context.selectionIdentity ?? null : null;
-		if (normalizedScope === "selected-block" && (!selectionIdentity || selectionIdentity.sourcePath !== file.path)) {
+		const hiddenReason = normalizedScope === "append" ? null : getReplaceBlockReason(request.metadata.privacy, request.context.content);
+		if (hiddenReason) {
+			throw new Error(hiddenReason);
+		}
+		const requestedIdentity = normalizedScope === "selected-block" ? request.context.selectionIdentity ?? null : null;
+		if (normalizedScope === "selected-block" && (!requestedIdentity || !isOriginalSelectionNote(requestedIdentity.sourcePath, file, request.context.file))) {
 			throw new Error("Review queue requires the original selected-text identity. Select the text again, then queue the reply.");
 		}
 		if (normalizedScope === "heading-section") {
 			throw new Error("Heading-section review queueing is not safe yet. Apply to the heading directly instead.");
 		}
 		this.assertReviewQueueHasRoom(settings);
-		const currentContent = normalizedScope === "selected-block" ? "" : await this.host.readFileText(file.path);
+		// Only a full-note replacement compares against the note as it was; append and selected-block items never read it back.
+		const currentContent = normalizedScope === "full-note" ? await this.host.readFileText(file.path) : "";
+		// A rename after asking leaves the identity with the old path; the queue stores the current one.
+		const selectionIdentity = requestedIdentity ? { ...requestedIdentity, sourcePath: file.path } : null;
 		// A full-note proposal was written against the note as it was when the request was built. If the user edited the note
 		// while the model was answering, applying the proposal later would silently discard those edits.
 		if (normalizedScope === "full-note" && request.context.source === "Current note" && !isSameNoteText(request.context.content, currentContent)) {
 			throw new Error("The note changed while AskMate was answering, so this full-note suggestion was not queued. Ask again to get a suggestion for the current note.");
 		}
-		const beforeText = normalizedScope === "selected-block" ? "" : currentContent;
+		const beforeText = currentContent;
 		if (proposedText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS || beforeText.length > MAX_REVIEW_QUEUE_TEXT_CHARACTERS) {
 			throw new Error("Review queue item is too large. Apply it directly or reduce the output size.");
 		}

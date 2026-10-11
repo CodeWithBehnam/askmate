@@ -1,4 +1,6 @@
 import type { Editor, TFile } from "obsidian";
+import type { ThreadStore } from "../threads/threadModel";
+import type { VaultMention } from "../context/vaultMentions";
 
 export type OutputMode = "chat" | "note" | "apply";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
@@ -22,6 +24,7 @@ export type ContextAttachmentKind =
 	| "note_history"
 	| "additional_note"
 	| "folder_note"
+	| "vault_note"
 	| "style_guide"
 	| "glossary"
 	| "excalidraw_summary"
@@ -67,6 +70,8 @@ export interface ProviderTextResult {
 	usage: OpenAITokenUsage | null;
 	/** Set when the provider stopped early (token limit, safety filter, refusal). Null or absent means complete. */
 	incompleteReason?: string | null;
+	/** Set when a stream broke after text had arrived; the partial text is kept and marked incomplete. */
+	streamError?: string;
 }
 
 export interface AskMateHttpResponse<T> {
@@ -100,11 +105,15 @@ export interface AskMateSettings {
 	imageFileNameTemplate: string;
 	translationTargetLanguage: string;
 	workflowCustomInstructions: string;
+	globalInstructions: string;
+	folderInstructions: FolderInstruction[];
+	editorContextMenuEnabled: boolean;
 	composerLayout: ComposerLayout;
 	// Set once the one-time move to the Console layout has run, so a later switch back to another layout is kept.
 	consoleLayoutMigrated: boolean;
 	showOnboardingTips: boolean;
 	autoImageIntentEnabled: boolean;
+	streamResponses: boolean;
 	onboardingTipsDismissedAt: string | null;
 	threadedChatEnabled: boolean;
 	threadedChatMaxTurns: number;
@@ -129,6 +138,8 @@ export interface AskMateSettings {
 	noteHistoryIncludeInContext: boolean;
 	noteHistoryMaxTurnsPerNote: number;
 	noteHistoryStore: NoteHistoryStore;
+	saveConversations: boolean;
+	threadStore: ThreadStore;
 	includeStyleGuideContext: boolean;
 	styleGuideContextPath: string;
 	styleGuideMaxCharacters: number;
@@ -231,12 +242,19 @@ export interface AskRequestMetadata {
 	createdAt: string;
 }
 
+export interface FolderInstruction {
+	folder: string;
+	instructions: string;
+}
+
 export interface AskRequest {
 	context: NoteContext;
 	question: string;
 	title: string;
 	metadata: AskRequestMetadata;
 	evidenceSources: EvidenceSource[];
+	/** Global and matching folder instructions resolved when the request was built; empty when none apply. */
+	customInstructions?: string;
 }
 
 export interface BuildRequestOptions {
@@ -253,6 +271,8 @@ export interface BuildRequestOptions {
 	threadMessages?: ChatMessage[];
 	includeThreadHistory?: boolean;
 	additionalContextPaths?: string[];
+	/** @links, @backlinks, @tag: and @recent, resolved against the captured note when the request is built. */
+	vaultMentions?: VaultMention[];
 	folderContext?: FolderContextOptions;
 	forceFileContext?: boolean;
 	contextScope?: ContextScope;
@@ -267,6 +287,7 @@ export interface RunRequestOptions {
 	contextBudgetMode?: ContextBudgetMode;
 	outputMode?: OutputMode;
 	additionalContextPaths?: string[];
+	vaultMentions?: VaultMention[];
 	folderContext?: FolderContextOptions;
 	threadMessages?: ChatMessage[];
 	includeThreadHistory?: boolean;
@@ -329,6 +350,13 @@ export interface PromptContextResult {
 export interface ChatMessage {
 	role: ChatRole;
 	text: string;
+	/** Optional details kept for saved threads and export; request building only reads role and text. */
+	createdAt?: string;
+	model?: string;
+	sourcePath?: string;
+	incomplete?: boolean;
+	image?: boolean;
+	imagePath?: string;
 }
 
 export interface TextAskMateResult {
@@ -336,6 +364,8 @@ export interface TextAskMateResult {
 	model: string;
 	text: string;
 	incompleteReason?: string | null;
+	/** Set when a stream broke after text had arrived; the partial text is kept and marked incomplete. */
+	streamError?: string;
 }
 
 export interface ImageAskMateResult {

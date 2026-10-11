@@ -1,6 +1,22 @@
-import { Component, ItemView, Keymap, MarkdownRenderer, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, MarkdownView, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import { getStatusBarOverlap } from "./statusBarOverlap";
+import { describeIncompleteReason, lastAnswerFromMessages, SAVED_INCOMPLETE_REASON, type LastAnswer } from "./answerActions";
+import { copyAnswerText, insertAnswerAtRememberedCursor } from "./answerShell";
+import { ModelPickerModal } from "./ModelPickerModal";
+import {
+	applyChatSelection,
+	buildModelChoices,
+	formatModelListing,
+	formatProviderListing,
+	listProviderModels,
+	providerNeedsApiKey,
+	resolveModelQuery,
+	resolveProviderQuery,
+	type ModelChoice
+} from "./modelSwitch";
+import { TEXT_PROVIDER_IDS, TEXT_PROVIDER_LABELS } from "../../settings/constants";
+import type { TextProviderId } from "../../shared/types";
 import {
 	ActiveRun,
 	ASKMATE_VIEW_TYPE,
@@ -41,7 +57,10 @@ import {
 	RunRequestOptions,
 	Workflow
 } from "../../shared/core";
-import { AskMatePromptInspectorModal, AskMateTextViewerModal, AskMateNoteHistoryModal, askMatePrompt } from "../modals/modals";
+import { AskMatePromptInspectorModal, AskMateTextViewerModal, AskMateNoteHistoryModal, askMateConfirm, askMatePrompt } from "../modals/modals";
+import { AskMateThreadPickerModal } from "../modals/threadModals";
+import { conversationToMarkdown, hasExportableTurns, resolveExportTitle } from "../../output/conversationExport";
+import { createThread, createThreadId, fromSavedMessages, toSavedMessages, renameThreadValue, withThreadMessages, type SavedThread } from "../../threads/threadModel";
 import { classifyImagePreviewSource, describeDataImage, extractImageEmbedTargets, sanitizeModelMarkdown } from "./renderSafety";
 import {
 	buildConsoleCommands,
@@ -70,6 +89,8 @@ const CONSOLE_ACTION_LABELS: Record<string, string> = {
 	"Apply to heading": "heading",
 	"Retry request": "retry",
 	"Edit": "edit",
+	"Copy": "copy",
+	"Insert at cursor": "cursor",
 	"Show image prompt": "prompt",
 	"New image note": "note",
 	"Insert image": "insert"
@@ -89,6 +110,10 @@ export class AskMateView extends ItemView {
 	private nextRunId = 0;
 	private isClosed = false;
 	private messages: ChatMessage[] = [];
+	/** Identity and title of the conversation shown in the sidebar; its messages live in `messages`. */
+	private threadMeta: SavedThread = this.createFreshThread();
+	/** Generated images are saved to the vault later, so the path is read from the result when a snapshot is taken. */
+	private readonly generatedImages = new WeakMap<ChatMessage, { savedImagePath: string | null }>();
 	private shouldFollowMessages = true;
 	private readonly autoScrollThresholdPx = 48;
 	private rootEl: HTMLElement | null = null;
@@ -131,6 +156,8 @@ export class AskMateView extends ItemView {
 	private consoleStatusEl: HTMLElement | null = null;
 	private consoleStatusSegmentsEl: HTMLElement | null = null;
 	private consoleModeButton: HTMLButtonElement | null = null;
+	private consoleModelButton: HTMLButtonElement | null = null;
+	private lastAnswer: LastAnswer | null = null;
 	private consoleStopButton: HTMLButtonElement | null = null;
 	private consoleCompletion: { from: number; to: number; items: ConsoleCompletion[]; index: number; navigated: boolean } | null = null;
 	/** Unique per view, so two open AskMate sidebars never share listbox or option ids. */
@@ -163,8 +190,9 @@ export class AskMateView extends ItemView {
 		this.applyComposerLayoutClass();
 		this.isClosed = false;
 		this.activeRun = null;
-		// Keep DOM and logical transcript aligned: reopening rebuilds an empty message pane.
+		// Keep DOM and logical transcript aligned: reopening rebuilds the message pane from the saved thread, if any.
 		this.messages = [];
+		this.threadMeta = this.createFreshThread();
 		this.outputButtons = {};
 		this.workflowButtons = [];
 		this.modelEl = null;
@@ -207,6 +235,7 @@ export class AskMateView extends ItemView {
 		this.renderWorkflowGrid(container);
 		this.renderComposer(container);
 		this.refreshConsoleStatus();
+		this.restoreActiveThread();
 
 		const refreshContext = (): void => {
 			this.plugin.rememberActiveMarkdownContext();
@@ -466,6 +495,18 @@ export class AskMateView extends ItemView {
 		historyButton.addEventListener("click", () => {
 			void this.showNoteHistory();
 		});
+		const newThreadButton = this.createActionButton(headerLeft, "message-square-plus", "New conversation", "askmate-context-button askmate-new-thread-button");
+		newThreadButton.addEventListener("click", () => {
+			this.runUiTask(this.startNewThread());
+		});
+		const threadsButton = this.createActionButton(headerLeft, "messages-square", "Saved conversations", "askmate-context-button askmate-threads-button");
+		threadsButton.addEventListener("click", () => {
+			this.openThreadSwitcher();
+		});
+		const exportButton = this.createActionButton(headerLeft, "download", "Export conversation to note", "askmate-context-button askmate-export-button");
+		exportButton.addEventListener("click", () => {
+			this.runUiTask(this.exportConversation(""));
+		});
 		void this.updateContextLabel();
 		this.modelEl = header.createDiv({ cls: "askmate-model-chip askmate-composer-model" });
 		this.updateModelLabel();
@@ -553,10 +594,13 @@ export class AskMateView extends ItemView {
 		}
 
 		this.messages = [];
+		this.lastAnswer = null;
 		this.releaseAllMarkdownComponents();
 		this.messagesEl.empty();
 		this.shouldFollowMessages = true;
 		this.addMessage("system", "Chat cleared.");
+		this.queueThreadSave();
+		void this.plugin.threads.flush();
 	}
 
 	private renderRequestPreview(parent: HTMLElement): void {
@@ -642,7 +686,7 @@ export class AskMateView extends ItemView {
 				"data-askmate-preview-control": "true"
 			}
 		});
-		notes.id = "askmate-additional-note-paths";
+		notes.id = `${this.consoleIdPrefix}-additional-notes`;
 		notesLabel.htmlFor = notes.id;
 		notes.value = this.additionalContextPaths.join("\n");
 		notes.addEventListener("input", () => {
@@ -744,8 +788,7 @@ export class AskMateView extends ItemView {
 		}
 
 		const raw = this.questionEl?.value.trim() || "Preview request";
-		const command = this.parseComposerCommand(raw);
-		const options = this.getRequestDraftOptions(command.forceImage);
+		const { options, ...command } = this.resolveDraftRequest(raw);
 		const previewKey = this.getRequestPreviewKey(command.question, command.forceImage, options);
 		if (previewKey === this.lastRequestPreviewKey) {
 			return;
@@ -854,6 +897,10 @@ export class AskMateView extends ItemView {
 		}
 
 		this.renderReasoningSelector(controls);
+		const modelButton = this.createActionButton(controls, "cpu", "Switch model or provider", "askmate-workflow-toggle askmate-model-switch");
+		modelButton.addEventListener("click", () => {
+			this.openModelPicker();
+		});
 		this.refreshOutputToggle();
 	}
 
@@ -1009,6 +1056,7 @@ export class AskMateView extends ItemView {
 		this.isClosed = true;
 		this.statusBarObserver?.disconnect();
 		this.statusBarObserver = null;
+		const wasRunning = this.activeRun !== null;
 		this.stopActiveRun(false);
 		this.activeRun = null;
 		this.activeActionKeys.clear();
@@ -1016,6 +1064,8 @@ export class AskMateView extends ItemView {
 			window.clearTimeout(this.requestPreviewTimer);
 			this.requestPreviewTimer = null;
 		}
+		this.queueThreadSave(wasRunning);
+		void this.plugin.threads.flush();
 		this.messages = [];
 		for (const timer of this.pendingMarkdownTimerIds) {
 			window.clearTimeout(timer);
@@ -1197,6 +1247,34 @@ export class AskMateView extends ItemView {
 		});
 	}
 
+	/**
+	 * Question and options the composer would send for `raw`. In console layout this follows the same parsing as
+	 * sending (`parseConsoleInput` plus @mentions); other inputs, and anything that fails to parse, keep the plain reading.
+	 */
+	private resolveDraftRequest(raw: string): { question: string; forceImage: boolean; options: RunRequestOptions } {
+		if (this.isConsoleLayout()) {
+			try {
+				const action = parseConsoleInput(raw, this.consoleCommands);
+				if (action.kind === "ask") {
+					const draft = this.getRequestDraftOptions(false);
+					const withMode = action.outputMode ? { ...draft, outputMode: action.outputMode } : draft;
+					const options = this.applyConsoleMentions(action.literal ? { ...withMode, intentKind: "freeform_text" } : withMode, action.mentions);
+					return { question: action.question, forceImage: false, options };
+				}
+				if (action.kind === "image") {
+					return { question: action.prompt, forceImage: true, options: this.applyConsoleMentions(this.getRequestDraftOptions(true), action.mentions) };
+				}
+				if (action.kind === "inspect") {
+					return { question: action.question || "Preview request", forceImage: false, options: this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions) };
+				}
+			} catch {
+				// A bad mention is reported when the user sends; the preview just falls back to the plain reading.
+			}
+		}
+		const command = this.parseComposerCommand(raw);
+		return { ...command, options: this.getRequestDraftOptions(command.forceImage) };
+	}
+
 	private parseComposerCommand(value: string): { question: string; forceImage: boolean } {
 		const imageMatch = value.match(/^\/(?:image|img)\b\s*/i);
 
@@ -1315,6 +1393,9 @@ export class AskMateView extends ItemView {
 				|| request.metadata.autoImage
 				|| request.metadata.modelCapability === "image";
 			const sourcePath = request.context.file?.path ?? "";
+			if (sourcePath) {
+				userTurn.sourcePath = sourcePath;
+			}
 			if (request.metadata.privacy.includeImageReferences && this.shouldShowContextImagePreviews(question)) {
 				this.renderContextImagePreviews(request);
 			}
@@ -1355,9 +1436,18 @@ export class AskMateView extends ItemView {
 					if (result.incompleteReason) {
 						this.renderIncompleteWarning(activeAssistantMessage, result.incompleteReason);
 					}
-					this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model);
-					this.messages.push({ role: "assistant", text: responseText });
+					this.lastAnswer = { text: responseText, incompleteReason: result.incompleteReason ?? null };
+					this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model, this.lastAnswer);
+					this.messages.push({
+						role: "assistant",
+						text: responseText,
+						createdAt: new Date().toISOString(),
+						model: result.model,
+						...(sourcePath ? { sourcePath } : {}),
+						...(result.incompleteReason ? { incomplete: true } : {})
+					});
 					answered = true;
+					this.queueThreadSave();
 				}
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 				if (!this.isRunActive(run)) {
@@ -1385,8 +1475,18 @@ export class AskMateView extends ItemView {
 			if (!this.isClosed) {
 				this.renderGeneratedImage(activeAssistantMessage.body, result);
 				this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
-				this.messages.push({ role: "assistant", text: `Generated image with ${result.model}.` });
+				const imageTurn: ChatMessage = {
+					role: "assistant",
+					text: `Generated image with ${result.model}.`,
+					createdAt: new Date().toISOString(),
+					model: result.model,
+					image: true,
+					...(sourcePath ? { sourcePath } : {})
+				};
+				this.messages.push(imageTurn);
+				this.generatedImages.set(imageTurn, result.image);
 				answered = true;
+				this.queueThreadSave();
 			}
 			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
 			if (!this.isRunActive(run)) {
@@ -1466,13 +1566,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private renderIncompleteWarning(message: MessageElements, reason: string): void {
-		const normalized = reason.toLowerCase();
-		const explanation = /max_tokens|max_output_tokens|length|token/.test(normalized)
-			? "the provider stopped at its output token limit"
-			: /refusal|content_filter|safety|blocked|recitation|prohibited/.test(normalized)
-				? "the provider refused or filtered part of the answer"
-				: `the provider reported "${reason}"`;
-		this.renderMessageWarning(message, `This reply may be incomplete: ${explanation}. Review it before applying it to a note.`);
+		this.renderMessageWarning(message, `This reply may be incomplete: ${describeIncompleteReason(reason)}. Review it before applying it to a note.`);
 	}
 
 	private renderMessageWarning(message: MessageElements, text: string): void {
@@ -1494,7 +1588,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private addMessage(role: ChatRole, text: string, editableText?: string, historyText?: string): ChatMessage {
-		const chatMessage: ChatMessage = { role, text: historyText ?? text };
+		const chatMessage: ChatMessage = { role, text: historyText ?? text, createdAt: new Date().toISOString() };
 		this.messages.push(chatMessage);
 		const message = this.createMessageEl(role, text, false);
 
@@ -1650,15 +1744,25 @@ export class AskMateView extends ItemView {
 		};
 	}
 
+	/** Copy and Insert need only the raw reply, so restored thread messages get them too. */
+	private renderAnswerActions(parent: HTMLElement, answer: LastAnswer): void {
+		this.createMessageAction(parent, "copy", "Copy", () => copyAnswerText(answer.text));
+		this.createMessageAction(parent, "text-cursor-input", "Insert at cursor", () => {
+			insertAnswerAtRememberedCursor(this.app.workspace.getActiveViewOfType(MarkdownView), this.plugin.getLastOpenMarkdownView(), answer);
+		});
+	}
+
 	private renderAssistantMessageActions(
 		parent: HTMLElement,
 		evidenceParent: HTMLElement,
 		request: AskRequest,
 		getText: () => string,
-		model: string
+		model: string,
+		answer: LastAnswer
 	): void {
 		parent.empty();
 		evidenceParent.empty();
+		this.renderAnswerActions(parent, answer);
 		this.createMessageAction(parent, "file-text", "Show reply text", () => {
 			this.showText(getText(), "AskMate reply");
 		});
@@ -1672,7 +1776,7 @@ export class AskMateView extends ItemView {
 				const button = evidenceParent.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
 				button.type = "button";
 				button.addEventListener("click", () => {
-					void this.plugin.openEvidenceSource(citation.source);
+					this.runUiTask(this.plugin.openEvidenceSource(citation.source));
 				});
 			}
 		}
@@ -1830,6 +1934,21 @@ export class AskMateView extends ItemView {
 		}
 
 		new AskMateTextViewerModal(this.app, title, value).open();
+	}
+
+	/**
+	 * Only the Console layout understands @selection; elsewhere a selection is already the default scope, so the
+	 * text is skipped there rather than sent to the model as a literal word.
+	 */
+	focusComposer(consoleText: string): void {
+		if (!this.questionEl) {
+			return;
+		}
+		const prefix = this.isConsoleLayout() && !this.questionEl.value.includes(consoleText.trim()) ? consoleText : "";
+		this.questionEl.value = `${prefix}${this.questionEl.value}`;
+		this.questionEl.focus();
+		const caret = prefix.length > 0 ? prefix.length : this.questionEl.value.length;
+		this.questionEl.setSelectionRange(caret, caret);
 	}
 
 	private useTextInComposer(text: string): void {
@@ -2083,7 +2202,8 @@ export class AskMateView extends ItemView {
 		try {
 			const raw = questionOverride?.trim() || this.questionEl.value.trim() || "Preview request";
 			const command = this.parseComposerCommand(raw);
-			const inspection = await this.plugin.inspectFinalPrompt(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", optionsOverride ?? {
+			const draft = optionsOverride || !this.isConsoleLayout() ? undefined : this.resolveDraftRequest(raw);
+			const inspection = await this.plugin.inspectFinalPrompt(draft?.question ?? command.question, (draft?.forceImage ?? command.forceImage) ? "AskMate Image" : "AskMate Answer", optionsOverride ?? draft?.options ?? {
 				forceImage: command.forceImage,
 				privacy: this.privacyOptions,
 				contextBudgetMode: this.contextBudgetMode,
@@ -2096,6 +2216,176 @@ export class AskMateView extends ItemView {
 		} catch (error) {
 			new Notice(this.plugin.getErrorMessage(error));
 		}
+	}
+
+	private createFreshThread(): SavedThread {
+		const now = new Date();
+		return createThread(createThreadId(now, Math.random()), now);
+	}
+
+	/**
+	 * Plain-data snapshot of the sidebar conversation; also refreshes the remembered title. While a request runs, its
+	 * question is still the last message, so it is left out: saving it would restore a question with no answer.
+	 */
+	private snapshotThread(dropPendingQuestion = this.activeRun !== null): SavedThread {
+		for (const message of this.messages) {
+			const image = this.generatedImages.get(message);
+			if (image?.savedImagePath) {
+				message.imagePath = image.savedImagePath;
+			}
+		}
+		const last = this.messages[this.messages.length - 1];
+		const settled = dropPendingQuestion && last?.role === "user" ? this.messages.slice(0, -1) : this.messages;
+		const now = new Date();
+		const snapshot = withThreadMessages(this.threadMeta, toSavedMessages(settled, now.toISOString()), now);
+		this.threadMeta = { ...snapshot, messages: [] };
+		return snapshot;
+	}
+
+	private queueThreadSave(dropPendingQuestion?: boolean): void {
+		this.plugin.threads.scheduleSave(this.snapshotThread(dropPendingQuestion));
+	}
+
+	private async saveThreadNow(): Promise<void> {
+		this.queueThreadSave();
+		await this.plugin.threads.flush();
+	}
+
+	private restoreActiveThread(): void {
+		const saved = this.plugin.threads.getActiveThread();
+		if (saved) {
+			this.showThread(saved);
+		}
+	}
+
+	private showThread(saved: SavedThread): void {
+		this.threadMeta = { ...saved, messages: [] };
+		this.messages = fromSavedMessages(saved.messages);
+		this.releaseAllMarkdownComponents();
+		this.messagesEl.empty();
+		this.shouldFollowMessages = true;
+		for (const message of this.messages) {
+			if (message.role === "user") {
+				const user = this.createMessageEl("user", message.text, false);
+				this.createMessageAction(user.actions, "pencil", "Edit", () => {
+					this.useTextInComposer(message.text);
+				});
+				continue;
+			}
+			const assistant = this.createMessageEl("assistant", "", true);
+			const markdown = message.image && message.imagePath ? `${message.text}\n\n![[${message.imagePath}]]` : message.text;
+			this.renderMarkdownNow(assistant.body, markdown, message.sourcePath ?? "");
+			if (message.incomplete) {
+				this.renderMessageWarning(assistant, "This reply may be incomplete. Review it before applying it to a note.");
+			}
+			if (!message.image) {
+				this.renderAnswerActions(assistant.actions, { text: message.text, incompleteReason: message.incomplete ? SAVED_INCOMPLETE_REASON : null });
+			}
+		}
+		this.lastAnswer = lastAnswerFromMessages(this.messages);
+		this.scrollMessagesToBottom();
+	}
+
+	private assertNoActiveRequest(action: string): void {
+		if (this.activeRun || this.activeActionKeys.size > 0) {
+			throw new Error(`Stop the current request before ${action}.`);
+		}
+	}
+
+	private async startNewThread(): Promise<void> {
+		this.assertNoActiveRequest("starting a new conversation");
+		await this.saveThreadNow();
+		// A request may have started while the save was being written.
+		this.assertNoActiveRequest("starting a new conversation");
+		this.threadMeta = this.createFreshThread();
+		this.messages = [];
+		this.lastAnswer = null;
+		this.releaseAllMarkdownComponents();
+		this.messagesEl.empty();
+		this.shouldFollowMessages = true;
+		await this.plugin.threads.markActive(null);
+		this.printConsoleOutput(this.plugin.threads.isEnabled()
+			? "Started a new conversation. The previous one is saved; use /threads to switch back."
+			: "Started a new conversation. Saving conversations is off, so the previous one was not kept.");
+	}
+
+	private openThreadSwitcher(purpose: "switch" | "delete" = "switch"): void {
+		const threads = this.plugin.threads.listThreads();
+		if (threads.length === 0) {
+			new Notice(this.plugin.threads.isEnabled()
+				? "No saved conversations yet. Ask a question first."
+				: "Saving conversations is off. Turn on Save conversations in AskMate settings to keep threads.");
+			return;
+		}
+		new AskMateThreadPickerModal(this.app, threads, this.threadMeta.id, purpose, (thread) => {
+			this.runUiTask(purpose === "delete" ? this.deleteSavedThread(thread) : this.switchToThread(thread.id));
+		}).open();
+	}
+
+	private async switchToThread(id: string): Promise<void> {
+		if (id === this.threadMeta.id) {
+			return;
+		}
+		this.assertNoActiveRequest("switching conversations");
+		await this.saveThreadNow();
+		// A request may have started while the save was being written.
+		this.assertNoActiveRequest("switching conversations");
+		const target = this.plugin.threads.getThread(id);
+		if (!target) {
+			throw new Error("That conversation is no longer saved.");
+		}
+		this.showThread(target);
+		await this.plugin.threads.markActive(target.id);
+		this.printConsoleOutput(`Switched to "${target.title}".`);
+	}
+
+	private async renameActiveThread(title: string): Promise<void> {
+		this.threadMeta = renameThreadValue(this.threadMeta, title);
+		const snapshot = this.snapshotThread();
+		this.printConsoleOutput(snapshot.messages.length > 0 ? `Renamed to "${snapshot.title}".` : `Title set to "${snapshot.title}". It is saved with the first question.`);
+		await this.saveThreadNow();
+	}
+
+	private async deleteSavedThread(thread: SavedThread): Promise<void> {
+		if (!(await askMateConfirm(this.app, `Delete the saved conversation "${thread.title}"? This cannot be undone.`))) {
+			return;
+		}
+		const isCurrent = thread.id === this.threadMeta.id;
+		if (isCurrent) {
+			this.assertNoActiveRequest("deleting this conversation");
+		}
+		await this.plugin.threads.remove(thread.id);
+		if (isCurrent) {
+			this.threadMeta = this.createFreshThread();
+			this.messages = [];
+			this.lastAnswer = null;
+			this.releaseAllMarkdownComponents();
+			this.messagesEl.empty();
+		}
+		this.printConsoleOutput(`Deleted "${thread.title}".`);
+	}
+
+	/** Writes the sidebar conversation to a note in the result folder and opens it. */
+	async exportConversation(requestedTitle: string): Promise<void> {
+		this.snapshotThread();
+		if (!hasExportableTurns(this.messages)) {
+			new Notice("There is no conversation to export yet.");
+			return;
+		}
+		const ref = this.plugin.getSelectedProviderModelRef();
+		const lastModel = [...this.messages].reverse().find((message) => message.role === "assistant" && message.model)?.model;
+		const now = new Date();
+		const title = resolveExportTitle(requestedTitle || (this.threadMeta.autoTitle ? "" : this.threadMeta.title), this.messages);
+		const markdown = conversationToMarkdown(this.messages, {
+			title,
+			exportedAt: now.toISOString(),
+			exportedAtLabel: now.toLocaleString(),
+			providerName: ref.providerName,
+			model: lastModel ?? ref.model
+		});
+		const file = await this.plugin.createConversationNote(title, markdown);
+		new Notice(`Exported conversation to ${file.path}`);
+		await this.app.workspace.getLeaf("tab").openFile(file);
 	}
 
 	private async showNoteHistory(): Promise<void> {
@@ -2207,6 +2497,12 @@ export class AskMateView extends ItemView {
 			this.runUiTask(this.selectOutputMode(order[(current + 1) % order.length]));
 		});
 		this.consoleStatusSegmentsEl = this.consoleStatusEl.createDiv({ cls: "askmate-console-status-segments" });
+		this.consoleModelButton = document.createElement("button");
+		this.consoleModelButton.type = "button";
+		this.consoleModelButton.className = "askmate-console-segment is-model";
+		this.consoleModelButton.addEventListener("click", () => {
+			this.openModelPicker();
+		});
 		this.consoleStopButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-stop", text: "stop" });
 		this.consoleStopButton.type = "button";
 		this.consoleStopButton.hidden = true;
@@ -2237,6 +2533,15 @@ export class AskMateView extends ItemView {
 					this.consoleModeButton.setAttribute("aria-label", segment.title);
 					this.consoleModeButton.disabled = Boolean(this.activeRun);
 				}
+				continue;
+			}
+			if (segment.kind === "model" && this.consoleModelButton) {
+				// Moved rather than recreated, for the same reason as the mode button.
+				this.consoleModelButton.setText(segment.text);
+				this.consoleModelButton.setAttribute("title", `${segment.title}. Click to switch.`);
+				this.consoleModelButton.setAttribute("aria-label", `${segment.title}. Click to switch model or provider.`);
+				this.consoleModelButton.disabled = Boolean(this.activeRun);
+				this.consoleStatusSegmentsEl.appendChild(this.consoleModelButton);
 				continue;
 			}
 			const span = this.consoleStatusSegmentsEl.createSpan({ cls: `askmate-console-segment is-${segment.kind}`, text: segment.text });
@@ -2325,7 +2630,13 @@ export class AskMateView extends ItemView {
 			return;
 		}
 		const value = this.questionEl.value;
-		const result = getConsoleCompletions(value, this.questionEl.selectionStart ?? value.length, this.consoleCommands);
+		const providerId = this.plugin.getChatProviderId();
+		const result = getConsoleCompletions(value, this.questionEl.selectionStart ?? value.length, this.consoleCommands, {
+			models: listProviderModels(providerId, this.plugin.settings),
+			providers: TEXT_PROVIDER_IDS.map((id) => ({ id, label: TEXT_PROVIDER_LABELS[id] })),
+			// Scanning every note's tags is only worth it while a tag mention is being typed.
+			vaultTags: value.includes("@tag:") ? this.plugin.getVaultTags() : []
+		});
 		if (result.items.length === 0) {
 			this.closeConsoleCompletions();
 			return;
@@ -2416,7 +2727,8 @@ export class AskMateView extends ItemView {
 			...options,
 			additionalContextPaths: normalizeContextPathList([...(options.additionalContextPaths ?? this.additionalContextPaths), ...mentions.notes]),
 			folderContext: mentions.folder === null ? baseFolder : { ...baseFolder, enabled: true, path: folderPath },
-			contextScope: mentions.scope
+			contextScope: mentions.scope,
+			vaultMentions: mentions.vault
 		};
 	}
 
@@ -2449,6 +2761,73 @@ export class AskMateView extends ItemView {
 		if (echo) {
 			this.echoConsoleCommand(raw);
 		}
+	}
+
+	getLastAnswer(): LastAnswer | null {
+		return this.lastAnswer;
+	}
+
+	private openModelPicker(): void {
+		if (this.activeRun) {
+			new Notice("Wait for the current AskMate request to finish, or stop it first.");
+			return;
+		}
+		const ref = this.plugin.getChatProviderModelRef();
+		const choices = buildModelChoices(this.plugin.settings, ref.providerId);
+		new ModelPickerModal(this.app, choices, ref, (choice: ModelChoice) => {
+			this.runUiTask(this.switchChatModel(choice.providerId, choice.model));
+		}).open();
+	}
+
+	/** Saves the choice, then lets every open view recheck reasoning support and its status line. */
+	private async switchChatModel(providerId: TextProviderId, model?: string): Promise<void> {
+		if (this.activeRun) {
+			throw new Error("Wait for the current request to finish, or press Esc to stop it, before switching model.");
+		}
+		applyChatSelection(this.plugin.settings, providerId, model);
+		await this.plugin.saveSettings();
+		this.plugin.refreshOpenAskMateViews();
+		const ref = this.plugin.getChatProviderModelRef();
+		this.addMessage("system", `Model: ${ref.providerName} / ${ref.model || "(none selected)"}`);
+		if (providerNeedsApiKey(providerId, this.plugin.settings)) {
+			this.addMessage("system", `${ref.providerName} has no API key configured. Add one in AskMate settings before sending.`);
+		}
+	}
+
+	private async runModelCommand(query: string): Promise<void> {
+		const ref = this.plugin.getChatProviderModelRef();
+		const available = listProviderModels(ref.providerId, this.plugin.settings);
+		if (!query.trim()) {
+			this.printConsoleOutput(formatModelListing(ref.providerName, ref.model, available));
+			return;
+		}
+		const resolution = resolveModelQuery(query, available);
+		if (resolution.kind === "ambiguous") {
+			this.printConsoleOutput(`"${query.trim()}" matches several models: ${resolution.candidates.join(", ")}. Type more of the name.`, "error");
+			return;
+		}
+		if (resolution.kind === "unknown") {
+			this.printConsoleOutput(`No ${ref.providerName} model matches "${resolution.query}". Type /model to list models, or /model ${resolution.query}! to use it anyway.`, "error");
+			return;
+		}
+		await this.switchChatModel(ref.providerId, resolution.model);
+	}
+
+	private async runProviderCommand(query: string): Promise<void> {
+		if (!query.trim()) {
+			this.printConsoleOutput(formatProviderListing(this.plugin.getChatProviderId(), this.plugin.settings));
+			return;
+		}
+		const match = resolveProviderQuery(query);
+		if (match.kind === "none") {
+			this.printConsoleOutput(`Unknown provider "${query.trim()}". Type /provider to list them.`, "error");
+			return;
+		}
+		if (match.kind === "ambiguous") {
+			this.printConsoleOutput(`"${query.trim()}" matches several providers: ${match.candidates.join(", ")}. Type more of the name.`, "error");
+			return;
+		}
+		await this.switchChatModel(match.value);
 	}
 
 	private async switchLayout(layout: ComposerLayout): Promise<void> {
@@ -2497,6 +2876,14 @@ export class AskMateView extends ItemView {
 				this.printConsoleOutput(`Reasoning effort: ${this.plugin.getSelectedReasoningEffort()}.${supported ? "" : " The selected model does not use reasoning effort."}`);
 				return;
 			}
+			case "model":
+				this.commitConsoleCommand(raw);
+				await this.runModelCommand(action.query);
+				return;
+			case "provider":
+				this.commitConsoleCommand(raw);
+				await this.runProviderCommand(action.query);
+				return;
 			case "layout":
 				await this.switchLayout(action.layout);
 				this.commitConsoleCommand(raw, false);
@@ -2517,6 +2904,27 @@ export class AskMateView extends ItemView {
 			case "history":
 				this.commitConsoleCommand(raw);
 				await this.showNoteHistory();
+				return;
+			case "export":
+				this.commitConsoleCommand(raw);
+				await this.exportConversation(action.title);
+				return;
+			case "newThread":
+				this.assertNoActiveRequest("starting a new conversation");
+				this.commitConsoleCommand(raw, false);
+				await this.startNewThread();
+				return;
+			case "threads":
+				this.commitConsoleCommand(raw);
+				this.openThreadSwitcher();
+				return;
+			case "renameThread":
+				this.commitConsoleCommand(raw);
+				await this.renameActiveThread(action.title);
+				return;
+			case "deleteThread":
+				this.commitConsoleCommand(raw);
+				this.openThreadSwitcher("delete");
 				return;
 			case "ask": {
 				const draft = this.getRequestDraftOptions(false);
@@ -2571,7 +2979,9 @@ export class AskMateView extends ItemView {
 			`context   ${metadata.privacy.includeNoteContext
 				? `${metadata.promptContextCharacters.toLocaleString()}${metadata.contextTruncated ? ` of ${metadata.contextCharacters.toLocaleString()}` : ""} characters, ${metadata.contextBudgetMode} budget`
 				: "note text withheld by privacy settings"}`,
+			`rules     ${request.customInstructions ? `custom instructions applied (${request.customInstructions.length.toLocaleString()} characters)` : "no custom instructions"}`,
 			`attached  ${metadata.contextAttachmentSources.length > 0 ? metadata.contextAttachmentSources.join(", ") : "nothing else"}`,
+			...this.plugin.describeLastVaultMentions(),
 			`privacy   note text ${metadata.privacy.includeNoteContext ? "on" : "off"}, image links ${metadata.privacy.includeImageReferences ? "on" : "off"}`,
 			...inspection.blockers.map((blocker) => `blocked   ${blocker}`),
 			...inspection.warnings.map((warning) => `warning   ${warning}`)

@@ -5,7 +5,8 @@ import {
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
-import { completeChatCompletionsText, fetchModelList } from "./common";
+import { completeChatCompletionsStreaming } from "./chat-completions-stream";
+import { fetchModelList } from "./common";
 import type { ProviderRuntime } from "./types";
 
 export async function completeOpenAICompatibleText(
@@ -13,7 +14,8 @@ export async function completeOpenAICompatibleText(
 	providerRef: ProviderModelRef,
 	instructions: string,
 	input: string,
-	abortSignal?: AbortSignal
+	abortSignal?: AbortSignal,
+	onDelta?: (delta: string) => void
 ): Promise<ProviderTextResult> {
 	const apiKey = await runtime.getProviderApiKey("openai-compatible");
 	const headers: Record<string, string> = {
@@ -24,11 +26,14 @@ export async function completeOpenAICompatibleText(
 		headers.Authorization = `Bearer ${apiKey}`;
 	}
 
-	return await completeChatCompletionsText(runtime, {
+	return await completeChatCompletionsStreaming(runtime, {
 		providerRef,
 		instructions,
 		input,
 		abortSignal,
+		onDelta,
+		// Local servers differ on stream_options; strict ones reject unknown fields with a 400 that is never retried.
+		includeUsage: false,
 		baseUrl: getOpenAICompatibleBaseUrl(runtime),
 		headers
 	});

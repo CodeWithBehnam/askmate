@@ -1,6 +1,7 @@
 import { Editor, TFile } from "obsidian";
 import type {
 	ApiEndpoint,
+	AskMateHttpResponse,
 	AskMateResult,
 	AskMateSettings,
 	AskRequest,
@@ -35,14 +36,16 @@ import {
 } from "../shared/core";
 import {
 	completeProviderTextRequest,
+	describeProviderErrorBody,
 	extractOpenAIRefusal,
 	extractOpenAIText,
 	formatProviderHttpError,
 	getProviderTextEndpoint,
 	requestOpenAIImageGeneration,
-	requestOpenAIResponses
+	requestOpenAIResponses,
+	streamOpenAIResponses
 } from "../providers";
-import type { ProviderRuntime } from "../providers";
+import type { OpenAIStreamResult, ProviderRuntime } from "../providers";
 import {
 	buildEvidenceSources,
 	buildImagePrompt,
@@ -54,6 +57,7 @@ import {
 	extractPlannedImagePrompt,
 	formatEvidenceSources
 } from "./requestBuilders";
+import { formatCustomInstructions, resolveCustomInstructions } from "../settings/customInstructions";
 import { truncateAtCodePoint } from "./promptSafety";
 
 export type RequestRunnerHost = {
@@ -171,8 +175,10 @@ export class RequestRunner {
 			? buildEvidenceSources(settings, contextWithAttachments)
 			: [];
 
+		const customInstructions = formatCustomInstructions(resolveCustomInstructions(settings, context.file?.path));
 		const request: AskRequest = {
 			context: contextWithAttachments,
+			customInstructions,
 			question: requestQuestion,
 			title,
 			evidenceSources,
@@ -246,7 +252,7 @@ export class RequestRunner {
 					model,
 					capability: "text"
 				},
-				buildTextInstructions(),
+				buildTextInstructions(request.customInstructions),
 				buildPrompt(request),
 				"text_response",
 				options.abortSignal,
@@ -263,7 +269,7 @@ export class RequestRunner {
 	}
 
 	/**
-	 * Obsidian's requestUrl cannot stream a response body, so the answer arrives in one piece and onDelta fires once.
+	 * Streams when the runtime offers streamSse; otherwise the answer arrives in one piece and onDelta fires once.
 	 * The name is kept because the plugin exposes it.
 	 */
 	async streamOpenAI(
@@ -295,7 +301,7 @@ export class RequestRunner {
 				model,
 				capability: "text"
 			},
-			buildTextInstructions(),
+			buildTextInstructions(request.customInstructions),
 			buildPrompt(request),
 			"text_response",
 			abortSignal,
@@ -327,6 +333,11 @@ export class RequestRunner {
 
 		const endpoint: ApiEndpoint = "responses";
 		const startedAt = new Date();
+		let deliveredDeltas = false;
+		const trackedOnDelta = (delta: string): void => {
+			deliveredDeltas = true;
+			onDelta(delta);
+		};
 		let answer = "";
 		let usage: OpenAITokenUsage | null = null;
 		let usageRecorded = false;
@@ -350,19 +361,36 @@ export class RequestRunner {
 		};
 
 		try {
-			const response = await requestOpenAIResponses(this.host.getProviderRuntime(), {
+			const runtime = this.host.getProviderRuntime();
+			const params = {
 				apiKey,
 				model: providerRef.model,
 				instructions,
 				input,
 				reasoningEffort: request.metadata.reasoningEffort,
-				abortSignal,
-			});
+				abortSignal
+			};
+			// Planning output is never shown, so only visible replies are streamed.
+			const streamed: OpenAIStreamResult = isPlanning
+				? { kind: "unavailable" }
+				: await streamOpenAIResponses(runtime, { ...params, onDelta: trackedOnDelta });
+			let streamError: string | undefined;
+			let response: AskMateHttpResponse<OpenAIResponseBody>;
+
+			if (streamed.kind === "body") {
+				response = { status: 200, ok: true, body: streamed.body, text: "" };
+				streamError = streamed.streamError;
+			} else if (streamed.kind === "buffered") {
+				response = streamed.response;
+			} else {
+				response = await requestOpenAIResponses(runtime, params);
+			}
+
 			const body = response.body;
 			usage = body?.usage ?? null;
 
 			if (!response.ok) {
-				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
+				const message = formatProviderHttpError("OpenAI", response.status, describeProviderErrorBody(response, [apiKey]));
 				await record("failed", message);
 				throw new Error(message);
 			}
@@ -370,9 +398,11 @@ export class RequestRunner {
 			this.host.throwIfAborted(abortSignal);
 			const outcome = readOpenAIResponseText(body);
 			answer = outcome.text;
-			onDelta(answer);
+			if (!deliveredDeltas) {
+				onDelta(answer);
+			}
 			if (!isPlanning) {
-				await record("completed");
+				await record(streamError ? "failed" : "completed", streamError);
 				this.host.throwIfAborted(abortSignal);
 			}
 			return {
@@ -380,7 +410,8 @@ export class RequestRunner {
 				model: providerRef.model,
 				endpoint,
 				usage,
-				incompleteReason: outcome.incompleteReason
+				incompleteReason: outcome.incompleteReason,
+				...(streamError ? { streamError } : {})
 			};
 		} catch (error) {
 			if (!usageRecorded) {
@@ -405,9 +436,22 @@ export class RequestRunner {
 		let usage: OpenAITokenUsage | null = null;
 		let endpoint: ApiEndpoint = getProviderTextEndpoint(providerRef.providerId);
 		let usageRecorded = false;
+		let deliveredDeltas = false;
+		const trackedOnDelta = (delta: string): void => {
+			deliveredDeltas = true;
+			onDelta(delta);
+		};
 
 		try {
-			const result = await completeProviderTextRequest(this.host.getProviderRuntime(), providerRef, instructions, input, abortSignal);
+			// Only visible replies stream; image prompt planning is consumed internally.
+			const result = await completeProviderTextRequest(
+				this.host.getProviderRuntime(),
+				providerRef,
+				instructions,
+				input,
+				abortSignal,
+				operationKind === "text_response" ? trackedOnDelta : undefined
+			);
 			answer = result.text;
 			usage = result.usage;
 			endpoint = result.endpoint;
@@ -420,7 +464,9 @@ export class RequestRunner {
 					: `${providerRef.providerName} returned a response, but no text output was found.`);
 			}
 
-			onDelta(answer);
+			if (!deliveredDeltas) {
+				onDelta(answer);
+			}
 			if (operationKind !== "image_prompt_planning") {
 				await this.host.recordOperationUsage({
 					request,
@@ -428,13 +474,14 @@ export class RequestRunner {
 					providerName: providerRef.providerName,
 					operationKind,
 					endpoint,
-					status: "completed",
+					status: result.streamError ? "failed" : "completed",
 					model: providerRef.model,
 					instructions,
 					input,
 					responseText: answer,
 					usage,
-					startedAt
+					startedAt,
+					errorMessage: result.streamError
 				});
 				usageRecorded = true;
 				this.host.throwIfAborted(abortSignal);
@@ -526,7 +573,7 @@ export class RequestRunner {
 			usage = readImageGenerationUsage(body);
 
 			if (!response.ok) {
-				const message = formatProviderHttpError("OpenAI", response.status, body?.error?.message ?? "");
+				const message = formatProviderHttpError("OpenAI", response.status, describeProviderErrorBody(response, [apiKey]));
 				await record("failed", message);
 				throw new Error(message);
 			}

@@ -385,3 +385,59 @@ describe("context image preview helpers", () => {
 		expect(describeDataImage("data:image/svg+xml;base64,AAAA")).toBe("Inline image (svg)");
 	});
 });
+
+describe("sanitizeModelMarkdown: audit regressions", () => {
+	const img = "<img src=\"https://e.com/x.png\">";
+
+	test("a backslash before < inside a raw HTML block does not hide a tag", () => {
+		expect(sanitizeModelMarkdown(`<div>\\${img}</div>`)).toContain("&lt;img");
+		expect(sanitizeModelMarkdown("<p>\\<iframe src=\"https://e.com\"></p>")).toContain("&lt;iframe");
+		expect(sanitizeModelMarkdown(`<div>\nx\n\\${img}\n</div>`)).toContain("&lt;img");
+	});
+
+	test("backticks after a single-line HTML block do not protect a tag", () => {
+		for (const opener of ["<!-- c -->", "<?x ?>", "<!DOCTYPE x>", "<![CDATA[ x ]]>"]) {
+			expect(sanitizeModelMarkdown(`${opener} \`${img}\``)).toContain("&lt;img");
+		}
+	});
+
+	test("CSS escapes and character references in style cannot hide url(", () => {
+		const styles = [
+			"background:\\75 rl(https://e.com/x)",
+			"background:ur\\6c(https://e.com/x)",
+			"background:u&#114;l(https://e.com/x)",
+			"background:&#117;rl(https://e.com/x)",
+			"background:url&#40;//e.com)",
+			"background:url\\28 //e.com)"
+		];
+		for (const style of styles) {
+			expect(sanitizeModelMarkdown(`<div style="${style}">x</div>`)).toContain("&lt;div");
+		}
+		expect(sanitizeModelMarkdown("<div style=background:\\75 rl(//e.com)>x</div>")).toContain("&lt;div");
+		expect(sanitizeModelMarkdown("<div style=\"color: red\">x</div>")).toBe("<div style=\"color: red\">x</div>");
+	});
+
+	test("a malformed tag containing a backtick does not desynchronise code spans", () => {
+		expect(sanitizeModelMarkdown(`Look <a ! \`> \`${img}\``)).toContain("&lt;img");
+		expect(sanitizeModelMarkdown(`Look <!-- \` > \`${img}\``)).toContain("&lt;img");
+	});
+
+	test("mermaid image URLs without a double slash are neutralised", () => {
+		for (const url of ["http:/e.com/x.png", "https:e.com/x.png"]) {
+			const fence = `\`\`\`mermaid\nflowchart LR\nA@{ img: "${url}", label: "x" }\n\`\`\``;
+			expect(sanitizeModelMarkdown(fence).startsWith("```text")).toBe(true);
+		}
+	});
+});
+
+describe("sanitizeModelMarkdown: partial streamed replies", () => {
+	test("an unclosed plugin code fence is already relabelled while streaming", () => {
+		expect(sanitizeModelMarkdown("Run this:\n```dataviewjs\ndv.paragraph(1)")).toBe("Run this:\n```text\ndv.paragraph(1)");
+	});
+
+	test("a remote image cut off mid-destination is not rendered as an image", () => {
+		const partial = sanitizeModelMarkdown("![x](https://evil.test/a.png");
+		expect(partial).not.toContain("![x](https://evil.test/a.png");
+		expect(sanitizeModelMarkdown("![x](https://evil.test/a.png)")).not.toBe("![x](https://evil.test/a.png)");
+	});
+});

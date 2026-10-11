@@ -76,7 +76,7 @@ const forbidden: Array<[RegExp, string]> = [
 	[/\beval\s*\(|new Function\s*\(/, "dynamic code evaluation"],
 	[/(?<![.\w])fetch\s*\(/, "fetch (use Obsidian requestUrl)"],
 	[/console\.log\s*\(/, "console.log"],
-	[/navigator\.clipboard/, "direct clipboard access"],
+	[/navigator\.clipboard\.read(?:Text)?\b/, "clipboard read"],
 	[/getMarkdownFiles\s*\(/, "vault-wide Markdown enumeration"]
 ];
 for (const [path, contents] of sources) {

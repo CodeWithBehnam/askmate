@@ -24,8 +24,12 @@ const CREATE_REQUEST = new RegExp(
 // cannot be bypassed by backtracking over "a" or "me".
 const DRAW_VERB = "(?:draw|paint)";
 const DRAW_OBJECT_BLOCK = `(?!(?:on|from|up|out|upon|in|into|attention|conclusions?|comparisons?|parallels?|distinctions?|lines?|inferences?|insights?|lessons?|connections?|diagrams?|charts?|graphs?|tables?|flowcharts?|mind|mindmaps?|timelines?|outlines?|plans?|lists?|summary|summaries|mermaid|ascii|${DEFINITE_WORDS})\\b)`;
+// Modifiers sit between the determiner and the noun ("a pie chart", "a sequence diagram of login", "a UML class diagram"),
+// so a text-diagram noun within the first few words also marks the request as text work.
+const TEXT_DIAGRAM_NOUN = "(?:diagrams?|charts?|graphs?|tables?|flowcharts?|mindmaps?|timelines?)";
+const DRAW_TEXT_DIAGRAM_BLOCK = `(?!(?:[a-z0-9-]+\\s+){0,2}${TEXT_DIAGRAM_NOUN}\\b)`;
 const DRAW_REQUEST = new RegExp(
-	`^${POLITE_PREFIX}${DRAW_VERB}\\s+(?=(${RECIPIENT}${INDEFINITE_DETERMINER}))\\1${DRAW_OBJECT_BLOCK}[a-z0-9]`
+	`^${POLITE_PREFIX}${DRAW_VERB}\\s+(?=(${RECIPIENT}${INDEFINITE_DETERMINER}))\\1${DRAW_OBJECT_BLOCK}${DRAW_TEXT_DIAGRAM_BLOCK}[a-z0-9]`
 );
 
 const EXPLICIT_IMAGE_COMMAND = /^\/(?:image|img)\b/;

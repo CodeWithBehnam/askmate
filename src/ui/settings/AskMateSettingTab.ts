@@ -54,6 +54,7 @@ import {
 	type WorkflowOutputKind
 } from "../../shared/core";
 import { AskMateTextViewerModal, askMateConfirm } from "../modals/modals";
+import { renderInstructionsPage } from "./instructionsPage";
 import { attachFolderSuggest, attachMarkdownFileSuggest, isPathSuggestOpen } from "./pathSuggest";
 import {
 	formatIntegerRange,
@@ -72,6 +73,7 @@ import {
 	summarizeContextSources,
 	summarizeOutputApply,
 	summarizeProviderSetup,
+	summarizeInstructions,
 	summarizeRequestDefaults,
 	summarizeUsageGuardrails,
 	summarizeWorkflows
@@ -408,6 +410,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 	// Page summaries are functions, so the entries show current values each time a page is left and the list redraws.
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		const settings = this.plugin.settings;
+		const folderRuleDraft = settings.folderInstructions.map((rule) => ({ ...rule }));
 		return [
 			{
 				type: "page",
@@ -445,6 +448,12 @@ export class AskMateSettingTab extends PluginSettingTab {
 				displayValue: () => summarizeWorkflows(settings),
 				items: this.getWorkflowAutomationDefinitions()
 			},
+			this.imperativePage(
+				"Instructions",
+				"Tell AskMate how to answer you for every request, with optional rules for specific folders.",
+				(containerEl, refresh) => renderInstructionsPage(this.app, settings, folderRuleDraft, containerEl, refresh, () => this.scheduleSave()),
+				{ displayValue: () => summarizeInstructions(settings) }
+			),
 			{
 				type: "page",
 				name: "Usage and guardrails",
@@ -884,6 +893,11 @@ export class AskMateSettingTab extends PluginSettingTab {
 						{ enter: "Enter sends", "ctrl-enter": "Ctrl/Cmd+Enter sends" }
 					),
 					this.toggleDefinition(
+						"editorContextMenuEnabled",
+						"Show AskMate in the editor context menu",
+						"Right-click selected text to ask AskMate about it or run a favourite workflow. Without a selection, the menu offers to ask about the note."
+					),
+					this.toggleDefinition(
 						"showRequestPreview",
 						"Show request preview",
 						"Shows source, context size, provider, output mode, and privacy controls in the sidebar composer."
@@ -934,6 +948,11 @@ export class AskMateSettingTab extends PluginSettingTab {
 						"autoImageIntentEnabled",
 						"Detect image requests automatically",
 						"Treat questions that start with an image request, such as \"Draw me a cat\", as image generation. When off, AskMate answers in text; the /image command and Image button always generate images."
+					),
+					this.toggleDefinition(
+						"streamResponses",
+						"Stream replies",
+						"Show text as it arrives. AskMate falls back to a single response if the connection cannot stream. Turn this off if your endpoint does not support streaming."
 					)
 				]
 			},
@@ -996,7 +1015,27 @@ export class AskMateSettingTab extends PluginSettingTab {
 						"Include note history in context",
 						"Send the stored AskMate history for the source note as context with future requests.",
 						{ visible: () => settings.noteHistoryEnabled }
-					)
+					),
+					this.toggleDefinition(
+						"saveConversations",
+						"Save conversations",
+						"Keep sidebar conversations as named threads that survive restarts. The full text of your questions and answers is stored in this plugin's data.json."
+					),
+					{
+						name: "Delete saved conversations",
+						desc: "Remove every saved thread from this plugin's data. The conversation on screen is not affected until you clear it.",
+						render: (setting) => {
+							setting.addButton((button) => {
+								button.setButtonText("Delete saved conversations").setWarning().onClick(async () => {
+									if (!(await askMateConfirm(this.app, "Delete all saved AskMate conversations? This cannot be undone."))) {
+										return;
+									}
+									await this.plugin.threads.clearAll();
+									new Notice("AskMate deleted all saved conversations.");
+								});
+							});
+						}
+					}
 				]
 			},
 			{
@@ -1403,7 +1442,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 				items: [
 					{
 						name: "Workflow custom instructions",
-						desc: "Optional preferences added to every workflow, built-in and custom. Custom workflows can choose where they go with {{customInstructions}}; otherwise they are appended at the end.",
+						desc: "Optional preferences added to workflows only, built-in and custom. For instructions that apply to every request, use the Instructions page. Custom workflows can choose where they go with {{customInstructions}}; otherwise they are appended at the end.",
 						render: (setting) => {
 							setting.addTextArea((text) => {
 								text.inputEl.rows = 4;

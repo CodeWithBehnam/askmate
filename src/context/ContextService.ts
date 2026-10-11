@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, TFile, normalizePath } from "obsidian";
+import { Editor, MarkdownView, TFile, getAllTags, normalizePath } from "obsidian";
 import type { App, TAbstractFile } from "obsidian";
 import {
 	AskMateSettings,
@@ -24,6 +24,13 @@ import {
 	RequestPrivacyOptions
 } from "../shared/core";
 import { parseMarkdownHeadingSections } from "../output";
+import {
+	describeVaultMentionResolutions,
+	resolveVaultMentions,
+	type VaultData,
+	type VaultMention,
+	type VaultMentionResolution
+} from "./vaultMentions";
 
 export function cleanFolderPath(folder: string): string {
 	const clean = normalizePath(folder.trim()).replace(/^\/+|\/+$/g, "");
@@ -185,6 +192,7 @@ export class ContextService {
 	private lastMarkdownView: MarkdownView | null = null;
 	private lastMarkdownFile: TFile | null = null;
 	private lastNoteContext: NoteContext | null = null;
+	private lastVaultMentionResolutions: VaultMentionResolution[] = [];
 	// A .md file can open in a non-Markdown view (Excalidraw, Kanban), which updates only the remembered file.
 	// These stamps record which of the view and the file was remembered last.
 	private rememberSequence = 0;
@@ -257,6 +265,8 @@ export class ContextService {
 			&& snapshot.file
 			&& snapshot.file.path === targetFile?.path
 			&& view?.getMode() !== "preview"
+			// Clearing a selection fires no event, so the snapshot can outlive it; the attached editor is the live truth.
+			&& (!view || view.editor.getSelection().trim() === snapshot.content)
 		) {
 			return snapshot;
 		}
@@ -535,6 +545,12 @@ export class ContextService {
 			settings.additionalContextMaxCharacters
 		));
 
+		attachments.push(...await this.buildVaultMentionAttachments(
+			options.vaultMentions,
+			context.file,
+			settings.additionalContextMaxCharacters
+		));
+
 		const folderContext = options.folderContext ?? {
 			enabled: settings.folderContextEnabled,
 			path: settings.folderContextPath,
@@ -673,6 +689,79 @@ export class ContextService {
 				raw.length,
 				content.truncated
 			));
+		}
+
+		return attachments;
+	}
+
+	/** Preview lines for the notes the last request pulled in through @links, @backlinks, @tag and @recent. */
+	describeLastVaultMentions(): string[] {
+		return describeVaultMentionResolutions(this.lastVaultMentionResolutions);
+	}
+
+	/** Reads the metadata cache into plain data. The current note is the captured source, not necessarily the active view. */
+	collectVaultData(file: TFile | null, includeTags: boolean): VaultData {
+		const { metadataCache, vault } = this.host.app;
+		const cache = file ? metadataCache.getFileCache(file) : null;
+		const orderedLinkTargets = !file ? [] : (cache?.links ?? []).flatMap((link) => {
+			const linkpath = link.link.split(/[#|^]/)[0].trim();
+			const target = linkpath ? metadataCache.getFirstLinkpathDest(linkpath, file.path) : null;
+			return target ? [target.path] : [];
+		});
+		// The repository guard forbids vault-wide file enumeration. resolvedLinks has one key per indexed Markdown note, so the
+		// keys give the candidate paths from metadata alone; only the few notes that are selected are ever read.
+		const notes = Object.keys(metadataCache.resolvedLinks).flatMap((path) => {
+			const note = vault.getAbstractFileByPath(path);
+			if (!(note instanceof TFile) || note.extension !== "md") {
+				return [];
+			}
+			const noteCache = includeTags ? metadataCache.getFileCache(note) : null;
+			return [{ path, mtime: note.stat.mtime, tags: (noteCache && getAllTags(noteCache)) || [] }];
+		});
+		return { resolvedLinks: metadataCache.resolvedLinks, orderedLinkTargets, notes };
+	}
+
+	async buildVaultMentionAttachments(
+		mentions: VaultMention[] | undefined,
+		file: TFile | null,
+		maxCharacters: number
+	): Promise<ContextAttachment[]> {
+		this.lastVaultMentionResolutions = [];
+		if (!mentions?.length) {
+			return [];
+		}
+
+		const data = this.collectVaultData(file, mentions.some((mention) => mention.kind === "tag"));
+		const resolutions = resolveVaultMentions(mentions, file?.path ?? null, data);
+		const attachments: ContextAttachment[] = [];
+		let remaining = maxCharacters;
+
+		for (const resolution of resolutions) {
+			const unread: string[] = [];
+			const read: string[] = [];
+			for (const path of resolution.included) {
+				const note = this.host.app.vault.getAbstractFileByPath(path);
+				if (!(note instanceof TFile)) {
+					continue;
+				}
+				if (remaining <= 0) {
+					unread.push(path);
+					continue;
+				}
+				const raw = (await this.host.app.vault.cachedRead(note)).trim();
+				const content = withTruncationNotice(raw, remaining);
+				remaining = content.truncated ? 0 : remaining - content.shownCharacters;
+				read.push(path);
+				attachments.push(this.createContextAttachment(
+					"vault_note",
+					`Vault note (${resolution.relation}): ${path}`,
+					path,
+					content.text,
+					raw.length,
+					content.truncated
+				));
+			}
+			this.lastVaultMentionResolutions.push({ ...resolution, included: read, overBudget: unread });
 		}
 
 		return attachments;

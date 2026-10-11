@@ -41,6 +41,18 @@ export class MarkdownView<TEditor = unknown> {
 	}
 }
 
+type FakeCachedMetadata = { tags?: { tag: string }[]; frontmatter?: Record<string, unknown> };
+
+/** Mirrors the real helper: inline tags plus frontmatter `tags`/`tag`, each with a leading "#". */
+export function getAllTags(cache: FakeCachedMetadata): string[] | null {
+	const inline = (cache.tags ?? []).map((entry) => entry.tag);
+	const raw = [cache.frontmatter?.tags, cache.frontmatter?.tag].flatMap((value) =>
+		Array.isArray(value) ? value.map(String) : typeof value === "string" ? value.split(/[,\s]+/) : []
+	);
+	const all = [...inline, ...raw.filter(Boolean).map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))];
+	return all.length > 0 ? all : null;
+}
+
 export function normalizePath(path: string): string {
 	return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "") || "/";
 }

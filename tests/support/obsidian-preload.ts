@@ -1,8 +1,8 @@
 import { mock } from "bun:test";
-import { Editor, MarkdownView, TAbstractFile, TFile, TFolder, normalizePath } from "./obsidian-fakes";
+import { Editor, MarkdownView, TAbstractFile, TFile, TFolder, getAllTags, normalizePath } from "./obsidian-fakes";
 
 // Registered once, before any test file loads, so every file sees the same "obsidian" module.
-mock.module("obsidian", () => ({ Editor, MarkdownView, TAbstractFile, TFile, TFolder, normalizePath }));
+mock.module("obsidian", () => ({ Editor, MarkdownView, TAbstractFile, TFile, TFolder, getAllTags, normalizePath }));
 
 // Plugin code calls window timers for popout compatibility; bun has no window, so the global scope stands in for it.
 if (!("window" in globalThis)) {

@@ -5,7 +5,8 @@ import {
 	ProviderTextResult,
 	validateAzureOpenAIBaseUrl
 } from "../shared/core";
-import { completeChatCompletionsText, describeProviderErrorBody, formatProviderHttpError } from "./common";
+import { completeChatCompletionsStreaming } from "./chat-completions-stream";
+import { describeProviderErrorBody, formatProviderHttpError } from "./common";
 import type { ProviderRuntime } from "./types";
 
 export function getAzureOpenAIHeaders(apiKey: string): Record<string, string> {
@@ -24,7 +25,8 @@ export async function completeAzureOpenAIText(
 	providerRef: ProviderModelRef,
 	instructions: string,
 	input: string,
-	abortSignal?: AbortSignal
+	abortSignal?: AbortSignal,
+	onDelta?: (delta: string) => void
 ): Promise<ProviderTextResult> {
 	const provider = runtime.getProviderSettings("azure-openai");
 	const apiKey = await runtime.getProviderApiKey("azure-openai");
@@ -37,11 +39,13 @@ export async function completeAzureOpenAIText(
 		throw new Error("Enter an Azure OpenAI deployment name in AskMate settings before asking a question.");
 	}
 
-	return await completeChatCompletionsText(runtime, {
+	return await completeChatCompletionsStreaming(runtime, {
 		providerRef,
 		instructions,
 		input,
 		abortSignal,
+		onDelta,
+		includeUsage: true,
 		baseUrl: getAzureOpenAIBaseUrl(provider),
 		headers: getAzureOpenAIHeaders(apiKey)
 	});

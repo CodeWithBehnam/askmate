@@ -7,6 +7,7 @@ import {
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
+import { tryStreamChatCompletions } from "./chat-completions-stream";
 import {
 	buildChatCompletionsResult,
 	describeProviderErrorBody,
@@ -62,6 +63,7 @@ export async function completeAzureAIText(
 	options: {
 		timeoutMs?: number;
 		timeoutMessage?: string;
+		onDelta?: (delta: string) => void;
 	} = {}
 ): Promise<ProviderTextResult> {
 	const provider = runtime.getProviderSettings("azure-ai");
@@ -75,8 +77,29 @@ export async function completeAzureAIText(
 		throw new Error("Enter an Azure AI Foundry model or deployment name in AskMate settings before asking a question.");
 	}
 
+	const url = `${getAzureAIBaseUrl(provider)}/chat/completions?api-version=${AZURE_AI_INFERENCE_API_VERSION}`;
+
+	if (options.onDelta) {
+		const streamed = await tryStreamChatCompletions(runtime, {
+			providerRef,
+			url,
+			headers: getAzureAIHeaders(apiKey),
+			instructions,
+			input,
+			abortSignal,
+			onDelta: options.onDelta,
+			// Foundry serverless models do not all document stream_options, so usage is read only if the model sends it.
+			includeUsage: false,
+			idleTimeoutMs: options.timeoutMs
+		});
+
+		if (streamed) {
+			return streamed;
+		}
+	}
+
 	const response = await runtime.requestJson<Record<string, unknown>>(
-		`${getAzureAIBaseUrl(provider)}/chat/completions?api-version=${AZURE_AI_INFERENCE_API_VERSION}`,
+		url,
 		{
 			method: "POST",
 			headers: getAzureAIHeaders(apiKey),

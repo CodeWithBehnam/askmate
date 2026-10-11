@@ -88,6 +88,38 @@ describe("HistoryService review queue", () => {
 		await expect(service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "append")).resolves.toMatchObject({ scope: "append" });
 	});
 
+	test("refuses to queue a replacement when the model never saw the note, but allows append", async () => {
+		const settings = createSettings();
+		const { service } = createHistory(settings);
+		const request = createRequest("Note.md", { privacy: { includeNoteContext: false, includeImageReferences: true } });
+		await expect(service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "full-note")).rejects.toThrow("did not see");
+		await expect(service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "append")).resolves.toMatchObject({ scope: "append" });
+	});
+
+	test("an append item is queued for a note over the size limit and stores no note snapshot", async () => {
+		const settings = createSettings();
+		const service = new HistoryService({
+			getSettings: () => settings,
+			saveSettings: async () => {},
+			readFileText: async () => "x".repeat(70_000)
+		});
+		const item = await service.queueReviewItemFromRequest(createRequest("Big.md"), "proposal", "gpt-5.5", "append");
+		expect(item.beforeText).toBe("");
+	});
+
+	test("queues a selected-block item after the note was renamed", async () => {
+		const settings = createSettings();
+		const { service } = createHistory(settings);
+		const request = createRequest("Renamed.md");
+		request.context = {
+			...request.context,
+			source: "Selected text",
+			selectionIdentity: { text: "Note", startOffset: 0, endOffset: 4, prefix: "", suffix: " body", sourcePath: "Old.md" }
+		};
+		const item = await service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "selected-block");
+		expect(item.selectionIdentity?.sourcePath).toBe("Renamed.md");
+	});
+
 	test("rename moves history and queue items, including notes inside a renamed folder", async () => {
 		const settings = createSettings({
 			reviewQueue: [pendingItem("a", "Folder/A.md", 1), pendingItem("b", "Other.md", 2)],

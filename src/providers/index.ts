@@ -15,6 +15,7 @@ import { completeOpenRouterText, fetchOpenRouterModels } from "./open-router";
 import type { ProviderRuntime } from "./types";
 
 export {
+	describeProviderErrorBody,
 	extractProviderError,
 	formatProviderHttpError
 } from "./common";
@@ -28,7 +29,8 @@ export {
 	requestOpenAIImageGeneration,
 	requestOpenAIResponses
 } from "./open-ai";
-// Stream helpers are quarantined in open-ai-stream.ts (not live path).
+export { streamOpenAIResponses } from "./open-ai-stream";
+export type { OpenAIStreamResult } from "./open-ai-stream";
 export type {
 	ProviderRequestOptions,
 	ProviderRuntime
@@ -55,7 +57,8 @@ export async function completeProviderTextRequest(
 	providerRef: ProviderModelRef,
 	instructions: string,
 	input: string,
-	abortSignal?: AbortSignal
+	abortSignal?: AbortSignal,
+	onDelta?: (delta: string) => void
 ): Promise<ProviderTextResult> {
 	if (providerRef.providerId === "openai") {
 		// OpenAI text always uses Responses API via plugin streamOpenAI / requestOpenAIResponses.
@@ -66,27 +69,27 @@ export async function completeProviderTextRequest(
 	}
 
 	if (providerRef.providerId === "anthropic") {
-		return await completeAnthropicText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeAnthropicText(runtime, providerRef, instructions, input, abortSignal, onDelta);
 	}
 
 	if (providerRef.providerId === "google-gemini") {
-		return await completeGeminiText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeGeminiText(runtime, providerRef, instructions, input, abortSignal, onDelta);
 	}
 
 	if (providerRef.providerId === "azure-openai") {
-		return await completeAzureOpenAIText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeAzureOpenAIText(runtime, providerRef, instructions, input, abortSignal, onDelta);
 	}
 
 	if (providerRef.providerId === "azure-ai") {
-		return await completeAzureAIText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeAzureAIText(runtime, providerRef, instructions, input, abortSignal, { onDelta });
 	}
 
 	if (providerRef.providerId === "openrouter") {
-		return await completeOpenRouterText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeOpenRouterText(runtime, providerRef, instructions, input, abortSignal, onDelta);
 	}
 
 	if (providerRef.providerId === "openai-compatible") {
-		return await completeOpenAICompatibleText(runtime, providerRef, instructions, input, abortSignal);
+		return await completeOpenAICompatibleText(runtime, providerRef, instructions, input, abortSignal, onDelta);
 	}
 
 	throw new Error(`Unsupported text provider: ${providerRef.providerId}`);

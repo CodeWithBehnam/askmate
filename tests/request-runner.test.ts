@@ -98,7 +98,7 @@ function makeRequest(options: {
 	};
 }
 
-function makeHarness(responders: Responder[], overrides: Partial<RequestRunnerHost> = {}) {
+function makeHarness(responders: Responder[], overrides: Partial<RequestRunnerHost> = {}, runtimeOverrides: Partial<ProviderRuntime> = {}) {
 	const records: UsageParams[] = [];
 	const calls: Array<{ url: string; options: ProviderRequestOptions }> = [];
 	const queue = [...responders];
@@ -118,7 +118,8 @@ function makeHarness(responders: Responder[], overrides: Partial<RequestRunnerHo
 			}
 			// The fake serves canned JSON; the generic only describes the caller's expected shape.
 			return next(url, options ?? {}) as AskMateHttpResponse<T>;
-		}
+		},
+		...runtimeOverrides
 	};
 	const host: RequestRunnerHost = {
 		getSettings: () => settings,
@@ -400,6 +401,19 @@ describe("buildRequest", () => {
 		expect((await runner.buildRequest("Q", "T", { contextScope: "auto" })).context.content).toBe("Just this");
 	});
 
+	test("resolves custom instructions from the captured source note's folder", async () => {
+		const settings: AskMateSettings = {
+			...DEFAULT_SETTINGS,
+			globalInstructions: "Reply in British English.",
+			folderInstructions: [{ folder: "Projects", instructions: "Keep it formal." }]
+		};
+		const inFolder = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: new TFile("Projects/Plan.md") }) });
+		const outside = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: new TFile("ProjectsOld/Plan.md") }) });
+
+		expect((await inFolder.runner.buildRequest("Q", "T")).customInstructions).toBe('Reply in British English.\n\nFor notes in the folder "Projects":\nKeep it formal.');
+		expect((await outside.runner.buildRequest("Q", "T")).customInstructions).toBe("Reply in British English.");
+	});
+
 	test("sets primaryContextTruncated from the budgeted primary note", async () => {
 		const long = makeHarness([], { getNoteContext: async () => noteContext("Long paragraph text. ".repeat(3000)) });
 		const short = makeHarness([]);
@@ -457,5 +471,107 @@ describe("pure helpers", () => {
 			output_tokens: 7,
 			total_tokens: 12
 		});
+	});
+});
+
+describe("OpenAI HTTP errors without a JSON body", () => {
+	test("a plain-text gateway error keeps its detail and is redacted", async () => {
+		const { runner } = makeHarness([() => ({
+			status: 502,
+			ok: false,
+			body: null,
+			text: "<html><body>Bad gateway for key sk-abcdefghijklmnopqrstuvwxyz</body></html>"
+		})]);
+
+		const error = await runner.runOpenAIRequest(makeRequest()).catch((caught: unknown) => caught as Error);
+		expect(error.message).toContain("Bad gateway");
+		expect(error.message).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+	});
+});
+
+describe("streamed text requests", () => {
+	const event = (payload: Record<string, unknown>): { event: string; data: string } => ({ event: "message", data: JSON.stringify(payload) });
+	const withEvents = (events: Array<{ event: string; data: string }>): Partial<ProviderRuntime> => ({
+		streamSse: async (_url, _options, onEvent) => {
+			events.forEach(onEvent);
+			return { kind: "streamed" };
+		}
+	});
+	const completedEvent = event({
+		type: "response.completed",
+		response: { status: "completed", output: [{ content: [{ type: "output_text", text: "Hello world" }] }], usage: USAGE }
+	});
+
+	test("forwards each delta once and records the streamed usage once", async () => {
+		const onTextDelta = mock((_delta: string) => undefined);
+		const { runner, records, calls } = makeHarness([], {}, withEvents([
+			event({ type: "response.output_text.delta", delta: "Hello " }),
+			event({ type: "response.output_text.delta", delta: "world" }),
+			completedEvent
+		]));
+		const result = await runner.runOpenAIRequest(makeRequest(), { onTextDelta });
+
+		expect(onTextDelta.mock.calls.map(([delta]) => delta)).toEqual(["Hello ", "world"]);
+		expect(result).toMatchObject({ kind: "text", text: "Hello world", incompleteReason: null });
+		expect(calls).toHaveLength(0);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ status: "completed", usage: USAGE, responseText: "Hello world" });
+	});
+
+	test("falls back to the buffered request when streaming is unavailable", async () => {
+		const onTextDelta = mock((_delta: string) => undefined);
+		const { runner, records, calls } = makeHarness(
+			[() => ok({ status: "completed", output_text: "Buffered", usage: USAGE })],
+			{},
+			{ streamSse: async () => ({ kind: "unavailable", reason: "Failed to fetch" }) }
+		);
+		const result = await runner.runOpenAIRequest(makeRequest(), { onTextDelta });
+
+		expect(result).toMatchObject({ text: "Buffered" });
+		expect(calls).toHaveLength(1);
+		expect(onTextDelta.mock.calls.map(([delta]) => delta)).toEqual(["Buffered"]);
+		expect(records).toHaveLength(1);
+	});
+
+	test("an interrupted stream keeps the partial text, marks it incomplete and records a failure", async () => {
+		const { runner, records } = makeHarness([], {}, withEvents([
+			event({ type: "response.output_text.delta", delta: "Partial" }),
+			event({ type: "error", message: "server_error" })
+		]));
+		const request = makeRequest();
+		const result = await runner.runOpenAIRequest(request);
+
+		expect(result).toMatchObject({ kind: "text", text: "Partial", incompleteReason: "stream_interrupted" });
+		expect(request.metadata.outputIncompleteReason).toBe("stream_interrupted");
+		expect(records).toHaveLength(1);
+		expect(records[0]?.status).toBe("failed");
+		expect(records[0]?.errorMessage).toContain("server_error");
+	});
+
+	test("other providers stream with the same normalised usage as the buffered path", async () => {
+		const onTextDelta = mock((_delta: string) => undefined);
+		const { runner, records, calls } = makeHarness([], {}, withEvents([
+			event({ type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } }),
+			event({ type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } }),
+			event({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }),
+			event({ type: "message_stop" })
+		]));
+		const result = await runner.runOpenAIRequest(makeRequest({ providerId: "anthropic", model: "claude-test" }), { onTextDelta });
+
+		expect(result).toMatchObject({ text: "Hi" });
+		expect(onTextDelta.mock.calls.map(([delta]) => delta)).toEqual(["Hi"]);
+		expect(calls).toHaveLength(0);
+		expect(records[0]?.usage).toEqual({ input_tokens: 10, output_tokens: 5, total_tokens: 15 });
+	});
+
+	test("image prompt planning never streams", async () => {
+		let streamed = false;
+		const { runner } = makeHarness(
+			[() => ok({ status: "completed", output_text: "A cat on a mat", usage: USAGE })],
+			{},
+			{ streamSse: async () => { streamed = true; return { kind: "unavailable", reason: "x" }; } }
+		);
+		await runner.completeOpenAIPlanningText(makeRequest(), ref("openai", "gpt-5.5"), "plan", "input");
+		expect(streamed).toBe(false);
 	});
 });

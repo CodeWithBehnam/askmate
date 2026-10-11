@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, requestUrl } from "obsidian";
+import { Editor, MarkdownView, Menu, Notice, Plugin, TAbstractFile, TFile, TFolder, requestUrl } from "obsidian";
 import {
 	ApiEndpoint,
 	ApplyScope,
@@ -85,9 +85,12 @@ import {
 	testProviderConnection as testProviderConnectionWithProvider
 } from "../providers";
 import type { ProviderRequestOptions, ProviderRuntime } from "../providers";
+import { fetchSse } from "../providers/sseTransport";
 import { UsageService, getLocalDayKey, sumUsageTotalsForMonth } from "../usage";
 import { HistoryService } from "../history";
+import { ThreadService } from "../threads";
 import { ContextService, cleanFolderPath } from "../context";
+import { rankVaultTags } from "../context/vaultMentions";
 import { RequestRunner, buildFallbackImagePrompt } from "../requests";
 import {
 	APPLY_REFUSAL_PREFIX,
@@ -99,7 +102,12 @@ import {
 import {
 	appendWorkflowUserPreferences,
 	applyTextInsertion,
+	buildDateTemplateValues,
 	buildUniquePathCandidate,
+	chooseSmartResultFolder,
+	getReplaceBlockReason,
+	isOriginalSelectionNote,
+	planImageInsertion,
 	getHeadingSectionCore,
 	getParentPath,
 	isSameNoteText,
@@ -112,10 +120,12 @@ import {
 	splitMarkdownFrontmatter,
 	trimOuterBlankLines
 } from "../output";
+import { buildEditorMenuEntries } from "./editorMenu";
 import { syncObjectInPlace } from "../settings/syncInPlace";
 import { shouldGenerateImage } from "../shared/imageIntent";
 import { askMateConfirm, askMateDiffConfirm } from "../ui/modals/modals";
 import { AskMateView } from "../ui/sidebar/AskMateView";
+import { registerAnswerCommands } from "./answerCommands";
 import { AskMateSettingTab } from "../ui/settings/AskMateSettingTab";
 
 const NOTE_IDENTITY_WITHHELD = "[withheld by AskMate privacy controls]";
@@ -133,6 +143,7 @@ export class AskMatePlugin extends Plugin {
 	settings!: AskMateSettings;
 	private usageService!: UsageService;
 	private historyService!: HistoryService;
+	threads!: ThreadService;
 	private contextService!: ContextService;
 	private requestRunner!: RequestRunner;
 	private reviewQueueMutationActive = false;
@@ -145,7 +156,11 @@ export class AskMatePlugin extends Plugin {
 		return {
 			getProviderSettings: (providerId) => this.getProviderSettings(providerId),
 			getProviderApiKey: (providerId) => this.getProviderApiKey(providerId),
-			requestJson: async <T>(url: string, options?: ProviderRequestOptions) => await this.requestJson<T>(url, options)
+			requestJson: async <T>(url: string, options?: ProviderRequestOptions) => await this.requestJson<T>(url, options),
+			// requestUrl buffers the whole body and cannot be cancelled, so streaming uses fetch; providers validate URLs before calling.
+			...(this.settings.streamResponses
+				? { streamSse: async (url, options, onEvent) => await fetchSse((input, init) => globalThis.fetch(input, init), url, options, onEvent) }
+				: {})
 		};
 	}
 
@@ -165,6 +180,11 @@ export class AskMatePlugin extends Plugin {
 				}
 				return await this.app.vault.cachedRead(file);
 			}
+		});
+
+		this.threads = new ThreadService({
+			getSettings: () => this.settings,
+			saveSettings: () => this.saveSettings()
 		});
 
 		this.contextService = new ContextService({
@@ -236,6 +256,8 @@ export class AskMatePlugin extends Plugin {
 			void this.activateView();
 		});
 
+		registerAnswerCommands(this);
+
 		this.addCommand({
 			id: "open-sidebar",
 			name: "Open sidebar",
@@ -273,6 +295,20 @@ export class AskMatePlugin extends Plugin {
 		}
 		this.registerCustomWorkflowCommands();
 
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor, info) => {
+				this.addEditorMenuItems(menu, editor, info.file ?? null);
+			})
+		);
+
+		this.addCommand({
+			id: "export-conversation",
+			name: "Export AskMate conversation to note",
+			callback: () => {
+				void this.exportConversationFromCommand();
+			}
+		});
+
 		this.addCommand({
 			id: "test-provider-connection",
 			name: "Test provider connection",
@@ -291,6 +327,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	onunload(): void {
+		void this.threads.flush();
 		// A batch keeps sending paid requests after the plugin is disabled unless it is stopped here.
 		this.settingTab?.abortActiveBatch();
 	}
@@ -540,9 +577,9 @@ export class AskMatePlugin extends Plugin {
 			request: values.request,
 			response: values.response,
 			date: values.date ?? this.formatDate(now),
-			dateTime: values.dateTime ?? now.toISOString(),
+			dateTime: values.dateTime ?? buildDateTemplateValues(now).dateTime,
 			currentDate: values.date ?? this.formatDate(now),
-			currentDateTime: values.dateTime ?? now.toISOString(),
+			currentDateTime: values.dateTime ?? buildDateTemplateValues(now).dateTime,
 			customInstructions: this.settings.workflowCustomInstructions.trim(),
 			resultFolder: cleanFolderPath(this.settings.resultFolder)
 		};
@@ -565,10 +602,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private formatDate(date: Date): string {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, "0");
-		const day = String(date.getDate()).padStart(2, "0");
-		return `${year}-${month}-${day}`;
+		return buildDateTemplateValues(date).date;
 	}
 
 	private renderTextResultNoteContent(request: AskRequest, responseText: string, model: string): string {
@@ -626,6 +660,27 @@ export class AskMatePlugin extends Plugin {
 		return file;
 	}
 
+	/** Writes an exported conversation into the result folder, using the same unique-name handling as result notes. */
+	async createConversationNote(title: string, content: string): Promise<TFile> {
+		const folder = await this.ensureFolder(cleanFolderPath(this.settings.resultFolder));
+		const baseName = sanitizeFileName(title, "AskMate conversation");
+		return await this.createFileWithUniquePath(folder, baseName, "md", async (path) => await this.app.vault.create(path, content));
+	}
+
+	private async exportConversationFromCommand(): Promise<void> {
+		try {
+			await this.activateView();
+			const view = this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE).map((leaf) => leaf.view).find((candidate) => candidate instanceof AskMateView);
+			if (!(view instanceof AskMateView)) {
+				new Notice("AskMate could not open the sidebar to export the conversation.");
+				return;
+			}
+			await view.exportConversation("");
+		} catch (error) {
+			new Notice(this.getErrorMessage(error));
+		}
+	}
+
 	async createImageResultNote(
 		request: AskRequest,
 		result: ImageAskMateResult
@@ -674,6 +729,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private async applyImageToContextOutcome(request: AskRequest, result: ImageAskMateResult): Promise<MutationOutcome> {
+		this.assertTargetAcceptsText(request);
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const targetView = request.context.file
 			? this.getOpenMarkdownViewForFile(request.context.file)
@@ -686,7 +742,7 @@ export class AskMatePlugin extends Plugin {
 			const initialValue = editor.getValue();
 			const resolution = identity ? resolveSelectionIdentity(initialValue, identity) : null;
 
-			if (request.context.source === "Selected text" && (!identity || file?.path !== identity.sourcePath || resolution?.endOffset === null)) {
+			if (request.context.source === "Selected text" && (!identity || !isOriginalSelectionNote(identity.sourcePath, file, request.context.file) || resolution?.endOffset === null)) {
 				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
 			}
 
@@ -710,7 +766,9 @@ export class AskMatePlugin extends Plugin {
 				}
 				editor.replaceRange(insertion, editor.offsetToPos(latestResolution.endOffset));
 			} else {
-				editor.replaceRange(insertion, editor.getCursor());
+				// A raw cursor insert can split a sentence, land above frontmatter or inside a code fence.
+				const plan = planImageInsertion(latestValue, editor.posToOffset(editor.getCursor()), this.createImageEmbed(imageFile));
+				editor.replaceRange(plan.text, editor.offsetToPos(plan.offset));
 			}
 
 			this.rememberEditorContext(editor, file ?? null);
@@ -720,7 +778,7 @@ export class AskMatePlugin extends Plugin {
 		const file = request.context.file ?? this.contextService.getLastMarkdownFile();
 		if (request.context.source === "Selected text") {
 			const identity = request.context.selectionIdentity;
-			if (!file || !identity || identity.sourcePath !== file.path) {
+			if (!file || !identity || !isOriginalSelectionNote(identity.sourcePath, file, request.context.file)) {
 				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
 			}
 			const content = await this.app.vault.cachedRead(file);
@@ -907,7 +965,7 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private async applyResponseToContextMessage(request: AskRequest, responseText: string, options: { scope?: ApplyScope; headingPath?: string } = {}): Promise<string> {
-		const output = responseText.trim();
+		const output = trimOuterBlankLines(responseText);
 
 		if (!output) {
 			throw new Error("AskMate has nothing to apply yet.");
@@ -935,7 +993,7 @@ export class AskMatePlugin extends Plugin {
 		if (request.context.source === "Selected text" && scope === "selected-block") {
 			const identity = request.context.selectionIdentity;
 			const originalText = identity?.text ?? request.context.content.trim();
-			if (identity?.sourcePath && file?.path !== identity.sourcePath) {
+			if (identity?.sourcePath && !isOriginalSelectionNote(identity.sourcePath, file, request.context.file)) {
 				throw new Error("The original selected-text note is no longer the Apply target. Select the text again, then apply.");
 			}
 
@@ -1111,6 +1169,10 @@ export class AskMatePlugin extends Plugin {
 
 	// A cut-off reply would silently delete the text it failed to reproduce; appending it loses nothing.
 	private assertOutputCompleteForReplace(request: AskRequest): void {
+		const hiddenReason = getReplaceBlockReason(request.metadata.privacy, request.context.content);
+		if (hiddenReason) {
+			throw new Error(hiddenReason);
+		}
 		const reason = request.metadata.outputIncompleteReason;
 		if (reason) {
 			throw new Error(
@@ -1250,7 +1312,7 @@ export class AskMatePlugin extends Plugin {
 
 	buildPromptInspectionForRequest(request: AskRequest): PromptInspection {
 		const shouldGenerateImage = request.metadata.forceImage || request.metadata.autoImage || request.metadata.modelCapability === "image";
-		const instructions = shouldGenerateImage ? buildImagePromptPlanningInstructions() : buildTextInstructions();
+		const instructions = shouldGenerateImage ? buildImagePromptPlanningInstructions() : buildTextInstructions(request.customInstructions);
 		const input = shouldGenerateImage ? buildImagePromptPlanningInput(request) : buildPrompt(request);
 		// Show the capped fallback exactly as RequestRunner would send it if prompt planning fails.
 		const secondaryInput = shouldGenerateImage ? buildFallbackImagePrompt(request) : "";
@@ -1471,15 +1533,14 @@ export class AskMatePlugin extends Plugin {
 
 	private getResultNoteFolder(request: AskRequest): string {
 		if (this.settings.smartResultPlacementEnabled && request.context.file?.parent?.path) {
-			const parentPath = request.context.file.parent.path === "/" ? "" : request.context.file.parent.path;
-			return cleanFolderPath(parentPath ? `${parentPath}/AskMate` : "AskMate");
+			return cleanFolderPath(chooseSmartResultFolder(request.context.file.parent.path));
 		}
 		return cleanFolderPath(this.settings.resultFolder);
 	}
 
 	private async maybeAppendResultBacklinkToSource(request: AskRequest, resultFile: TFile): Promise<void> {
 		const sourceFile = request.context.file;
-		if (!this.settings.appendResultBacklinkToSource || !sourceFile || sourceFile.path === resultFile.path) {
+		if (!this.settings.appendResultBacklinkToSource || !sourceFile || sourceFile.path === resultFile.path || sourceFile.path.toLowerCase().endsWith(".excalidraw.md")) {
 			return;
 		}
 		const bullet = `- [[${resultFile.path}|${resultFile.basename}]] created ${this.formatDate(new Date())}`;
@@ -1501,6 +1562,15 @@ export class AskMatePlugin extends Plugin {
 		} catch (error) {
 			new Notice(`AskMate created ${resultFile.path}, but could not add its backlink to ${sourceFile.path}: ${this.getErrorMessage(error)}`);
 		}
+	}
+
+	describeLastVaultMentions(): string[] {
+		return this.contextService.describeLastVaultMentions();
+	}
+
+	/** Existing vault tags with a leading "#", for @tag: suggestions. */
+	getVaultTags(): string[] {
+		return rankVaultTags(this.contextService.collectVaultData(null, true).notes);
 	}
 
 	async getBatchWorkflowTargetFiles(folderPath: string, maxFiles: number): Promise<TFile[]> {
@@ -1813,7 +1883,7 @@ export class AskMatePlugin extends Plugin {
 			model: this.getSelectedModel(),
 			workflowName: workflow.name,
 			date: this.formatDate(now),
-			dateTime: now.toISOString()
+			dateTime: buildDateTemplateValues(now).dateTime
 		});
 		// The expanded prompt is sent to the provider, so note-identifying variables follow the note-context privacy choice.
 		// Without explicit privacy, an empty sanitised context for a non-empty note means the note was withheld.
@@ -2091,6 +2161,45 @@ export class AskMatePlugin extends Plugin {
 					await this.runWorkflowFromCommand(current, editor, ctx.file ?? null);
 				}
 			});
+		}
+	}
+
+	private addEditorMenuItems(menu: Menu, editor: Editor, file: TFile | null): void {
+		const entries = buildEditorMenuEntries({
+			enabled: this.settings.editorContextMenuEnabled,
+			hasSelection: editor.somethingSelected(),
+			visibleWorkflows: this.getVisibleWorkflows(),
+			favouriteIds: new Set(this.settings.workflowDisplayPreferences.filter((preference) => preference.favorite).map((preference) => preference.id))
+		});
+		for (const entry of entries) {
+			menu.addItem((item) => {
+				item
+					.setTitle(entry.title)
+					.setIcon(entry.kind === "workflow" ? "sparkles" : "bot")
+					.setSection("askmate")
+					.onClick(() => {
+						// Opening the sidebar moves focus, so the selection is captured before anything else happens.
+						this.rememberEditorContext(editor, file);
+						if (entry.kind === "workflow") {
+							const workflow = this.getAllWorkflows().find((candidate) => candidate.id === entry.workflowId);
+							if (workflow) {
+								void this.runWorkflowFromCommand(workflow, editor, file);
+							}
+							return;
+						}
+						void this.openComposerWithText(entry.kind === "ask-selection" ? "@selection " : "");
+					});
+			});
+		}
+	}
+
+	/** Reveals the sidebar and puts the cursor in the composer, optionally with text the user continues typing. */
+	async openComposerWithText(text: string): Promise<void> {
+		await this.activateView();
+		for (const leaf of this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE)) {
+			if (leaf.view instanceof AskMateView) {
+				leaf.view.focusComposer(text);
+			}
 		}
 	}
 

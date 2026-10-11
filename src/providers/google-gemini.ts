@@ -10,6 +10,8 @@ import {
 	validateProviderBaseUrl
 } from "../shared/core";
 import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
+import { assembleGeminiBody, geminiStreamAdapter } from "./google-gemini-stream";
+import { tryStreamTextResult } from "./streaming";
 import type { ProviderRuntime } from "./types";
 
 /** Default max output tokens for generateContent (API default can be too low for note workflows). */
@@ -20,7 +22,8 @@ export async function completeGeminiText(
 	providerRef: ProviderModelRef,
 	instructions: string,
 	input: string,
-	abortSignal?: AbortSignal
+	abortSignal?: AbortSignal,
+	onDelta?: (delta: string) => void
 ): Promise<ProviderTextResult> {
 	const apiKey = await runtime.getProviderApiKey("google-gemini");
 
@@ -31,36 +34,64 @@ export async function completeGeminiText(
 	const baseUrl = getGeminiBaseUrl(runtime);
 	const model = encodeURIComponent(providerRef.model);
 	// Prefer header auth so the API key is not embedded in the request URL (logs/proxies).
+	const headers = {
+		"Content-Type": "application/json",
+		"x-goog-api-key": apiKey
+	};
+	const requestBody = JSON.stringify({
+		systemInstruction: {
+			parts: [{ text: instructions }]
+		},
+		contents: [
+			{
+				role: "user",
+				parts: [{ text: input }]
+			}
+		],
+		generationConfig: {
+			maxOutputTokens: GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
+		}
+	});
+
+	if (onDelta) {
+		const streamed = await tryStreamTextResult(runtime, {
+			providerName: "Google Gemini",
+			url: `${baseUrl}/models/${model}:streamGenerateContent?alt=sse`,
+			headers,
+			body: requestBody,
+			abortSignal,
+			idleTimeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+			adapter: geminiStreamAdapter,
+			onDelta,
+			model: providerRef.model,
+			endpoint: "gemini_generate_content",
+			assemble: assembleGeminiBody,
+			buildResult: (body) => buildGeminiResult(providerRef.model, body)
+		});
+
+		if (streamed) {
+			return streamed;
+		}
+	}
+
 	const response = await runtime.requestJson<Record<string, unknown>>(`${baseUrl}/models/${model}:generateContent`, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"x-goog-api-key": apiKey
-		},
+		headers,
 		abortSignal,
 		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 		timeoutMessage: "Google Gemini generation timed out after 2 minutes.",
-		body: JSON.stringify({
-			systemInstruction: {
-				parts: [{ text: instructions }]
-			},
-			contents: [
-				{
-					role: "user",
-					parts: [{ text: input }]
-				}
-			],
-			generationConfig: {
-				maxOutputTokens: GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
-			}
-		})
+		body: requestBody
 	});
-	const body = response.body;
 
 	if (!response.ok) {
 		throw new Error(formatProviderHttpError("Google Gemini", response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
+	return buildGeminiResult(providerRef.model, response.body);
+}
+
+/** Single parser for buffered bodies and for bodies assembled from a stream. */
+export function buildGeminiResult(model: string, body: Record<string, unknown> | null): ProviderTextResult {
 	const blockReason = getGeminiPromptBlockReason(body);
 	if (blockReason) {
 		throw new Error(`Google Gemini blocked this request (${blockReason}). Rephrase the question or reduce the note context.`);
@@ -72,7 +103,7 @@ export async function completeGeminiText(
 
 	return {
 		text,
-		model: providerRef.model,
+		model,
 		endpoint: "gemini_generate_content",
 		usage: normalizeGeminiUsage(body?.usageMetadata),
 		incompleteReason

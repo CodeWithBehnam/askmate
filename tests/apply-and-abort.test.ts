@@ -93,3 +93,9 @@ describe("appendMarkdownBlockToContent", () => {
 		expect(next).not.toBe(appendMarkdownBlockToContent(original, block));
 	});
 });
+
+describe("appendMarkdownBlockToContent indentation", () => {
+	test("keeps the first line's indentation and drops only outer blank lines", () => {
+		expect(appendMarkdownBlockToContent("a\n", "\n    code\n\n")).toBe("a\n\n    code\n");
+	});
+});

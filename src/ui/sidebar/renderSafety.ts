@@ -44,7 +44,7 @@ const CODE_TAG_NAMES: ReadonlySet<string> = new Set(["code", "pre"]);
 
 const NETWORK_ATTRIBUTE_PATTERN = /[\s"'/](?:src|srcset|lowsrc|dynsrc|background|poster|data|codebase|xlink:href|formaction)\s*=/i;
 const CSS_RESOURCE_PATTERN = /url\s*\(|image-set\s*\(|@import/i;
-const MERMAID_REMOTE_PATTERN = /\/\/|\\\/|\\x2f|\\u002f|&#|&sol;/i;
+const MERMAID_REMOTE_PATTERN = /\/\/|\\\/|\\x2f|\\u002f|&#|&sol;|\b(?:https?|ftp|wss?|file):/i;
 const ZERO_WIDTH_SPACE = "\u200B";
 const MAX_IMAGE_SCAN_CHARACTERS = 4000;
 const MAX_IMAGE_CLOSE_CANDIDATES = 64;
@@ -162,7 +162,8 @@ function processBlocks(markdown: string): { text: string; ranges: ProtectedRange
 
 				state = advanceBlockState(startState, line, rest);
 				lineIsHtml ||= state.kind === "html" || (startState.kind === "normal" && detectHtmlBlockStart(rest) !== undefined);
-				if (startState.kind === "normal" && state.kind === "normal" && spansTrusted && !isBlank) {
+				// A line that opens (and may close) an HTML block is raw HTML, so its backticks are literal text.
+				if (startState.kind === "normal" && state.kind === "normal" && !lineIsHtml && spansTrusted && !isBlank) {
 					const scan = scanInlineCodeSpans(result);
 					for (const [start, end] of scan.spans) {
 						ranges.push({ start: offset + start, end: offset + end, kind: "span" });
@@ -170,7 +171,7 @@ function processBlocks(markdown: string): { text: string; ranges: ProtectedRange
 					if (scan.unclosed) {
 						spansTrusted = false;
 					}
-				} else if (startState.kind !== "normal" || state.kind !== "normal") {
+				} else if (startState.kind !== "normal" || state.kind !== "normal" || lineIsHtml) {
 					spansTrusted = false;
 				}
 			}
@@ -366,7 +367,8 @@ function findOpaqueInlineEnd(line: string, index: number): number | null {
 
 	if (char === "<" && /[A-Za-z/!?]/.test(next)) {
 		const tag = findTagEnd(line, index, line.length);
-		return tag.ambiguous ? -1 : tag.end + 1;
+		// A backtick inside the candidate means parsers disagree on whether it is a tag, and so on how backticks pair.
+		return tag.ambiguous || line.slice(index, tag.end + 1).includes("`") ? -1 : tag.end + 1;
 	}
 	if (char === "%" && next === "%") {
 		const end = line.indexOf("%%", index + 2);
@@ -528,11 +530,12 @@ function collectInlineEdits(
 			index += 2;
 			continue;
 		}
-		if (char === "<" && !isEscaped(text, index)) {
-			while (htmlIndex < htmlRanges.length && htmlRanges[htmlIndex].end <= index) {
-				htmlIndex += 1;
-			}
-			const inHtmlBlock = htmlRanges[htmlIndex] !== undefined && htmlRanges[htmlIndex].start <= index;
+		while (htmlIndex < htmlRanges.length && htmlRanges[htmlIndex].end <= index) {
+			htmlIndex += 1;
+		}
+		const inHtmlBlock = htmlRanges[htmlIndex] !== undefined && htmlRanges[htmlIndex].start <= index;
+		// Backslash escapes do not exist inside raw HTML blocks, so "\<img" is still a tag there.
+		if (char === "<" && (inHtmlBlock || !isEscaped(text, index))) {
 			const edit = networkTagEdit(text, index, inHtmlBlock);
 			if (edit) {
 				edits.push(edit);
@@ -719,11 +722,17 @@ function networkTagEdit(text: string, index: number, inHtmlBlock: boolean): Text
 	if (!inHtmlBlock && /<[A-Za-z/!?]/.test(stripQuoted(tagText.slice(1)))) {
 		return null;
 	}
-	if (!NETWORK_ATTRIBUTE_PATTERN.test(tagText) && !CSS_RESOURCE_PATTERN.test(tagText)) {
+	if (!NETWORK_ATTRIBUTE_PATTERN.test(tagText) && !CSS_RESOURCE_PATTERN.test(tagText) && !hasObfuscatedStyle(tagText)) {
 		return null;
 	}
 
 	return { start: index, end: index + 1, text: "&lt;" };
+}
+
+/** CSS escapes, HTML character references and comments can spell `url(` without the literal text, so any style using them is unsafe. */
+function hasObfuscatedStyle(tagText: string): boolean {
+	const style = /[\s"'/]style\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/i.exec(tagText);
+	return Boolean(style && /[\\&]|\/\*/.test(style[1]));
 }
 
 function stripQuoted(text: string): string {

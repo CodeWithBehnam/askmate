@@ -1,3 +1,10 @@
+import {
+	MAX_RECENT_COUNT,
+	normaliseTag,
+	parseRecentCount,
+	vaultMentionKey,
+	type VaultMention
+} from "../../context/vaultMentions";
 import type { ComposerLayout, ContextScope, OutputMode, ReasoningEffort, Workflow } from "../../shared/types";
 
 /**
@@ -15,7 +22,14 @@ export type ConsoleCommandKind =
 	| "help"
 	| "context"
 	| "inspect"
-	| "history";
+	| "history"
+	| "model"
+	| "provider"
+	| "export"
+	| "new-thread"
+	| "threads"
+	| "rename-thread"
+	| "delete-thread";
 
 export interface ConsoleCommand {
 	/** Typed after the slash, lower case. */
@@ -34,6 +48,8 @@ export interface ConsoleMentions {
 	folder: string | null;
 	/** Extra notes added with @[[Note]]. */
 	notes: string[];
+	/** Vault-aware mentions (@links, @backlinks, @tag:, @recent), resolved later against the current note. */
+	vault: VaultMention[];
 }
 
 export type ConsoleAction =
@@ -49,6 +65,13 @@ export type ConsoleAction =
 	| { kind: "context"; mentions: ConsoleMentions }
 	| { kind: "inspect"; question: string; mentions: ConsoleMentions }
 	| { kind: "history" }
+	| { kind: "model"; query: string }
+	| { kind: "provider"; query: string }
+	| { kind: "export"; title: string }
+	| { kind: "newThread" }
+	| { kind: "threads" }
+	| { kind: "renameThread"; title: string }
+	| { kind: "deleteThread" }
 	| { kind: "error"; message: string };
 
 export interface ConsoleCompletion {
@@ -63,6 +86,13 @@ export interface ConsoleCompletionResult {
 	/** Index in the input where the replaced token ends. */
 	to: number;
 	items: ConsoleCompletion[];
+}
+
+/** Values offered after "/model " and "/provider ". */
+export interface ConsoleArgumentSource {
+	models: readonly string[];
+	providers: readonly { id: string; label: string }[];
+	vaultTags?: readonly string[];
 }
 
 export interface ConsoleStatusSegment {
@@ -96,7 +126,14 @@ const BUILT_IN_COMMANDS: ConsoleCommand[] = [
 	{ name: "inspect", aliases: ["prompt"], summary: "Open the final prompt for a question", kind: "inspect", argumentHint: "[question]" },
 	{ name: "history", aliases: [], summary: "Show AskMate history for this note", kind: "history" },
 	{ name: "clear", aliases: ["cls"], summary: "Clear the conversation", kind: "clear" },
-	{ name: "layout", aliases: [], summary: "Switch layout: console, compact, expanded", kind: "layout", argumentHint: "<layout>" }
+	{ name: "layout", aliases: [], summary: "Switch layout: console, compact, expanded", kind: "layout", argumentHint: "<layout>" },
+	{ name: "model", aliases: ["models"], summary: "Show or switch the model (add ! for an unlisted ID)", kind: "model", argumentHint: "[id]" },
+	{ name: "provider", aliases: ["providers"], summary: "Show or switch the chat provider", kind: "provider", argumentHint: "[id]" },
+	{ name: "export", aliases: [], summary: "Export this conversation to a note", kind: "export", argumentHint: "[title]" },
+	{ name: "new", aliases: ["new-thread"], summary: "Start a new conversation (the current one stays saved)", kind: "new-thread" },
+	{ name: "threads", aliases: [], summary: "Switch to a saved conversation", kind: "threads" },
+	{ name: "rename", aliases: [], summary: "Rename the current conversation", kind: "rename-thread", argumentHint: "<title>" },
+	{ name: "delete-thread", aliases: [], summary: "Delete a saved conversation", kind: "delete-thread" }
 ];
 
 export function slugifyCommandName(value: string): string {
@@ -145,13 +182,23 @@ function findCommand(name: string, commands: readonly ConsoleCommand[]): { comma
 }
 
 // A mention may be followed by closing punctuation ("Summarise @note."); a bare folder name never ends with it.
-const MENTION_PATTERN = /(^|\s)@(?:\[\[([^\]\n]+)\]\]|(selection|sel|note|folder)(?::(?:"([^"\n]+)"|(\S*[^\s.,;:!?)])))?)(?=[\s.,;:!?)]|$)/gi;
+// A full stop only ends a mention before whitespace or the end, so "@note.md" stays plain text. A bare argument stops at
+// "," and ";" (quote the argument to use them), and a colon with no argument is consumed with the keyword.
+const MENTION_PATTERN = /(^|\s)@(?:\[\[([^\]\n]+)\]\]|(selection|sel|note|folder|links|backlinks|recent|tag)(?::(?:"([^"\n]+)"|([^\s,;]*[^\s.,;:!?)]))?)?)(?=[\s,;:!?)]|\.(?=\s|$)|$)/gi;
 // U+FFFF is a Unicode noncharacter, reserved for internal use, so it never stands for anything the user typed.
 const REMOVED_MENTION = "\uffff";
+// Several mentions in a row collapse to one marker, so removing them leaves a single space.
+const ADJACENT_REMOVED_MENTIONS = new RegExp(`${REMOVED_MENTION}(?:[ \\t]+${REMOVED_MENTION})+`, "g");
 
 /** Removes @mentions from the input. Unknown @words (such as email addresses) are left alone. */
 export function extractConsoleMentions(input: string): { text: string; mentions: ConsoleMentions; error: string | null } {
-	const mentions: ConsoleMentions = { scope: "auto", folder: null, notes: [] };
+	const mentions: ConsoleMentions = { scope: "auto", folder: null, notes: [], vault: [] };
+	const vaultErrors: string[] = [];
+	const addVaultMention = (mention: VaultMention): void => {
+		if (!mentions.vault.some((existing) => vaultMentionKey(existing) === vaultMentionKey(mention))) {
+			mentions.vault.push(mention);
+		}
+	};
 	const scopes = new Set<ContextScope>();
 	let error: string | null = null;
 
@@ -170,6 +217,31 @@ export function extractConsoleMentions(input: string): { text: string; mentions:
 			mentions.folder = argument;
 			return `${lead}${REMOVED_MENTION}`;
 		}
+		if (name === "links" || name === "backlinks") {
+			if (argument) {
+				return match;
+			}
+			addVaultMention({ kind: name });
+			return `${lead}${REMOVED_MENTION}`;
+		}
+		if (name === "tag") {
+			const tag = normaliseTag(argument);
+			if (tag) {
+				addVaultMention({ kind: "tag", tag });
+			} else {
+				vaultErrors.push("@tag needs a tag, for example @tag:project or @tag:#project/alpha.");
+			}
+			return `${lead}${REMOVED_MENTION}`;
+		}
+		if (name === "recent") {
+			const count = parseRecentCount(argument);
+			if (count === null) {
+				vaultErrors.push(`@recent:${argument} is not a number from 1 to ${MAX_RECENT_COUNT}. Use @recent or @recent:5.`);
+			} else {
+				addVaultMention({ kind: "recent", count });
+			}
+			return `${lead}${REMOVED_MENTION}`;
+		}
 		if (argument) {
 			// "@note:Something" is not a mention form; keep it as typed.
 			return match;
@@ -179,11 +251,14 @@ export function extractConsoleMentions(input: string): { text: string; mentions:
 	});
 	// Tidy only where a mention was removed, so indentation, tables and pasted code keep their spacing.
 	const text = marked
+		.replace(ADJACENT_REMOVED_MENTIONS, REMOVED_MENTION)
 		.replace(/[ \t]*\uffff[ \t]*(?=[.,;:!?)\r\n]|$)/g, "")
 		.replace(/[ \t]*\uffff[ \t]*/g, " ")
 		.trim();
 
-	if (scopes.size > 1) {
+	if (vaultErrors.length > 0) {
+		error = vaultErrors[0];
+	} else if (scopes.size > 1) {
 		error = "Use either @selection or @note, not both.";
 	} else if (scopes.size === 1) {
 		mentions.scope = scopes.has("note") ? "note" : "selection";
@@ -256,6 +331,23 @@ export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand
 			return { kind: "inspect", question: text, mentions };
 		case "history":
 			return { kind: "history" };
+		case "model":
+			return { kind: "model", query: text };
+		case "provider":
+			return { kind: "provider", query: text };
+		case "export":
+			return { kind: "export", title: text };
+		case "new-thread":
+			// "/new <question>" used to reach /new-note by prefix, so say where that went rather than drop the text.
+			return text
+				? { kind: "error", message: "/new starts an empty conversation and takes no text. To save one answer as a note, use /note <question>." }
+				: { kind: "newThread" };
+		case "threads":
+			return { kind: "threads" };
+		case "rename-thread":
+			return text ? { kind: "renameThread", title: text } : { kind: "error", message: "Add a title after /rename, for example /rename Budget review." };
+		case "delete-thread":
+			return { kind: "deleteThread" };
 	}
 }
 
@@ -282,19 +374,57 @@ const MENTION_COMPLETIONS: ConsoleCompletion[] = [
 	{ label: "@note", insertText: "@note ", detail: "The whole note, even when text is selected" },
 	{ label: "@folder", insertText: "@folder ", detail: "Notes in the folder set in AskMate settings" },
 	{ label: "@folder:", insertText: "@folder:", detail: "Notes in a folder you name, for example @folder:Projects" },
+	{ label: "@links", insertText: "@links ", detail: "Notes the current note links to" },
+	{ label: "@backlinks", insertText: "@backlinks ", detail: "Notes that link to the current note" },
+	{ label: "@tag:", insertText: "@tag:", detail: "Notes with a tag, for example @tag:project" },
+	{ label: "@recent", insertText: "@recent ", detail: "The 5 most recently modified notes; @recent:10 for more" },
 	{ label: "@[[", insertText: "@[[", detail: "Add another note, for example @[[Vendors]]" }
 ];
 
+function tagCompletions(vaultTags: readonly string[], query: string): ConsoleCompletion[] {
+	const bare = (tag: string): string => tag.replace(/^#/, "");
+	const items = vaultTags.map(bare).filter((tag) => tag.toLowerCase().includes(query));
+	return rankMatches(items, query, (tag) => [tag.toLowerCase()])
+		.slice(0, MAX_COMPLETIONS)
+		.map((tag) => ({ label: `@tag:${tag}`, insertText: `@tag:${tag} `, detail: "Notes with this tag" }));
+}
+
 /** Suggestions for the token before the cursor: a command at the start, or an @mention anywhere. */
-export function getConsoleCompletions(input: string, cursor: number, commands: readonly ConsoleCommand[]): ConsoleCompletionResult {
+export function getConsoleCompletions(
+	input: string,
+	cursor: number,
+	commands: readonly ConsoleCommand[],
+	argumentSource: ConsoleArgumentSource = { models: [], providers: [] }
+): ConsoleCompletionResult {
 	const before = input.slice(0, cursor);
+	// Accepting a suggestion replaces the whole token, so text after the caret is not left behind as a stray suffix.
+	const tokenEnd = cursor + (/^\S*/.exec(input.slice(cursor))?.[0].length ?? 0);
+	const argumentMatch = before.match(/^\/([^\s]+)\s+([^\s]*)$/);
+	if (argumentMatch) {
+		const kind = findCommand(argumentMatch[1].toLowerCase(), commands).command?.kind;
+		if (kind === "model" || kind === "provider") {
+			const query = argumentMatch[2].toLowerCase();
+			// An empty argument offers nothing, so Enter after "/model " still lists models instead of picking one.
+			if (!query) {
+				return { from: cursor, to: cursor, items: [] };
+			}
+			const candidates: ConsoleCompletion[] = kind === "model"
+				? argumentSource.models.map((model) => ({ label: model, insertText: model, detail: "Model" }))
+				: argumentSource.providers.map((provider) => ({ label: provider.id, insertText: provider.id, detail: provider.label }));
+			return {
+				from: cursor - argumentMatch[2].length,
+				to: tokenEnd,
+				items: rankMatches(candidates, query, (item) => [item.label.toLowerCase(), item.detail.toLowerCase()]).slice(0, MAX_COMPLETIONS)
+			};
+		}
+	}
 	const commandMatch = before.match(/^\/([^\s]*)$/);
 	if (commandMatch) {
 		const query = commandMatch[1].toLowerCase();
 		const matches = rankMatches(commands, query, (command) => [command.name, ...command.aliases]);
 		return {
 			from: 0,
-			to: cursor,
+			to: tokenEnd,
 			items: matches.slice(0, MAX_COMPLETIONS).map((command) => ({
 				label: `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`,
 				insertText: `/${command.name} `,
@@ -307,9 +437,13 @@ export function getConsoleCompletions(input: string, cursor: number, commands: r
 	if (mentionMatch && !mentionMatch[2].startsWith("@[[")) {
 		const query = mentionMatch[2].toLowerCase();
 		const from = before.length - mentionMatch[2].length;
+		const tagQuery = /^@tag:#?(.*)$/i.exec(mentionMatch[2]);
+		if (tagQuery) {
+			return { from, to: tokenEnd, items: tagCompletions(argumentSource.vaultTags ?? [], tagQuery[1].toLowerCase()) };
+		}
 		return {
 			from,
-			to: cursor,
+			to: tokenEnd,
 			items: rankMatches(MENTION_COMPLETIONS, query, (item) => [item.label]).slice(0, MAX_COMPLETIONS)
 		};
 	}
@@ -335,6 +469,10 @@ export function formatConsoleHelp(commands: readonly ConsoleCommand[]): string {
 		"  @folder         notes in the folder set in settings",
 		"  @folder:Path    notes in that folder",
 		"  @[[Note]]       add another note as context",
+		"  @links          notes the current note links to",
+		"  @backlinks      notes that link to the current note",
+		"  @tag:name       notes with that tag, nested tags included",
+		"  @recent         the 5 most recently modified notes (@recent:10 for more, up to 20)",
 		"",
 		"Keys",
 		"  Tab or Enter accepts a suggestion, ↑ recalls earlier input, Esc closes suggestions or stops a request.",

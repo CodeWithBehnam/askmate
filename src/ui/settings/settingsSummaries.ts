@@ -102,6 +102,15 @@ export function summarizeWorkflows(settings: AskMateSettings): string {
 	return count === 0 ? "No custom workflows" : pluralise(count, "custom workflow");
 }
 
+export function summarizeInstructions(settings: AskMateSettings): string {
+	const rules = settings.folderInstructions.length;
+	const parts = [
+		settings.globalInstructions.trim() ? "Instructions set" : null,
+		rules > 0 ? pluralise(rules, "folder rule") : null
+	].filter((part): part is string => part !== null);
+	return parts.length > 0 ? parts.join(", ") : "Not set";
+}
+
 export function summarizeUsageGuardrails(settings: AskMateSettings, todayTokens: number, monthTokens = 0): string {
 	if (!settings.usageGuardrailsEnabled) {
 		return "Guardrails off";

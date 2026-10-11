@@ -25,3 +25,14 @@ describe("getSupportedReasoningEffort", () => {
 		expect(getSupportedReasoningEffort(model, "medium")).toBeNull();
 	});
 });
+
+describe("getSupportedReasoningEffort for the GPT-6 family", () => {
+	test.each([
+		["gpt-6-astra", "none", "low"],
+		["gpt-6.1-sol", "none", "low"],
+		["gpt-6-astra", "high", "high"],
+		["gpt-6.1-sol", "xhigh", "xhigh"]
+	])("%s with %s sends %s", (model: string, effort: string, expected: string) => {
+		expect(getSupportedReasoningEffort(model, effort as ReasoningEffort)).toBe(expected as ReasoningEffort);
+	});
+});

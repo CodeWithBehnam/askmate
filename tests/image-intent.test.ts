@@ -15,7 +15,8 @@ const imageRequests = [
 	"Create a logo",
 	"Generate a photo, realistic style",
 	"Create an illustration showing the water cycle",
-	"Make a poster and a matching banner"
+	"Make a poster and a matching banner",
+	"Draw a lighthouse at dusk"
 ];
 
 const textRequests = [
@@ -33,6 +34,14 @@ const textRequests = [
 	"Draw the line between facts and opinions",
 	"Draw a mermaid diagram of the workflow",
 	"Draw up a plan for next week",
+	"Draw a pie chart of sales",
+	"Draw a bar chart",
+	"Draw a sequence diagram of login",
+	"Draw a class diagram",
+	"Draw a UML diagram",
+	"Draw a venn diagram",
+	"Draw a gantt chart",
+	"Draw a 3-column table",
 	"Draw me conclusions from this",
 	"Summarise the photo section",
 	"Generate a photo checklist",

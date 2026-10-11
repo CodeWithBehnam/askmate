@@ -3,7 +3,9 @@ import type { ModelCapability, ReasoningEffort } from "./types";
 
 export const GPT_5_5_MODEL_PATTERN = /^gpt-5\.5(?:$|-)/;
 const IMAGE_MODEL_PATTERN = /^(?:gpt-image-|dall-e-)/;
+// GPT-6 models share the GPT-5 request shape; OpenAI documents `none` as unsupported for them.
 const GPT_5_FAMILY_PATTERN = /^gpt-5(?:$|[.-])/;
+const GPT_6_FAMILY_PATTERN = /^gpt-6(?:$|[.-])/;
 const O_SERIES_PATTERN = /^o\d(?:$|-)/;
 // The earliest o1 previews reject `reasoning.effort`.
 const O_SERIES_WITHOUT_EFFORT_PATTERN = /^o1-(?:mini|preview)(?:$|-)/;
@@ -45,6 +47,10 @@ export function getSupportedReasoningEffort(model: string, effort: ReasoningEffo
 
 	if (O_SERIES_PATTERN.test(id)) {
 		return effort === "none" ? "low" : effort === "xhigh" ? "high" : effort;
+	}
+
+	if (GPT_6_FAMILY_PATTERN.test(id) && !/-chat(?:$|-)/.test(id)) {
+		return effort === "none" ? "low" : effort;
 	}
 
 	if (GPT_5_FAMILY_PATTERN.test(id) && !/-chat(?:$|-)/.test(id)) {

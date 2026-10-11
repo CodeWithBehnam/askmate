@@ -295,6 +295,59 @@ describe("chat completions providers", () => {
 			"OpenRouter refused the request. Provider message: I can't help with that."
 		);
 	});
+
+	test("an error hidden in a 200 choice is raised instead of returning empty text", async () => {
+		const { runtime } = fakeRuntime([
+			json(200, { choices: [{ finish_reason: "error", error: { code: 502, message: "upstream down" }, message: { content: "" } }] })
+		]);
+		await expect(completeOpenRouterText(runtime, ref("openrouter", "OpenRouter"), "sys", "q")).rejects.toThrow(/upstream down/);
+	});
+
+	test("a top-level error in a 200 body is raised", async () => {
+		const { runtime } = fakeRuntime([json(200, { error: { code: 429, message: "rate limited upstream" } })]);
+		await expect(completeOpenRouterText(runtime, ref("openrouter", "OpenRouter"), "sys", "q")).rejects.toThrow(/rate limited upstream/);
+	});
+
+	test("partial text with finish_reason error is flagged as incomplete", async () => {
+		const { runtime } = fakeRuntime([json(200, { choices: [{ message: { content: "Half an ans" }, finish_reason: "error" }] })]);
+		const result = await completeOpenRouterText(runtime, ref("openrouter", "OpenRouter"), "sys", "q");
+		expect(result.incompleteReason).toBe("error");
+	});
+
+	test("cached and reasoning token details are carried into usage", async () => {
+		const { runtime } = fakeRuntime([
+			json(200, {
+				choices: [{ message: { content: "Done" }, finish_reason: "stop" }],
+				usage: {
+					prompt_tokens: 10,
+					completion_tokens: 20,
+					total_tokens: 30,
+					prompt_tokens_details: { cached_tokens: 4 },
+					completion_tokens_details: { reasoning_tokens: 7 }
+				}
+			})
+		]);
+		const result = await completeOpenRouterText(runtime, ref("openrouter", "OpenRouter"), "sys", "q");
+		expect(result.usage).toEqual({
+			input_tokens: 10,
+			output_tokens: 20,
+			total_tokens: 30,
+			input_tokens_details: { cached_tokens: 4 },
+			output_tokens_details: { reasoning_tokens: 7 }
+		});
+	});
+});
+
+describe("model list validation", () => {
+	test("a non-JSON 200 is not reported as an empty model list", async () => {
+		const { runtime } = fakeRuntime([raw(200, "<html>Captive portal</html>")]);
+		await expect(fetchProviderModels(runtime, "openrouter")).rejects.toThrow(/did not return a model list/);
+	});
+
+	test("a JSON 200 without a data array is rejected", async () => {
+		const { runtime } = fakeRuntime([json(200, { models: [] })]);
+		await expect(fetchProviderModels(runtime, "openrouter")).rejects.toThrow(/did not return a model list/);
+	});
 });
 
 describe("Azure OpenAI model refresh", () => {

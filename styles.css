@@ -2119,6 +2119,20 @@
 	font-weight: 600;
 }
 
+.askmate-sidebar .askmate-console-segment.is-model {
+	background: transparent;
+	color: inherit;
+}
+
+.askmate-sidebar .askmate-console-segment.is-model:hover:not(:disabled),
+.askmate-sidebar .askmate-console-segment.is-model:focus-visible {
+	background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.askmate-sidebar .askmate-console-segment.is-model:disabled {
+	cursor: default;
+}
+
 .askmate-sidebar .askmate-console-segment.is-mode:disabled {
 	cursor: default;
 	opacity: 0.75;

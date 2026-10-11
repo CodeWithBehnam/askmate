@@ -101,3 +101,46 @@ describe("splitMarkdownFrontmatter", () => {
 		expect(block.body).toBe("");
 	});
 });
+
+describe("parseMarkdownHeadingSections edge cases", () => {
+	test("recognises setext headings so the previous section ends before them", () => {
+		const lines = ["## A", "old", "", "B", "---", "body B", "", "C", "===", "body C"];
+		const sections = parseMarkdownHeadingSections(lines.join("\n"));
+		expect(sections.map((s) => [s.level, s.title])).toEqual([[2, "A"], [2, "B"], [1, "C"]]);
+		expect(sections[0].endLineExclusive).toBe(3);
+		expect(sections[1].bodyStartLine).toBe(5);
+		expect(sections[1].endLineExclusive).toBe(7);
+	});
+
+	test("a '---' after a blank line is a thematic break, not a setext underline", () => {
+		const lines = ["# A", "text", "", "---", "more"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((s) => s.title)).toEqual(["A"]);
+	});
+
+	test("list items, quotes and tables are not setext titles", () => {
+		const lines = ["# A", "- item", "---", "> quote", "---", "| a | b |", "---"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((s) => s.title)).toEqual(["A"]);
+	});
+
+	test("keeps a trailing '#' that is part of the title", () => {
+		const sections = parseMarkdownHeadingSections(["# Learning C#", "## F#", "### Closed ###"].join("\n"));
+		expect(sections.map((s) => s.title)).toEqual(["Learning C#", "F#", "Closed"]);
+	});
+
+	test("empty headings end sections but are not targetable", () => {
+		const sections = parseMarkdownHeadingSections(["## Real", "a", "##  ", "b", "## ##", "c", "## Next"].join("\n"));
+		expect(sections.map((s) => s.title)).toEqual(["Real", "Next"]);
+		expect(sections[0].endLineExclusive).toBe(2);
+		expect(sections[1].path).toBe("Next");
+	});
+
+	test("ignores headings inside HTML comments, %% comments and math blocks", () => {
+		const lines = ["# A", "<!--", "# hidden", "-->", "%%", "# off", "%%", "$$", "# x", "$$", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((s) => s.title)).toEqual(["A", "B"]);
+	});
+
+	test("single-line comments do not hide later headings", () => {
+		const lines = ["# A", "<!-- note -->", "%% note %%", "$$x$$", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((s) => s.title)).toEqual(["A", "B"]);
+	});
+});

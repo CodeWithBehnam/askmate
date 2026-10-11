@@ -147,7 +147,14 @@ class FakeVault {
 }
 
 class FakeMetadataCache {
+	resolvedLinks: Record<string, Record<string, number>> = {};
+	caches = new Map<string, { links?: { link: string }[]; tags?: { tag: string }[]; frontmatter?: Record<string, unknown> }>();
+
 	constructor(private readonly vault: FakeVault) {}
+
+	getFileCache(file: TFile): { links?: { link: string }[]; tags?: { tag: string }[]; frontmatter?: Record<string, unknown> } | null {
+		return this.caches.get(file.path) ?? null;
+	}
 
 	getFirstLinkpathDest(link: string): TFile | null {
 		const direct = this.vault.files.get(link) ?? this.vault.files.get(`${link}.md`);
@@ -162,6 +169,7 @@ type Harness = {
 	service: InstanceType<typeof ContextService>;
 	workspace: FakeWorkspace;
 	vault: FakeVault;
+	metadataCache: FakeMetadataCache;
 	settings: AskMateSettings;
 };
 
@@ -175,7 +183,7 @@ function createHarness(overrides: Partial<AskMateSettings> = {}): Harness {
 		getSettings: () => settings,
 		getNoteHistoryForPath: () => []
 	});
-	return { service, workspace, vault, settings };
+	return { service, workspace, vault, metadataCache, settings };
 }
 
 function openInView(harness: Harness, file: TFile, content: string): MarkdownView {
@@ -308,6 +316,21 @@ describe("sidebar context rule", () => {
 		expect(context.source).toBe("Selected text");
 		expect(context.content).toBe("editor");
 		expect(harness.vault.reads).toEqual([]);
+	});
+
+	test("a selection cleared without an event is not resurrected from the snapshot", async () => {
+		const harness = createHarness();
+		const note = harness.vault.add("A.md", "alpha beta gamma");
+		const view = openInView(harness, note, "alpha beta gamma");
+		view.editor.select("beta");
+		focus(harness, view);
+		harness.service.rememberEditorContext(view.editor, note);
+		view.editor.selectionEnd = view.editor.selectionStart;
+		focusSidebar(harness);
+
+		const context = await harness.service.getNoteContext();
+		expect(context.source).toBe("Current note");
+		expect(context.content).toBe("alpha beta gamma");
 	});
 
 	test("remembers a selection from editor-change without an active view", async () => {
@@ -635,5 +658,75 @@ describe("image references", () => {
 		harness.vault.add("Pics/cat.png", "");
 		const [manifest] = harness.service.buildImageManifestAttachments({ content: "![[cat.png]]", file: null, source: "Current note" });
 		expect(manifest?.content).toContain("- Local image: Pics/cat.png (png,");
+	});
+});
+
+describe("vault mentions", () => {
+	function vaultHarness(): { harness: Harness; current: TFile } {
+		const harness = createHarness();
+		const current = harness.vault.add("Current.md", "current body");
+		harness.vault.add("Out1.md", "first outgoing");
+		harness.vault.add("Out2.md", "second outgoing");
+		harness.vault.add("Back.md", "links to current");
+		harness.vault.add("Tagged.md", "frontmatter tag");
+		harness.vault.add("Nested.md", "inline nested tag");
+		harness.vault.files.get("Back.md")!.stat.mtime = 5;
+		harness.vault.files.get("Tagged.md")!.stat.mtime = 9;
+		harness.vault.files.get("Nested.md")!.stat.mtime = 7;
+		harness.metadataCache.resolvedLinks = {
+			"Current.md": { "Out1.md": 1, "Out2.md": 1 },
+			"Back.md": { "Current.md": 1 },
+			"Out1.md": {},
+			"Out2.md": {},
+			"Tagged.md": {},
+			"Nested.md": {}
+		};
+		harness.metadataCache.caches.set("Current.md", { links: [{ link: "Out2#Heading" }, { link: "Out1|alias" }, { link: "Missing" }] });
+		harness.metadataCache.caches.set("Tagged.md", { frontmatter: { tags: ["Project"] } });
+		harness.metadataCache.caches.set("Nested.md", { tags: [{ tag: "#project/alpha" }] });
+		return { harness, current };
+	}
+
+	test("labels linked notes with their relation, in order of appearance, and excludes the current note", async () => {
+		const { harness, current } = vaultHarness();
+		const attachments = await harness.service.buildVaultMentionAttachments([{ kind: "links" }], current, 10000);
+		expect(attachments.map((attachment) => attachment.sourcePath)).toEqual(["Out2.md", "Out1.md"]);
+		expect(attachments[0]?.kind).toBe("vault_note");
+		expect(attachments[0]?.title).toBe("Vault note (linked from current note): Out2.md");
+	});
+
+	test("backlinks come from resolvedLinks", async () => {
+		const { harness, current } = vaultHarness();
+		const attachments = await harness.service.buildVaultMentionAttachments([{ kind: "backlinks" }], current, 10000);
+		expect(attachments.map((attachment) => attachment.sourcePath)).toEqual(["Back.md"]);
+	});
+
+	test("tags match frontmatter and nested inline tags, newest first", async () => {
+		const { harness, current } = vaultHarness();
+		const attachments = await harness.service.buildVaultMentionAttachments([{ kind: "tag", tag: "project" }], current, 10000);
+		expect(attachments.map((attachment) => attachment.sourcePath)).toEqual(["Tagged.md", "Nested.md"]);
+		expect(attachments[1]?.title).toContain("tag #project");
+	});
+
+	test("the shared character limit truncates and then leaves later notes unread, and the preview says so", async () => {
+		const { harness, current } = vaultHarness();
+		const attachments = await harness.service.buildVaultMentionAttachments([{ kind: "recent", count: 5 }], current, 10);
+		expect(attachments).toHaveLength(1);
+		expect(attachments[0]?.truncated).toBe(true);
+		const preview = harness.service.describeLastVaultMentions().join("\n");
+		expect(preview).toContain("@recent:5");
+		expect(preview).toContain("character limit reached");
+	});
+
+	test("a mention that matches nothing fails with a clear message", async () => {
+		const { harness, current } = vaultHarness();
+		await expect(harness.service.buildVaultMentionAttachments([{ kind: "tag", tag: "nope" }], current, 1000)).rejects.toThrow("#nope");
+		await expect(harness.service.buildVaultMentionAttachments([{ kind: "links" }], null, 1000)).rejects.toThrow("needs a note");
+	});
+
+	test("without vault mentions nothing is added", async () => {
+		const { harness, current } = vaultHarness();
+		expect(await harness.service.buildVaultMentionAttachments(undefined, current, 1000)).toEqual([]);
+		expect(harness.service.describeLastVaultMentions()).toEqual([]);
 	});
 });

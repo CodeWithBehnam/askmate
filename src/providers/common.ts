@@ -121,7 +121,28 @@ export function extractChatCompletionText(body: Record<string, unknown> | null):
 	return parts.join("\n").trim();
 }
 
-const CHAT_COMPLETION_INCOMPLETE_REASONS = new Set(["length", "content_filter"]);
+// OpenRouter documents finish_reason "error" for a generation that failed part-way, so any text is truncated.
+const CHAT_COMPLETION_INCOMPLETE_REASONS = new Set(["length", "content_filter", "error"]);
+
+/** Some gateways report upstream failures inside an HTTP 200 body, either at the top level or on a choice. */
+export function extractChatCompletionBodyError(body: Record<string, unknown> | null): string {
+	const topLevel = extractProviderError(body, "");
+	if (topLevel) {
+		return topLevel;
+	}
+
+	const choices = Array.isArray(body?.choices) ? body.choices : [];
+	for (const choice of choices) {
+		if (choice && typeof choice === "object") {
+			const message = extractProviderError(choice as Record<string, unknown>, "");
+			if (message) {
+				return message;
+			}
+		}
+	}
+
+	return "";
+}
 
 export function getChatCompletionIncompleteReason(body: Record<string, unknown> | null): string | null {
 	const choices = Array.isArray(body?.choices) ? body.choices : [];
@@ -168,6 +189,11 @@ export function buildChatCompletionsResult(
 	model: string,
 	body: Record<string, unknown> | null
 ): ProviderTextResult {
+	const bodyError = extractChatCompletionBodyError(body);
+	if (bodyError) {
+		throw new Error(`${providerName} reported an error in its response. Provider message: ${redactSecrets(bodyError)}`);
+	}
+
 	const text = extractChatCompletionText(body);
 	const refusal = extractChatCompletionRefusal(body);
 
@@ -192,15 +218,25 @@ export function normalizeChatCompletionsUsage(value: unknown): OpenAITokenUsage 
 		return null;
 	}
 
-	const usage = value as { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
+	const usage = value as {
+		prompt_tokens?: unknown;
+		completion_tokens?: unknown;
+		total_tokens?: unknown;
+		prompt_tokens_details?: { cached_tokens?: unknown } | null;
+		completion_tokens_details?: { reasoning_tokens?: unknown } | null;
+	};
 	const inputTokens = getNonNegativeInteger(usage.prompt_tokens);
 	const outputTokens = getNonNegativeInteger(usage.completion_tokens);
 	const totalTokens = getNonNegativeInteger(usage.total_tokens);
+	const cachedTokens = getNonNegativeInteger(usage.prompt_tokens_details?.cached_tokens);
+	const reasoningTokens = getNonNegativeInteger(usage.completion_tokens_details?.reasoning_tokens);
 
 	return {
 		input_tokens: inputTokens ?? undefined,
 		output_tokens: outputTokens ?? undefined,
-		total_tokens: totalTokens ?? undefined
+		total_tokens: totalTokens ?? undefined,
+		...(cachedTokens !== null && { input_tokens_details: { cached_tokens: cachedTokens } }),
+		...(reasoningTokens !== null && { output_tokens_details: { reasoning_tokens: reasoningTokens } })
 	};
 }
 
@@ -273,7 +309,12 @@ export async function fetchModelList(
 		throw new Error(formatProviderHttpError(providerName, response.status, describeProviderErrorBody(response, getSecretHeaderValues(headers))));
 	}
 
-	return body?.data?.map((model) => model.id ?? "").filter(Boolean).sort((a, b) => a.localeCompare(b)) ?? [];
+	// A captive portal or wrong base URL can answer 200 with HTML or unrelated JSON; that must not look like an empty list.
+	if (!Array.isArray(body?.data)) {
+		throw new Error(`${providerName} did not return a model list. Check the base URL.`);
+	}
+
+	return body.data.map((model) => model.id ?? "").filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
 /** Upper bound so a provider that keeps returning a cursor cannot loop forever. */

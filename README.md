@@ -44,6 +44,11 @@
   - [Ask About A Note](#ask-about-a-note)
   - [Create Or Apply Output](#create-or-apply-output)
   - [Generate Images](#generate-images)
+  - [Streaming Replies](#streaming-replies)
+  - [Editor Right-Click Menu](#editor-right-click-menu)
+  - [Custom Instructions](#custom-instructions)
+  - [Conversations: Saved Threads And Export](#conversations-saved-threads-and-export)
+  - [Switch Model Or Provider](#switch-model-or-provider)
   - [Run Workflows](#run-workflows)
   - [Console Layout](#console-layout)
 - [Privacy And Network Use](#privacy-and-network-use)
@@ -162,7 +167,8 @@ YourVault/.obsidian/plugins/askmate/
 6. Click the refresh button next to `Model` (`Refresh models`), or enter a model ID manually. Azure OpenAI has no model refresh, because deployments cannot be listed with an API key.
 7. Choose your default text model.
 8. Optional: configure image prompt planning and add an OpenAI key for `gpt-image-2`.
-9. Optional: configure workflows, output templates, context budgets, send shortcut, usage budgets, and privacy defaults.
+9. Optional: open `Instructions` to set how AskMate should answer (language, tone, audience, format) and add rules for specific folders, and star your favourite workflows so they appear when you right-click selected text.
+10. Optional: configure workflows, output templates, context budgets, send shortcut, usage budgets, and privacy defaults.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -201,6 +207,66 @@ What are the main claims in this note?
 
 AskMate answers in the sidebar. By default, previous sidebar messages are shown for convenience but are not sent as chat history unless threaded chat is enabled.
 
+Every finished reply has these actions:
+
+- `Copy`: copies the raw Markdown of the reply to the clipboard.
+- `Insert at cursor`: inserts the reply into the note you last edited, replacing the selection if there is one. If the sidebar has focus, AskMate uses the note you were last in. Incomplete replies are inserted with a warning.
+
+The command palette has `Copy last AskMate answer` and `Insert last AskMate answer at cursor` for the newest reply.
+
+### Streaming Replies
+
+AskMate shows text replies as the provider generates them, for every text provider. The Stop button cancels the HTTP request itself. Note and Apply output modes still write only after the reply has finished.
+
+Streaming is controlled by `Stream replies` under `Responses` in settings (on by default). If the streaming connection cannot be made, for example because a local server such as Ollama or LM Studio, an Azure resource or a corporate proxy does not allow requests from Obsidian, AskMate falls back to a single buffered response, so nothing breaks. HTTP errors such as 401 or 429 are reported as they are and are not retried. Turn the setting off if your endpoint handles streaming badly.
+
+If a stream breaks after some text has arrived, AskMate keeps the partial text, marks it as incomplete and will not use it to replace note text. Token usage for streamed replies comes from the provider's final event; local OpenAI-compatible servers often leave it out, in which case no usage is recorded for that reply.
+
+### Editor Right-Click Menu
+
+Select text in a note and right-click to see an AskMate section:
+
+- `AskMate: Ask about selection` opens the sidebar with the composer focused. In the Console layout it is prefilled with `@selection `, so you only type your question.
+- Your favourite workflows (star them under `Workflows and automation` → `Workflow sidebar`) appear below it, up to six. With no favourites, AskMate offers rewrite and polish, explain simply, summarise, and translate. Hidden workflows never appear.
+
+Workflows started from the menu behave exactly like their command palette versions and create a result note. With no selection, the menu offers `Ask about this note`. Turn the menu off with `Show AskMate in the editor context menu` under `Request defaults`.
+
+### Custom Instructions
+
+The `Instructions` settings page tells AskMate how to answer you, for example "answer in British English, keep a formal tone, write for a first-year student".
+
+- `Instructions for every request` apply to every text request: questions, workflows and batch runs.
+- `Folder instructions` add rules for notes inside a folder and its subfolders. A rule for `Projects` applies to `Projects/a.md` and `Projects/x/b.md`, but not to `ProjectsOld/c.md`. Folder names are case-sensitive. When several folders match, the broadest rule comes first and the most specific last.
+
+Instructions are added after AskMate's built-in instructions and cannot override its safety, evidence or Apply output rules. They show in `/inspect` and count towards token estimates. They are not used for image prompt planning, which must return strict JSON. The separate `Workflow custom instructions` setting still applies to workflows only.
+
+### Conversations: Saved Threads And Export
+
+AskMate keeps your sidebar chat as a named thread. Threads survive restarts, and you can switch between them.
+
+- `/new` starts a new conversation. The current one stays saved.
+- `/threads` opens a switcher showing each title and when it was last updated.
+- `/rename <title>` renames the current conversation. Titles default to your first question.
+- `/delete-thread` deletes a saved conversation after you confirm.
+- `/clear` clears the current conversation and removes it from your saved conversations.
+- `/export [title]` writes the conversation to a Markdown note in your AskMate result folder and opens it. The note has your questions and AskMate's replies as separate sections, links to the notes each question was asked about, and marks incomplete replies. Generated images appear as embeds when they were saved to your vault.
+
+The same actions are in the sidebar header (`New conversation`, `Saved conversations`, `Export conversation to note`) and the command palette (`Export AskMate conversation to note`). Turn saving off, or delete every saved thread, with `Save conversations` and `Delete saved conversations` in settings. AskMate keeps up to 50 threads of 200 messages each.
+
+### Switch Model Or Provider
+
+Click the model in the Console status bar, or the `Switch model or provider` button next to the reasoning selector in the Compact and Expanded layouts, to pick a provider and model. In the Console layout you can also type:
+
+```text
+/model                    list the current provider, model and available models
+/model gpt-5.5-mini       switch model; a unique start or part of the name works
+/model my-finetune!       use a model ID that is not listed (add !)
+/provider                 list providers and show which have no API key
+/provider anthropic       switch the chat provider
+```
+
+The choice is saved to settings, and reasoning effort support is checked again for the new model.
+
 ### Create Or Apply Output
 
 Choose an output mode before sending:
@@ -217,7 +283,7 @@ Use the Apply approval mode setting to choose how much confirmation AskMate asks
 - `Full`: asks with a diff for full-note and heading-section replacements, but skips selected-text and append previews.
 - `Manual`: asks with a diff before every text Apply write.
 
-If a reply is incomplete (it hit the token limit, or the provider filtered or refused it), AskMate shows a warning on the message and refuses to use it to replace note text. Appending it still works. When the note or selection was cut short by the context budget, AskMate asks for confirmation before any replacement.
+If a reply is incomplete (it hit the token limit, or the provider filtered or refused it), AskMate shows a warning on the message and refuses to use it to replace note text. Appending it still works. When the note or selection was cut short by the context budget, AskMate asks for confirmation before any replacement. When `Send note and attached context` was off for the request, the model never saw the text, so AskMate refuses to replace it and offers append instead; the same applies when image references were withheld and the text being replaced contains images.
 
 Queue for review keeps every pending suggestion until you apply or dismiss it; the `Review queue max items` limit never drops pending items. When pending items reach that limit, AskMate refuses to queue more until you review some. Applied and dismissed items keep only metadata, such as the note path, title and question, not the note text. Queued items and note history follow a note when you rename it and are removed when you delete it.
 
@@ -276,6 +342,13 @@ Type a question to ask about the note, or a command:
 /inspect why?             open the final prompt for a question
 /history                  show AskMate history for this note
 /clear                    clear the conversation
+/new                      start a new conversation (the current one stays saved)
+/threads                  switch to a saved conversation
+/rename Budget review     rename the current conversation
+/delete-thread            delete a saved conversation
+/export                   export this conversation to a note
+/model gpt-5.5            show or switch the model
+/provider anthropic       show or switch the chat provider
 ```
 
 Every workflow has a command named after its short name, for example `/summarise`, `/critique`, `/translate` and `/polish`. Text after a workflow command is added as extra instructions for that run. Type a few letters and press `Tab` or `Enter` to complete, so `/pol` becomes `/polish`.
@@ -288,9 +361,15 @@ Add mentions anywhere in the line to choose what is sent:
 @folder           notes in the folder set in AskMate settings
 @folder:Projects  notes in a folder you name
 @[[Vendors]]      another note as extra context
+@links            notes the current note links to, in the order they appear
+@backlinks        notes that link to the current note, most links first
+@tag:project      notes with that tag in the body or frontmatter (nested tags included)
+@recent           the 5 most recently modified notes; @recent:10 for more, up to 20
 ```
 
-Mentions can sit next to punctuation (`Summarise @note.`). A note or folder that does not exist is reported instead of being skipped.
+`@tag:` is case-insensitive, the `#` is optional, and `@tag:project` also matches `#project/alpha`; suggestions list the tags in your vault. Each of `@links`, `@backlinks`, `@tag:` and `@recent` attaches at most 10 notes, which count against your context budget and per-note size limits. `/context` lists which notes were included and which were left out.
+
+Mentions can sit next to punctuation (`Summarise @note.`). A note, folder, tag or mention that finds nothing is reported instead of being skipped.
 
 Keys: `Tab` or `Enter` accepts the highlighted suggestion, `↑` recalls earlier input, and `Esc` closes suggestions or stops a running request. Start a line with `//` to send a question that begins with a slash; it is always sent as text.
 
@@ -305,7 +384,7 @@ Keys: `Tab` or `Enter` accepts the highlighted suggestion, `↑` recalls earlier
 > - Contacts AI providers only when you run a request, click `Test connection` or `Refresh models`, or run the `Test provider connection` command. Note content is sent only with requests.
 > - API keys are stored through Obsidian `SecretStorage`.
 > - Prompt inspector is local and does not contact a provider by itself.
-> - Note history, the review queue and usage statistics are stored in the plugin's `data.json` inside your vault.
+> - Note history, saved conversations, the review queue and usage statistics are stored in the plugin's `data.json` inside your vault.
 
 #### Network Use
 
@@ -314,6 +393,8 @@ AskMate talks only to the services you configure: OpenAI, Azure OpenAI, Azure AI
 - Requests you run (questions, workflows, batch runs, image generation). Depending on your settings and request, a request can include your prompt, selected text, the current note, workflow instructions, opted-in extra context such as other notes, folders, a style guide, a glossary, image metadata or note history, image prompt planning content, or generated image prompts. Text requests go to the chat provider you choose; image prompt planning goes to the planning provider you choose.
 - Image generation always goes to the OpenAI Images API with `gpt-image-2`, even when another chat provider is selected.
 - `Test connection`, `Refresh models` and the `Test provider connection` command send your API key to the selected provider to check the connection or list models. They send no note content. For Azure OpenAI and Azure AI Foundry, the test sends a minimal text request that may use a few tokens.
+
+With `Stream replies` on, text requests are sent with the browser `fetch` so the reply can stream and Stop can cancel it; every other call uses Obsidian's `requestUrl`. Both go only to the endpoints above.
 
 OpenAI text requests use the Responses API with `store: false`, so OpenAI is asked not to keep the response for later retrieval. Each provider's own retention and abuse-monitoring policies still apply.
 
@@ -330,7 +411,8 @@ Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores se
 The plugin's settings file, `.obsidian/plugins/askmate/data.json` in your vault, also stores:
 
 - Note history: the question and answer of successful AskMate turns per note (up to 12 turns per note by default). It is on by default. Turn it off with `Store note-specific history` under `Context sources` in settings, or clear one note's history with `Clear note history` in the sidebar's note history view. Including that history in future requests is a separate switch and is off by default.
-- The review queue: pending suggestions keep the proposed text and a snapshot of the original text until you apply or dismiss them. Applied and dismissed items keep only metadata.
+- Saved conversations: when `Save conversations` is on (the default), the full text of your questions and AskMate's replies, plus the model name and the paths of related notes and saved images, is stored as threads. Image data is not stored. Turn the setting off to stop saving, and use `Delete saved conversations` to remove existing threads.
+- The review queue: pending suggestions keep the proposed text until you apply or dismiss them; full-note replacements also keep a snapshot of the original note. Applied and dismissed items keep only metadata.
 - Usage statistics: per-request token counts, provider, model, title and note path, plus per-day token totals. They contain no note text. Clear them with `Reset statistics` under `Usage and guardrails` → `Usage statistics` in AskMate settings.
 
 If you sync your `.obsidian` folder (for example with Obsidian Sync, iCloud or git), this data syncs with it. Generated notes and images are saved as ordinary files in your vault.
@@ -343,7 +425,7 @@ Provider requests are subject to the selected provider's API terms and privacy p
 
 ### Does AskMate send my whole vault?
 
-No. AskMate sends only the context included for the request you run. By default, that means selected text or the current or remembered Markdown note. Extra notes, folders, style guides, glossaries, image metadata, and note history are included only when you enable those context sources.
+No. AskMate sends only the context included for the request you run. By default, that means selected text or the current or remembered Markdown note. Extra notes, folders, style guides, glossaries, image metadata, and note history are included only when you enable those context sources. Other notes are also sent when you ask for them with `@[[Note]]`, `@folder`, `@links`, `@backlinks`, `@tag:` or `@recent`; each of the last four attaches at most 10 notes, all of them count against your context budget, and `/context` lists exactly which notes were included. Turning off `Send note and attached context` withholds all of them.
 
 ### Can I use local models?
 

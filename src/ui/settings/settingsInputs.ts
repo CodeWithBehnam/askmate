@@ -183,6 +183,8 @@ const SETTING_CONTROLS = {
 		}
 	},
 	autoImageIntentEnabled: booleanControl("autoImageIntentEnabled"),
+	editorContextMenuEnabled: booleanControl("editorContextMenuEnabled"),
+	streamResponses: booleanControl("streamResponses"),
 	showRequestPreview: booleanControl("showRequestPreview"),
 	threadedChatEnabled: booleanControl("threadedChatEnabled"),
 	folderContextEnabled: booleanControl("folderContextEnabled"),
@@ -191,6 +193,7 @@ const SETTING_CONTROLS = {
 	evidenceLinkedAnswersEnabled: booleanControl("evidenceLinkedAnswersEnabled"),
 	noteHistoryEnabled: booleanControl("noteHistoryEnabled"),
 	noteHistoryIncludeInContext: booleanControl("noteHistoryIncludeInContext"),
+	saveConversations: booleanControl("saveConversations"),
 	includeStyleGuideContext: booleanControl("includeStyleGuideContext"),
 	includeGlossaryContext: booleanControl("includeGlossaryContext"),
 	smartResultPlacementEnabled: booleanControl("smartResultPlacementEnabled"),

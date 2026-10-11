@@ -8,6 +8,8 @@ import {
 	validateProviderBaseUrl
 } from "../shared/core";
 import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
+import { anthropicStreamAdapter, assembleAnthropicBody } from "./anthropic-stream";
+import { tryStreamTextResult } from "./streaming";
 import type { ProviderRuntime } from "./types";
 
 /** Named default so long-note workflows are not silently capped without intent. */
@@ -21,7 +23,8 @@ export async function completeAnthropicText(
 	providerRef: ProviderModelRef,
 	instructions: string,
 	input: string,
-	abortSignal?: AbortSignal
+	abortSignal?: AbortSignal,
+	onDelta?: (delta: string) => void
 ): Promise<ProviderTextResult> {
 	const apiKey = await runtime.getProviderApiKey("anthropic");
 
@@ -30,6 +33,42 @@ export async function completeAnthropicText(
 	}
 
 	const baseUrl = getAnthropicBaseUrl(runtime);
+	const requestBody = {
+		model: providerRef.model,
+		system: instructions,
+		max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+		messages: [
+			{ role: "user", content: input }
+		]
+	};
+
+	if (onDelta) {
+		const streamed = await tryStreamTextResult(runtime, {
+			providerName: "Anthropic",
+			url: `${baseUrl}/messages`,
+			headers: {
+				"x-api-key": apiKey,
+				"anthropic-version": ANTHROPIC_API_VERSION,
+				// Required for requests that originate in a browser context such as Obsidian's renderer.
+				"anthropic-dangerous-direct-browser-access": "true",
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify({ ...requestBody, stream: true }),
+			abortSignal,
+			idleTimeoutMs: ANTHROPIC_GENERATION_TIMEOUT_MS,
+			adapter: anthropicStreamAdapter,
+			onDelta,
+			model: providerRef.model,
+			endpoint: "anthropic_messages",
+			assemble: assembleAnthropicBody,
+			buildResult: (body) => buildAnthropicResult(providerRef.model, body)
+		});
+
+		if (streamed) {
+			return streamed;
+		}
+	}
+
 	const response = await runtime.requestJson<Record<string, unknown>>(`${baseUrl}/messages`, {
 		method: "POST",
 		headers: {
@@ -40,28 +79,25 @@ export async function completeAnthropicText(
 		abortSignal,
 		timeoutMs: ANTHROPIC_GENERATION_TIMEOUT_MS,
 		timeoutMessage: "Anthropic generation timed out after 5 minutes.",
-		body: JSON.stringify({
-			model: providerRef.model,
-			system: instructions,
-			max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
-			messages: [
-				{ role: "user", content: input }
-			]
-		})
+		body: JSON.stringify(requestBody)
 	});
-	const body = response.body;
 
 	if (!response.ok) {
 		throw new Error(formatProviderHttpError("Anthropic", response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
+	return buildAnthropicResult(providerRef.model, response.body);
+}
+
+/** Single parser for buffered bodies and for bodies assembled from a stream. */
+export function buildAnthropicResult(model: string, body: Record<string, unknown> | null): ProviderTextResult {
 	const text = extractAnthropicText(body);
 	const incompleteReason = getAnthropicIncompleteReason(body);
 	assertProviderTextPresent("Anthropic", text, incompleteReason);
 
 	return {
 		text,
-		model: providerRef.model,
+		model,
 		endpoint: "anthropic_messages",
 		usage: normalizeAnthropicUsage(body?.usage),
 		incompleteReason

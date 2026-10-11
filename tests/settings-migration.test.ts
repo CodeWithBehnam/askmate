@@ -131,6 +131,12 @@ describe("corrupt values", () => {
 		expect(load({ autoImageIntentEnabled: "false" }).autoImageIntentEnabled).toBe(true);
 	});
 
+	test("streamResponses defaults to true and keeps an explicit false", () => {
+		expect(load({}).streamResponses).toBe(true);
+		expect(load({ streamResponses: false }).streamResponses).toBe(false);
+		expect(load({ streamResponses: "false" }).streamResponses).toBe(true);
+	});
+
 	test("huge token counts stay finite", () => {
 		const stats = normalizeTokenUsageStats({
 			records: [{ timestamp: "2026-01-01T00:00:00.000Z", inputTokens: 1e308, outputTokens: 1e308 }]
@@ -234,5 +240,22 @@ describe("Console layout migration", () => {
 		expect(load({ composerLayout: "compact", consoleLayoutMigrated: true }).composerLayout).toBe("compact");
 		const settings = load({ composerLayout: "expanded", consoleLayoutMigrated: true });
 		expect(normalizeAskMateSettings(settings, "save").composerLayout).toBe("expanded");
+	});
+});
+
+describe("OpenAI model refresh", () => {
+	test("a refreshed provider list is not re-extended from the stale legacy mirror on save", () => {
+		const settings = normalizeAskMateSettings(
+			{
+				...DEFAULT_SETTINGS,
+				modelOptions: ["gpt-5.5", "gpt-4.1", "stale-a", "stale-b", "gpt-image-2"],
+				providers: {
+					...DEFAULT_SETTINGS.providers,
+					openai: { ...DEFAULT_SETTINGS.providers.openai, model: "gpt-5.5", modelOptions: ["gpt-5.5", "gpt-4.1"] }
+				}
+			},
+			"save"
+		);
+		expect(settings.providers.openai.modelOptions).toEqual(["gpt-5.5", "gpt-4.1"]);
 	});
 });

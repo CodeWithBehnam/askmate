@@ -18,6 +18,26 @@ export function renderTemplate(template: string, variables: Readonly<Record<stri
 		.join("\n");
 }
 
+export interface DateTemplateValues {
+	date: string;
+	dateTime: string;
+}
+
+/**
+ * Both values come from the same shifted clock so the date part of dateTime always matches date, even near midnight.
+ * The offset is a parameter (Date#getTimezoneOffset convention: minutes behind UTC) so callers and tests control it.
+ */
+export function buildDateTemplateValues(instant: Date, timezoneOffsetMinutes: number = instant.getTimezoneOffset()): DateTemplateValues {
+	const shifted = new Date(instant.getTime() - timezoneOffsetMinutes * 60_000);
+	const pad = (value: number): string => String(value).padStart(2, "0");
+	const date = `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
+	const time = `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`;
+	const offsetMinutes = Math.abs(timezoneOffsetMinutes);
+	const sign = timezoneOffsetMinutes > 0 ? "-" : "+";
+	const offset = `${sign}${pad(Math.floor(offsetMinutes / 60))}:${pad(offsetMinutes % 60)}`;
+	return { date, dateTime: `${date}T${time}${offset}` };
+}
+
 // Unlike trim(), this keeps the indentation of the first content line, which matters for indented code blocks.
 export function trimOuterBlankLines(text: string): string {
 	return text.replace(LEADING_BLANK_LINES, "").trimEnd();

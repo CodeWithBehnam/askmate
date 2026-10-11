@@ -44,7 +44,10 @@ import {
 	TOKEN_ESTIMATE_CHARS_PER_TOKEN,
 	WORKFLOW_ACCENTS
 } from "./constants";
+import { normalizeFolderInstructions, normalizeGlobalInstructions } from "./customInstructions";
+import { trimOuterBlankLines } from "../output/templates";
 import { DEFAULT_SETTINGS } from "./defaults";
+import { normalizeThreadStore } from "../threads/threadModel";
 import type { ApiEndpoint, ApplyApprovalMode, ApplyScope, AskMateSettings, BatchWorkflowOutputMode, BudgetEnforcementMode, ComposerLayout, ContextBudgetMode, ContextSource, CustomWorkflow, EffectiveApplyScope, FrontmatterApplyPolicy, ImagePromptPlanningProviderId, NoteHistoryStore, NoteHistoryTurn, OperationKind, OperationStatus, OutputMode, ProviderRoleSettings, ProviderSettings, ReasoningEffort, RequestIntentKind, RequestPrivacyOptions, ReviewQueueItem, ReviewQueueStatus, SelectionIdentity, SendShortcut, TextProviderId, TextProviderSettings, TokenUsageRecord, TokenUsageStats, TokenUsageSummary, WorkflowAccent, WorkflowDisplayPreference, WorkflowOutputKind } from "../shared/types";
 
 export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
@@ -166,7 +169,7 @@ export function isAbortError(error: unknown): boolean {
 }
 
 export function appendMarkdownBlockToContent(existing: string, block: string): string {
-	const cleanBlock = block.trim();
+	const cleanBlock = trimOuterBlankLines(block);
 	const newline = existing.includes("\r\n") ? "\r\n" : "\n";
 
 	if (!existing) {
@@ -276,7 +279,7 @@ export function normalizeReviewQueueItems(value: unknown, maxItems = DEFAULT_REV
 				title: typeof item.title === "string" ? item.title.trim().slice(0, 120) : "AskMate review",
 				question: typeof item.question === "string" ? stripNullCharacters(item.question).slice(0, 2000).trim() : "",
 				// Reviewed items are only kept as a log; dropping their note snapshots keeps data.json small.
-				proposedText: status === "pending" && typeof item.proposedText === "string" ? stripNullCharacters(item.proposedText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS).trim() : "",
+				proposedText: status === "pending" && typeof item.proposedText === "string" ? trimOuterBlankLines(stripNullCharacters(item.proposedText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS)) : "",
 				beforeText: status === "pending" && typeof item.beforeText === "string" ? stripNullCharacters(item.beforeText).slice(0, MAX_REVIEW_QUEUE_TEXT_CHARACTERS) : "",
 				scope: normalizeApplyScope(item.scope),
 				headingPath: typeof item.headingPath === "string" ? item.headingPath.trim().slice(0, 240) : "",
@@ -681,9 +684,14 @@ export function normalizeProviderSettings(
 		const loadedModel = typeof loadedProvider.model === "string" && loadedProvider.model.trim()
 			? loadedProvider.model.trim()
 			: legacyModel;
-		const legacyOptions = providerId === "openai" && Array.isArray(legacy.modelOptions)
-			? legacy.modelOptions
-			: defaults.modelOptions;
+		// The top-level mirror only seeds providers that have no list of their own; otherwise a refreshed list
+		// could never shrink because every save would re-add the stale mirror entries.
+		const hasOwnOpenAiOptions = providerId === "openai" && Array.isArray(loadedProvider.modelOptions);
+		const legacyOptions = hasOwnOpenAiOptions
+			? []
+			: providerId === "openai" && Array.isArray(legacy.modelOptions)
+				? legacy.modelOptions
+				: defaults.modelOptions;
 		const isRetired = (model: unknown): boolean => providerId === "anthropic" && typeof model === "string" && RETIRED_ANTHROPIC_MODEL_PATTERN.test(model.trim());
 		const model = isRetired(loadedModel) ? defaults.model : loadedModel;
 		const savedOptions = Array.isArray(loadedProvider.modelOptions)
@@ -1047,12 +1055,16 @@ export function normalizeAskMateSettings(
 	settings.translationTargetLanguage = normalizeTranslationTargetLanguage(settings.translationTargetLanguage);
 	settings.showOnboardingTips = settings.showOnboardingTips !== false;
 	settings.autoImageIntentEnabled = normalizeBoolean(settings.autoImageIntentEnabled, true);
+	settings.streamResponses = normalizeBoolean(settings.streamResponses, true);
 	settings.showApplyPreview = settings.applyApprovalMode === "manual";
 	// An empty string is a deliberate choice (vault root); only non-strings fall back, since they crash folder handling.
 	settings.resultFolder = typeof settings.resultFolder === "string" && !hasUnsafePathSegment(settings.resultFolder)
 		? normalizeOptionalString(settings.resultFolder, MAX_CONTEXT_PATH_LENGTH)
 		: DEFAULT_SETTINGS.resultFolder;
 	settings.workflowCustomInstructions = normalizeOptionalString(settings.workflowCustomInstructions, MAX_WORKFLOW_CUSTOM_INSTRUCTIONS_LENGTH);
+	settings.globalInstructions = normalizeGlobalInstructions(settings.globalInstructions);
+	settings.folderInstructions = normalizeFolderInstructions(settings.folderInstructions);
+	settings.editorContextMenuEnabled = normalizeBoolean(settings.editorContextMenuEnabled, true);
 	settings.resultNoteTemplate = normalizeTemplateString(settings.resultNoteTemplate, DEFAULT_RESULT_NOTE_TEMPLATE);
 	settings.imageResultNoteTemplate = normalizeTemplateString(settings.imageResultNoteTemplate, DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE);
 	settings.imageFolderTemplate = normalizeTemplateString(settings.imageFolderTemplate, DEFAULT_IMAGE_FOLDER_TEMPLATE);
@@ -1086,6 +1098,8 @@ export function normalizeAskMateSettings(
 	settings.noteHistoryIncludeInContext = normalizeBoolean(settings.noteHistoryIncludeInContext, false);
 	settings.noteHistoryMaxTurnsPerNote = normalizeBoundedInteger(settings.noteHistoryMaxTurnsPerNote, DEFAULT_NOTE_HISTORY_MAX_TURNS_PER_NOTE, 1, 40);
 	settings.noteHistoryStore = normalizeNoteHistoryStore(settings.noteHistoryStore);
+	settings.saveConversations = normalizeBoolean(settings.saveConversations, true);
+	settings.threadStore = normalizeThreadStore(settings.threadStore);
 	settings.includeStyleGuideContext = normalizeBoolean(settings.includeStyleGuideContext, false);
 	settings.styleGuideContextPath = normalizeOptionalString(settings.styleGuideContextPath, MAX_CONTEXT_PATH_LENGTH);
 	settings.styleGuideMaxCharacters = normalizeBoundedInteger(settings.styleGuideMaxCharacters, DEFAULT_ROLE_CONTEXT_MAX_CHARACTERS, 1000, 100000);

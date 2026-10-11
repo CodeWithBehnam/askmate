@@ -8,7 +8,7 @@ export const IMAGE_FILE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg
 export const MAX_CONTEXT_IMAGE_PREVIEWS = 4;
 export const DEFAULT_IMAGE_PROMPT = "Create a useful image inspired by the current note.";
 export const IMAGE_WORKFLOW_MESSAGE = "Quick workflows create text Markdown. Use the Image button or /image command for gpt-image-2 image generation.";
-export const ASKMATE_PROMPT_VERSION = "askmate-2026-10-01-prompt-standard-v2";
+export const ASKMATE_PROMPT_VERSION = "askmate-2026-10-12-prompt-standard-v3";
 export const LEGACY_PROMPT_VERSION = "legacy-before-workflow-hardening";
 export const DEFAULT_MODEL_OPTIONS = [
 	"gpt-5.5",
