@@ -1,11 +1,11 @@
-import { Editor, MarkdownView, Menu, Notice, Plugin, TAbstractFile, TFile, TFolder, requestUrl } from "obsidian";
+import { Editor, MarkdownView, Menu, Notice, Platform, Plugin, TAbstractFile, TFile, TFolder, addIcon, getLanguage, requestUrl, type WorkspaceLeaf } from "obsidian";
 import {
 	ApiEndpoint,
 	ApplyScope,
+	ASKMATE_ICON_ID,
 	ASKMATE_PROMPT_VERSION,
 	ASKMATE_VIEW_TYPE,
 	AskMateHttpResponse,
-	AskMateResult,
 	AskMateSettings,
 	AskRequest,
 	BatchWorkflowProgress,
@@ -20,11 +20,11 @@ import {
 	estimateTokenCount,
 	EvidenceCitation,
 	EvidenceSource,
+	FIRST_PARTY_PROVIDER_IDS,
 	findExactOccurrences,
 	formatOperationStatus,
 	formatOutputMode,
 	formatRequestIntent,
-	FrontmatterApplyResult,
 	getContextBudgetOption,
 	getModelCapability,
 	getProviderLabel,
@@ -41,14 +41,15 @@ import {
 	awaitWithAbortAndTimeout,
 	cancelledMutation,
 	normalizeAskMateSettings,
+	normalizeAskMateSettingsWithDiagnostics,
+	normalizeCustomWorkflows,
 	createAbortError,
 	isAbortError,
 	isGpt55Model,
 	ModelCapability,
 	MutationOutcome,
 	normalizeApplyApprovalMode,
-	normalizeCustomWorkflow,
-	normalizeCustomWorkflows,
+	normalizeCustomWorkflowsWithDiagnostics,
 	normalizeProviderModelOptions,
 	normalizeProviderRoleSettings,
 	normalizeReasoningEffort,
@@ -69,6 +70,8 @@ import {
 	ReviewQueueItem,
 	resolveApplyScope,
 	resolveSelectionIdentity,
+	SelectionIdentity,
+	SettingsDiagnostic,
 	TextApplyPreviewScope,
 	TextProviderId,
 	TokenUsageRecord,
@@ -82,32 +85,32 @@ import {
 import {
 	fetchProviderModels,
 	normalizeOpenAIModelOptions,
-	testProviderConnection as testProviderConnectionWithProvider
+	testProviderConnection as testProviderConnectionWithProvider,
+	testProviderConnectionDetailed as testProviderConnectionDetailedWithProvider
 } from "../providers";
-import type { ProviderRequestOptions, ProviderRuntime } from "../providers";
+import type { ProviderConnectionTestResult, ProviderRequestOptions, ProviderRuntime } from "../providers";
 import { fetchSse } from "../providers/sseTransport";
 import { UsageService, getLocalDayKey, sumUsageTotalsForMonth } from "../usage";
 import { HistoryService } from "../history";
 import { ThreadService } from "../threads";
-import { ContextService, cleanFolderPath } from "../context";
-import { rankVaultTags } from "../context/vaultMentions";
+import { ContextService, FolderNotFoundError, cleanFolderPath, describeSkippedContext } from "../context";
+import { describeVaultMentionResolutions, rankVaultTags } from "../context/vaultMentions";
 import { RequestRunner, buildFallbackImagePrompt } from "../requests";
-import {
-	APPLY_REFUSAL_PREFIX,
-	buildImagePromptPlanningInput,
-	buildImagePromptPlanningInstructions,
-	buildPrompt,
-	buildTextInstructions
-} from "../requests/requestBuilders";
+import { buildRequestInput, buildRequestInstructions, APPLY_REFUSAL_PREFIX } from "../requests/requestBuilders";
+import type { ContextReport } from "../requests/RequestRunner";
+import type { DiagramPort, DiagramRuntime, ExtendedBuildOptions, RunFacts, RunOptions, RunResult } from "../requests/runTypes";
 import {
 	appendWorkflowUserPreferences,
 	applyTextInsertion,
 	buildDateTemplateValues,
 	buildUniquePathCandidate,
 	chooseSmartResultFolder,
+	closeOpenFencesInVariables,
+	endsInsideOpenFence,
 	getReplaceBlockReason,
 	isOriginalSelectionNote,
-	planImageInsertion,
+	planRangeEdit,
+	prepareFrontmatterAwareApply,
 	getHeadingSectionCore,
 	getParentPath,
 	isSameNoteText,
@@ -117,7 +120,6 @@ import {
 	sanitizeFileName,
 	sanitizePathTemplateValues,
 	spliceHeadingSectionBody,
-	splitMarkdownFrontmatter,
 	trimOuterBlankLines
 } from "../output";
 import { buildEditorMenuEntries } from "./editorMenu";
@@ -127,11 +129,44 @@ import { askMateConfirm, askMateDiffConfirm } from "../ui/modals/modals";
 import { AskMateView } from "../ui/sidebar/AskMateView";
 import { registerAnswerCommands } from "./answerCommands";
 import { AskMateSettingTab } from "../ui/settings/AskMateSettingTab";
+import { ASKMATE_ICON_SVG } from "../brand/icons";
+import { SkillService, type SkillConfig, type SkillHost } from "../skills";
+import { McpService, type McpHost, type TrustRequest } from "../mcp";
+import { createScratchHost, supportedDiagrams, toMermaidApi, type MermaidApi } from "../diagrams";
+import { guardSafetyCheck } from "../requests/diagramRun";
+import { deriveSetupState, mapProviderErrorToSetupCopy, planConnect, shouldShowFirstRunNotice, FIRST_RUN_NOTICE, IDLE_SETUP_TEST, type SetupErrorCopy, type SetupStage, type SetupTestState } from "../setup";
+import { CommandRunRegistry } from "./commandRuns";
+import { INITIAL_BATCH_STATE, batchResultTitle, classifyBatchFailure, describeEmptyBatch, nextBatchDecision } from "./batchPolicy";
+import { classifyStoredData, corruptBackupName, mergeExternalSettings } from "./settingsLoad";
+import { deriveResultNoteTitle, ensureTemplateKeepsAnswer, withIncompleteCallout } from "./resultNoteModel";
+import { describeActiveContentAdded, describeWriteChanges, joinWarnings, prepareReplyForWrite } from "./writeSafety";
+import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, createMcpHost, createSecretReader, describeTrustRequest, type LaunchModule } from "./mcpHost";
+import { confirmToolCallWithModal } from "./ToolApprovalModal";
+import { askMateChoice } from "./choiceModal";
+import { findLeafForFile } from "./leaves";
+import { planEmbedInsertion, type EmbedPlan } from "./imagePlacement";
+import { describeImportConcerns, findImportConcerns, withSafeImportDefaults } from "./importReview";
+import { createObsidianApi, type ObsidianApi } from "./obsidianApi";
+import type { PreparedWrite } from "./writeSafety";
+import { endpointHost, needsKeyApproval } from "./keyApproval";
 
 const NOTE_IDENTITY_WITHHELD = "[withheld by AskMate privacy controls]";
 const MAX_UNIQUE_PATH_ATTEMPTS = 50;
 /** Free-text template values that can contain model output or the user's question. */
 const MODEL_DERIVED_TEMPLATE_KEYS = ["title", "request", "response", "imagePrompt", "revisedPrompt", "planningFallback"] as const;
+/** Template values that hold text, so one with an unclosed code fence must not swallow the rest of the note. */
+const FENCE_CLOSED_TEMPLATE_KEYS = ["request", "response", "selectedText"] as const;
+const KEY_APPROVAL_PREFIX = "askmate-key-approval:";
+const NOTICE_SECONDS = 1000;
+const FIRST_RUN_NOTICE_SECONDS = 15;
+
+/**
+ * Public methods a sidebar view offers to commands, and which work in every composer layout:
+ * `startNewConversation(): Promise<void>` and `startDiagram(prompt?: string): Promise<void>`.
+ * The view is built in another work package, so each one is looked up at run time and a missing one is reported.
+ */
+type SidebarShortcutName = "startNewConversation" | "startDiagram";
+const SETTINGS_TAB_ID = "askmate";
 
 export interface BatchWorkflowRunSummary extends BatchWorkflowSummary {
 	/** Why the batch ended before every file was processed, or null when it ran to the end. */
@@ -139,11 +174,18 @@ export interface BatchWorkflowRunSummary extends BatchWorkflowSummary {
 	failures: { path: string; reason: string }[];
 }
 
+/** A connection test with the plain-language reading of a failure, ready for the setup card and the status bar. */
+export interface ProviderConnectionResult extends ProviderConnectionTestResult {
+	copy: SetupErrorCopy | null;
+}
+
 export class AskMatePlugin extends Plugin {
 	settings!: AskMateSettings;
 	private usageService!: UsageService;
 	private historyService!: HistoryService;
 	threads!: ThreadService;
+	/** Built-in and vault skills. Scanned once the workspace is ready. */
+	skillService!: SkillService;
 	private contextService!: ContextService;
 	private requestRunner!: RequestRunner;
 	private reviewQueueMutationActive = false;
@@ -151,6 +193,46 @@ export class AskMatePlugin extends Plugin {
 	private viewActivation: Promise<void> | null = null;
 	private settingTab: AskMateSettingTab | null = null;
 	private batchRunActive = false;
+	private readonly commandRuns = new CommandRunRegistry();
+	private readonly mcpApprovals = new McpApprovalRouter();
+	private mcpInstance: McpService | null = null;
+	private launcher: LaunchModule | null = null;
+	private launcherLoad: Promise<void> | null = null;
+	private mermaidApi: MermaidApi | null = null;
+	private diagramRuntime: Promise<DiagramRuntime | null> | null = null;
+	private unloading: Promise<void> = Promise.resolve();
+	private firstRun = false;
+	private lastBuiltRequest: AskRequest | null = null;
+	private lastSetupTest: SetupTestState = IDLE_SETUP_TEST;
+	private lastMcpSignature = "";
+	private lastSkillsSignature = "";
+	/** Mermaid and the YAML parser, looked up when used. Replaced by fakes in tests. */
+	obsidianApi: ObsidianApi = createObsidianApi();
+	/**
+	 * How the person is asked to trust an MCP server. The settings page can replace this with its own dialog; until then a
+	 * plain confirmation names the exact command or address.
+	 */
+	readonly mcpPrompts: { confirmTrust: (request: TrustRequest) => Promise<boolean> } = {
+		confirmTrust: async (request) => {
+			const { title, message } = describeTrustRequest(request);
+			return await askMateConfirm(this.app, `${title}\n\n${message}`);
+		}
+	};
+
+	/**
+	 * The MCP client, or null off the desktop and while MCP is switched off. Nothing starts when it is created: servers are
+	 * trusted and started on first use. It stays reachable until unload so switching MCP off can still stop what runs.
+	 */
+	get mcpService(): McpService | null {
+		if (!Platform.isDesktopApp || !this.settings?.mcp.enabled) {
+			return null;
+		}
+		if (!this.mcpInstance) {
+			this.mcpInstance = new McpService(this.buildMcpHost());
+			void this.ensureLauncher();
+		}
+		return this.mcpInstance;
+	}
 
 	private getProviderRuntime(): ProviderRuntime {
 		return {
@@ -184,7 +266,11 @@ export class AskMatePlugin extends Plugin {
 
 		this.threads = new ThreadService({
 			getSettings: () => this.settings,
-			saveSettings: () => this.saveSettings()
+			saveSettings: () => this.saveSettings(),
+			// Without this a failing disk loses conversations without a word.
+			notify: (message) => {
+				new Notice(message);
+			}
 		});
 
 		this.contextService = new ContextService({
@@ -192,6 +278,7 @@ export class AskMatePlugin extends Plugin {
 			getSettings: () => this.settings,
 			getNoteHistoryForPath: (path) => this.getNoteHistoryForPath(path)
 		});
+		this.skillService = new SkillService(this.buildSkillHost());
 		this.requestRunner = new RequestRunner({
 			getSettings: () => this.settings,
 			getProviderRuntime: () => this.getProviderRuntime(),
@@ -204,13 +291,47 @@ export class AskMatePlugin extends Plugin {
 			recordOperationUsage: (params) => this.recordOperationUsage(params),
 			getErrorMessage: (error) => this.getErrorMessage(error),
 			expandWorkflowPrompt: (workflow, context, sanitized, privacy?: RequestPrivacyOptions) => this.expandWorkflowPrompt(workflow, context, sanitized, privacy),
-			getNoteContext: (editor, file) => this.getNoteContext(editor, file),
+			getNoteContext: async (editor, file, options) => options?.allowNoNote
+				? await this.contextService.getNoteContext(editor, file, { allowNoNote: true })
+				: await this.getNoteContext(editor, file),
 			getFileNoteContext: (file) => this.getFileNoteContext(file),
 			getFullNoteContext: (file) => this.contextService.getFullNoteContext(file),
 			buildContextAttachments: (context, options, privacy) => this.contextService.buildContextAttachments(context, options, privacy),
+			buildContextAttachmentsDetailed: (context, options, privacy) => this.contextService.buildContextAttachmentsDetailed(context, options, privacy),
+			describeContextReport: (detail) => ({
+				mentions: describeVaultMentionResolutions(detail.resolutions),
+				skipped: describeSkippedContext(detail.skipped)
+			}),
+			getWorkflowSkillIds: (workflowId) => this.getAllWorkflows().find((workflow) => workflow.id === workflowId)?.skillIds ?? [],
+			extensions: {
+				skills: { resolve: (input) => this.skillService.resolve(input) },
+				diagrams: this.buildDiagramPort(),
+				tools: {
+					getService: () => {
+						const service = this.mcpService;
+						// A local server cannot start before the launcher is loaded, so a run waits for it.
+						return service
+							? {
+								prepareRun: async (signal) => {
+									await this.ensureLauncher();
+									return await service.prepareRun(signal);
+								},
+								callTool: (call, signal) => service.callTool(call, signal)
+							}
+							: null;
+					},
+					registerApproval: (signal, handler) => this.mcpApprovals.register(signal, handler),
+					confirmCall: async (card, signal) => await confirmToolCallWithModal(this.app, card, signal)
+				}
+			},
+			notify: (message) => {
+				new Notice(message);
+			},
 			throwIfAborted: (abortSignal) => this.throwIfAborted(abortSignal)
 		});
 
+		// The icon must exist before the view that uses it is registered.
+		addIcon(ASKMATE_ICON_ID, ASKMATE_ICON_SVG);
 		this.registerView(ASKMATE_VIEW_TYPE, (leaf) => new AskMateView(leaf, this));
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
@@ -229,10 +350,22 @@ export class AskMatePlugin extends Plugin {
 			})
 		);
 		this.registerEvent(
+			this.app.workspace.on("quit", (tasks) => {
+				// Saved conversations are debounced, so a quit inside that window would lose the last turn.
+				tasks.add(async () => {
+					await this.threads.flush();
+					await this.settingsSaveChain;
+				});
+			})
+		);
+		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
 				this.contextService.handleFileRenamed(file, oldPath);
 				void this.historyService.handleFileRenamed(oldPath, file.path).catch((error: unknown) => {
 					new Notice(`AskMate could not move saved history for ${oldPath}: ${this.getErrorMessage(error)}`);
+				});
+				void this.threads.handleFileRenamed(oldPath, file.path).catch((error: unknown) => {
+					new Notice(`AskMate could not move saved conversations for ${oldPath}: ${this.getErrorMessage(error)}`);
 				});
 			})
 		);
@@ -246,14 +379,24 @@ export class AskMatePlugin extends Plugin {
 				}).catch((error: unknown) => {
 					new Notice(`AskMate could not remove saved history for ${file.path}: ${this.getErrorMessage(error)}`);
 				});
+				void this.threads.handleFileDeleted(file.path).catch((error: unknown) => {
+					new Notice(`AskMate could not remove saved conversations for ${file.path}: ${this.getErrorMessage(error)}`);
+				});
 			})
 		);
 		this.app.workspace.onLayoutReady(() => {
 			this.rememberActiveMarkdownContext();
+			// The first scan reads the vault, so it waits until the workspace has finished loading.
+			void this.skillService.scan();
+			this.lastSkillsSignature = this.skillsSignature();
+			this.showFirstRunNotice();
+			if (Platform.isDesktopApp && this.settings.mcp.enabled) {
+				void this.ensureLauncher();
+			}
 		});
 
-		this.addRibbonIcon("bot", "Open AskMate", () => {
-			void this.activateView();
+		this.addRibbonIcon(ASKMATE_ICON_ID, "Open AskMate", () => {
+			void this.openComposerWithText("");
 		});
 
 		registerAnswerCommands(this);
@@ -262,7 +405,7 @@ export class AskMatePlugin extends Plugin {
 			id: "open-sidebar",
 			name: "Open sidebar",
 			callback: () => {
-				void this.activateView();
+				void this.openComposerWithText("");
 			}
 		});
 
@@ -271,7 +414,42 @@ export class AskMatePlugin extends Plugin {
 			name: "Ask about current note",
 			editorCallback: (editor, ctx) => {
 				this.rememberEditorContext(editor, ctx.file ?? null);
-				void this.activateView();
+				void this.openComposerWithText("");
+			}
+		});
+
+		this.addCommand({
+			id: "draw-diagram",
+			name: "Draw a diagram of the current note",
+			editorCallback: (editor, ctx) => {
+				this.rememberEditorContext(editor, ctx.file ?? null);
+				void this.startDiagram();
+			}
+		});
+
+		this.addCommand({
+			id: "new-conversation",
+			name: "New conversation",
+			callback: () => {
+				void this.startNewConversation();
+			}
+		});
+
+		this.addCommand({
+			id: "open-settings",
+			name: "Open settings",
+			callback: () => {
+				this.openSettingsTab();
+			}
+		});
+
+		this.addCommand({
+			id: "stop-run",
+			name: "Stop current run",
+			callback: () => {
+				if (!this.commandRuns.stop()) {
+					new Notice("No AskMate command is running.");
+				}
 			}
 		});
 
@@ -322,19 +500,81 @@ export class AskMatePlugin extends Plugin {
 			}
 		});
 
+		this.lastMcpSignature = JSON.stringify(this.settings.mcp);
 		this.settingTab = new AskMateSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 	}
 
 	onunload(): void {
-		void this.threads.flush();
-		// A batch keeps sending paid requests after the plugin is disabled unless it is stopped here.
+		// A palette run keeps sending paid requests after the plugin is disabled unless it is stopped here.
+		this.commandRuns.stop();
+		this.skillService.dispose();
+		// A batch does the same, and one tool call may be waiting on a server.
 		this.settingTab?.abortActiveBatch();
+		this.unloading = this.shutdownServices();
+	}
+
+	/** Resolves when the work started by unloading is done: MCP servers stopped and conversations saved. */
+	whenUnloaded(): Promise<void> {
+		return this.unloading;
+	}
+
+	private async shutdownServices(): Promise<void> {
+		const results = await Promise.allSettled([this.mcpInstance?.shutdown(), this.threads.flush()]);
+		for (const result of results) {
+			if (result.status === "rejected") {
+				console.warn("AskMate could not finish shutting down.", result.reason);
+			}
+		}
 	}
 
 	async loadSettings(): Promise<void> {
-		const raw = await this.loadData() as Partial<AskMateSettings> | null;
-		this.settings = structuredClone(normalizeAskMateSettings(raw, "load"));
+		let raw: unknown;
+		try {
+			raw = await this.loadData();
+		} catch (error) {
+			console.warn("AskMate could not read data.json.", error);
+			raw = undefined;
+		}
+		const stored = classifyStoredData(raw);
+		this.firstRun = stored.kind === "fresh";
+		if (stored.kind === "corrupt") {
+			await this.backUpCorruptData(stored.reason);
+		}
+		// A corrupt file starts from the defaults of an existing install, not from the first-run defaults.
+		const source = stored.kind === "ok" ? stored.data : stored.kind === "corrupt" ? {} : null;
+		const result = normalizeAskMateSettingsWithDiagnostics(source, "load", { locale: getLanguage() });
+		this.settings = structuredClone(result.settings);
+		this.reportSettingsDiagnostics(result.diagnostics);
+	}
+
+	/**
+	 * data.json is about to be replaced by defaults, so what is left of it is copied aside first. The copy keeps whatever
+	 * could not be read, for the person (or a support request) to look at.
+	 */
+	private async backUpCorruptData(reason: string): Promise<void> {
+		const folder = this.manifest.dir;
+		if (!folder) {
+			new Notice(`AskMate could not read its saved settings (${reason}) and started with defaults.`, 15 * NOTICE_SECONDS);
+			return;
+		}
+		const backupName = corruptBackupName(new Date());
+		try {
+			await this.app.vault.adapter.copy(`${folder}/data.json`, `${folder}/${backupName}`);
+			new Notice(`AskMate could not read its saved settings (${reason}). A copy is saved as ${backupName} in the plugin folder, and AskMate started with defaults.`, 15 * NOTICE_SECONDS);
+		} catch (error) {
+			new Notice(`AskMate could not read its saved settings (${reason}) and could not back them up (${this.getErrorMessage(error)}). It started with defaults.`, 15 * NOTICE_SECONDS);
+		}
+	}
+
+	private reportSettingsDiagnostics(diagnostics: readonly SettingsDiagnostic[]): void {
+		const shown = diagnostics.slice(0, 3);
+		for (const diagnostic of shown) {
+			new Notice(diagnostic.message, 10 * NOTICE_SECONDS);
+		}
+		if (diagnostics.length > shown.length) {
+			new Notice(`AskMate also changed ${diagnostics.length - shown.length} more saved setting${diagnostics.length - shown.length === 1 ? "" : "s"} when it loaded them.`, 10 * NOTICE_SECONDS);
+		}
 	}
 
 	async saveSettings(): Promise<void> {
@@ -345,6 +585,56 @@ export class AskMatePlugin extends Plugin {
 		const save = this.settingsSaveChain.then(async () => await this.saveData(this.settings));
 		this.settingsSaveChain = save.catch(() => undefined);
 		await save;
+		this.applySettingsChanges();
+	}
+
+	/** Servers and skills follow their settings: a switch-off stops a running server, a new folder is scanned. */
+	private applySettingsChanges(): void {
+		const mcpSignature = JSON.stringify(this.settings.mcp);
+		if (mcpSignature !== this.lastMcpSignature) {
+			this.lastMcpSignature = mcpSignature;
+			void this.mcpInstance?.reconcile();
+		}
+		const skillsSignature = this.skillsSignature();
+		if (skillsSignature !== this.lastSkillsSignature && this.skillService) {
+			this.lastSkillsSignature = skillsSignature;
+			void this.skillService.scan();
+		}
+	}
+
+	private skillsSignature(): string {
+		return `${this.settings.skills.enabled}|${this.settings.skills.folder}`;
+	}
+
+	/**
+	 * Another device saved data.json (a sync). The file decides ordinary settings; this device's own threads, history and
+	 * queued suggestions are merged in by id instead of being overwritten. Pending local writes are dropped, because they
+	 * were prepared against the data that was just replaced.
+	 */
+	async onExternalSettingsChange(): Promise<void> {
+		await this.settingsSaveChain;
+		let raw: unknown;
+		try {
+			raw = await this.loadData();
+		} catch (error) {
+			console.warn("AskMate could not read data.json after it changed.", error);
+			return;
+		}
+		const stored = classifyStoredData(raw);
+		if (stored.kind !== "ok") {
+			// An unreadable or removed file is not news worth acting on: this device still holds the settings it loaded.
+			return;
+		}
+		const incoming = normalizeAskMateSettingsWithDiagnostics(stored.data, "load", { locale: getLanguage() }).settings;
+		const merged = mergeExternalSettings(this.settings, incoming);
+		syncObjectInPlace(this.settings, merged);
+		this.threads.reload(this.settings.threadStore);
+		this.refreshOpenAskMateViews();
+		this.applySettingsChanges();
+		// The merge keeps what only this device had. Writing the union back means the other device receives it too.
+		if (JSON.stringify(merged) !== JSON.stringify(incoming)) {
+			await this.saveSettings();
+		}
 	}
 
 	async activateView(): Promise<void> {
@@ -453,36 +743,22 @@ export class AskMatePlugin extends Plugin {
 		};
 	}
 
-	async askOpenAI(request: AskRequest): Promise<string> {
-		if (request.metadata.modelCapability !== "text") {
-			throw new Error(IMAGE_WORKFLOW_MESSAGE);
-		}
-
-		const result = await this.runOpenAIRequest(request);
-		if (result.kind !== "text") {
-			throw new Error(IMAGE_WORKFLOW_MESSAGE);
-		}
-
-		return result.text.trim();
-	}
-
-	async runOpenAIRequest(
-		request: AskRequest,
-		options: {
-			onTextDelta?: (delta: string) => void;
-			abortSignal?: AbortSignal;
-			forceImage?: boolean;
-		} = {}
-	): Promise<AskMateResult> {
+	/**
+	 * Runs a built request. Optional options add skills, tools and diagram checks; without them this is the plain text or
+	 * image run it always was. Tools run only when `toolsEnabled` is true.
+	 */
+	async runOpenAIRequest(request: AskRequest, options: RunOptions = {}): Promise<RunResult> {
 		return await this.requestRunner.runOpenAIRequest(request, options);
 	}
 
-	async streamOpenAI(
-		request: AskRequest,
-		onDelta: (delta: string) => void,
-		abortSignal?: AbortSignal
-	): Promise<string> {
-		return await this.requestRunner.streamOpenAI(request, onDelta, abortSignal);
+	/** What a finished run learnt about its reply: a diagram that failed, a diagram that passed, an answer built from tool results. */
+	getRunFacts(request: AskRequest): RunFacts {
+		return this.requestRunner.getRunFacts(request);
+	}
+
+	/** The lines /context prints for a built request: what each vault mention selected and which notes were skipped. */
+	getContextReport(request: AskRequest): ContextReport {
+		return this.requestRunner.getContextReport(request);
 	}
 
 	async generateOpenAIImage(
@@ -497,12 +773,308 @@ export class AskMatePlugin extends Plugin {
 		return await this.requestRunner.prepareImagePrompt(request, abortSignal);
 	}
 
-	async refreshOpenAIModels(): Promise<string[]> {
-		return await this.refreshProviderModels("openai");
+	// Setup -------------------------------------------------------------------------------------------------------------
+
+	/** True when SecretStorage holds a value under this name on this device. A secret name alone proves nothing: keys are per device. */
+	hasSecret(secretName: string): boolean {
+		if (!secretName.trim()) {
+			return false;
+		}
+		try {
+			const value: unknown = this.app.secretStorage.getSecret(secretName);
+			// A storage that answers later (a promise) cannot be read here, so the name is taken as present.
+			return typeof value === "string" ? value.length > 0 : value !== null && value !== undefined;
+		} catch {
+			return false;
+		}
 	}
 
-	async testOpenAIConnection(): Promise<string> {
-		return await this.testProviderConnection("openai");
+	/** One answer to "is AskMate set up?", read by the setup card, the status bar and the settings page. */
+	getSetupState(): SetupStage {
+		return deriveSetupState(this.settings, (name) => this.hasSecret(name), this.lastSetupTest);
+	}
+
+	/**
+	 * Stores the key in SecretStorage under a generated id, points the provider at it and refreshes the open views. The key
+	 * never goes into data.json. Typing a key for the provider's current address also approves that address for the key on
+	 * this device.
+	 */
+	async saveProviderApiKey(providerId: TextProviderId, apiKey: string): Promise<void> {
+		const provider = this.settings.providers[providerId];
+		const current = provider.apiKeySecretName.trim();
+		const reusable = new RegExp(`^askmate-${providerId}-key(?:-\\d+)?$`).test(current);
+		const planned = planConnect(providerId, apiKey, this.app.secretStorage.listSecrets());
+		if (!planned.ok) {
+			throw new Error(planned.message);
+		}
+		// Replacing the key of the same provider overwrites its own secret instead of piling up a new one each time.
+		const secretId = reusable ? current : planned.plan.secretId;
+		this.app.secretStorage.setSecret(secretId, planned.plan.secret);
+		provider.apiKeySecretName = secretId;
+		this.approveKeyHost(providerId);
+		this.lastSetupTest = IDLE_SETUP_TEST;
+		await this.saveSettings();
+		this.refreshOpenAskMateViews();
+	}
+
+	/** Tests the selected provider and model, and keeps the result so every surface shows the same stage. */
+	async testProviderConnectionDetailed(): Promise<ProviderConnectionResult> {
+		const providerId = this.getSelectedTextProviderId();
+		const ref = this.getChatProviderModelRef();
+		this.lastSetupTest = { status: "testing", providerId, model: ref.model };
+		this.refreshOpenAskMateViews();
+		const result = await testProviderConnectionDetailedWithProvider(this.getProviderRuntime(), providerId);
+		const copy = result.ok ? null : mapProviderErrorToSetupCopy(new Error(result.message), { providerId, baseUrl: this.getProviderSettings(providerId).baseUrl, model: ref.model });
+		this.lastSetupTest = result.ok || !copy
+			? { status: "ok", providerId, model: ref.model }
+			: { status: "failed", providerId, model: ref.model, copy };
+		this.refreshOpenAskMateViews();
+		return { ...result, copy };
+	}
+
+	/**
+	 * Opens AskMate's page in Obsidian's settings. The settings object is not part of the public API, so it is looked up
+	 * defensively and the written instruction is the fallback.
+	 */
+	openSettingsTab(): void {
+		const setting: unknown = Reflect.get(this.app, "setting");
+		const open: unknown = typeof setting === "object" && setting !== null ? Reflect.get(setting, "open") : undefined;
+		const openTab: unknown = typeof setting === "object" && setting !== null ? Reflect.get(setting, "openTabById") : undefined;
+		if (typeof open === "function" && typeof openTab === "function") {
+			Reflect.apply(open, setting, []);
+			Reflect.apply(openTab, setting, [this.manifest.id || SETTINGS_TAB_ID]);
+			return;
+		}
+		new Notice("Open Obsidian settings, then choose AskMate under community plugins.");
+	}
+
+	// Diagrams ----------------------------------------------------------------------------------------------------------
+
+	/** Obsidian's own Mermaid, narrowed to the two methods AskMate uses. Null when this build cannot provide it. */
+	async loadMermaidApi(): Promise<MermaidApi | null> {
+		if (this.mermaidApi) {
+			return this.mermaidApi;
+		}
+		try {
+			this.mermaidApi = toMermaidApi(await this.obsidianApi.loadMermaid());
+		} catch (error) {
+			console.warn("AskMate could not load Mermaid.", error);
+			this.mermaidApi = null;
+		}
+		return this.mermaidApi;
+	}
+
+	/** Mermaid plus the diagram families this build can parse, probed once per session. */
+	getDiagramRuntime(): Promise<DiagramRuntime | null> {
+		this.diagramRuntime ??= (async (): Promise<DiagramRuntime | null> => {
+			const api = await this.loadMermaidApi();
+			return api ? { api, supported: await supportedDiagrams(api) } : null;
+		})();
+		return this.diagramRuntime;
+	}
+
+	private buildDiagramPort(): DiagramPort {
+		return {
+			isEnabled: () => this.settings.diagrams.enabled,
+			allowRepairTurn: () => this.settings.diagrams.allowRepairTurn,
+			getRuntime: () => this.getDiagramRuntime(),
+			createScratch: () => createScratchHost(activeDocument.body),
+			checkSafety: guardSafetyCheck,
+			// The repair is a second paid turn, so a guardrail that blocks requests blocks it too.
+			canSendRepair: (request, estimatedInputTokens) => this.usageService.evaluateUsageGuardrails(request, estimatedInputTokens).blockers.length === 0
+		};
+	}
+
+	// Skills ------------------------------------------------------------------------------------------------------------
+
+	private buildSkillHost(): SkillHost {
+		return {
+			getConfig: (): SkillConfig => {
+				const skills = this.settings.skills;
+				return { enabled: skills.enabled, folder: skills.folder, matchMode: skills.matching, disabledIds: skills.disabledIds, trusted: skills.trustedHashes };
+			},
+			listFiles: (folder) => Promise.resolve(
+				this.app.vault.getFiles()
+					.filter((file) => file.path.startsWith(`${folder}/`))
+					.map((file) => ({ path: file.path, size: file.stat.size }))
+			),
+			readFile: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) {
+					throw new Error(`AskMate could not read ${path}.`);
+				}
+				return await this.app.vault.cachedRead(file);
+			},
+			parseYaml: (text) => this.obsidianApi.parseYaml(text),
+			saveTrust: async (id, hash) => {
+				const trusted = { ...this.settings.skills.trustedHashes };
+				if (hash === null) {
+					Reflect.deleteProperty(trusted, id);
+				} else {
+					trusted[id] = hash;
+				}
+				this.settings.skills.trustedHashes = trusted;
+				await this.saveSettings();
+			},
+			watch: (callback) => {
+				const refs = [
+					this.app.vault.on("create", (file) => callback(file.path)),
+					this.app.vault.on("modify", (file) => callback(file.path)),
+					this.app.vault.on("delete", (file) => callback(file.path)),
+					this.app.vault.on("rename", (file, oldPath) => {
+						callback(oldPath);
+						callback(file.path);
+					})
+				];
+				refs.forEach((ref) => {
+					this.registerEvent(ref);
+				});
+				return () => {
+					refs.forEach((ref) => {
+						this.app.vault.offref(ref);
+					});
+				};
+			},
+			warn: (message, error) => {
+				console.warn(`AskMate: ${message}`, error);
+			}
+		};
+	}
+
+	// MCP ---------------------------------------------------------------------------------------------------------------
+
+	private buildMcpHost(): McpHost {
+		return createMcpHost({
+			version: this.manifest.version,
+			getSettings: () => this.settings.mcp,
+			platform: { isDesktopApp: Platform.isDesktopApp, isWin: Platform.isWin, isMacOS: Platform.isMacOS },
+			env: typeof process === "undefined" ? {} : process.env,
+			secrets: createSecretReader(this.app.secretStorage),
+			deviceTrust: createDeviceTrustStore(this.app),
+			requestHttp: createHttpRequest(async (params) => {
+				const response = await requestUrl(params);
+				return { status: response.status, headers: response.headers, text: response.text };
+			}),
+			getLauncher: () => this.launcher,
+			approvals: this.mcpApprovals,
+			confirmTrust: (request) => this.mcpPrompts.confirmTrust(request)
+		});
+	}
+
+	/**
+	 * Loads the desktop-only launcher, the one module that starts programs. It is imported on demand and only on desktop, so
+	 * a phone never evaluates it.
+	 */
+	private ensureLauncher(): Promise<void> {
+		if (!Platform.isDesktopApp || this.launcher) {
+			return Promise.resolve();
+		}
+		this.launcherLoad ??= import("../mcp/launch").then((module) => {
+			this.launcher = module;
+		}).catch((error: unknown) => {
+			console.warn("AskMate could not load the launcher for local servers.", error);
+			this.launcherLoad = null;
+		});
+		return this.launcherLoad;
+	}
+
+	// First run ---------------------------------------------------------------------------------------------------------
+
+	/** Once, on a fresh install that is not connected yet: say where to start and offer the button that gets there. */
+	private showFirstRunNotice(): void {
+		if (!shouldShowFirstRunNotice({ firstRun: this.firstRun, settings: this.settings, stage: this.getSetupState() })) {
+			return;
+		}
+		this.notifyWithAction(FIRST_RUN_NOTICE.message, FIRST_RUN_NOTICE.actionLabel, () => {
+			void this.openComposerWithText("");
+		}, FIRST_RUN_NOTICE_SECONDS);
+	}
+
+	/** A notice with one button, for messages that name a next step. */
+	notifyWithAction(message: string, actionLabel: string, onClick: () => void, seconds = 10): Notice {
+		const notice = new Notice(message, seconds * NOTICE_SECONDS);
+		const button = notice.messageEl.createEl("button", { cls: "mod-cta", text: actionLabel });
+		button.type = "button";
+		button.addEventListener("click", () => {
+			notice.hide();
+			onClick();
+		});
+		return notice;
+	}
+
+	/**
+	 * Calls a public entry point of the sidebar view, in whichever layout it is. Typing a console command into the composer is
+	 * not an option: only the Console layout reads slash commands, and the default layout for new installs is Compact. A view
+	 * without the entry point gets a Notice that says what to do instead, so the command never fails silently.
+	 */
+	private async runSidebarShortcut(name: SidebarShortcutName, args: readonly unknown[], missingMessage: string): Promise<void> {
+		try {
+			await this.activateView();
+			let sawView = false;
+			for (const leaf of this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE)) {
+				await leaf.loadIfDeferred();
+				if (!(leaf.view instanceof AskMateView)) {
+					continue;
+				}
+				sawView = true;
+				const shortcut: unknown = Reflect.get(leaf.view, name);
+				if (typeof shortcut === "function") {
+					await Reflect.apply(shortcut, leaf.view, args);
+					return;
+				}
+			}
+			// With no view at all, activateView has already said why the sidebar did not open.
+			if (sawView) {
+				new Notice(missingMessage);
+			}
+		} catch (error) {
+			new Notice(this.getErrorMessage(error));
+		}
+	}
+
+	private startNewConversation(): Promise<void> {
+		return this.runSidebarShortcut(
+			"startNewConversation",
+			[],
+			"This version of the sidebar cannot start a conversation from a command. Use the New conversation button at the top of the AskMate sidebar."
+		);
+	}
+
+	private startDiagram(): Promise<void> {
+		return this.runSidebarShortcut(
+			"startDiagram",
+			[],
+			"This version of the sidebar cannot start a diagram from a command. Ask for one in the sidebar, for example: Draw a diagram of this note."
+		);
+	}
+
+	/** The key can leave the device only for an address this device approved for it, so the first use asks. */
+	private async assertKeyMayBeSent(providerId: TextProviderId, secretName: string): Promise<void> {
+		const baseUrl = this.getProviderSettings(providerId).baseUrl;
+		const stored: unknown = this.app.loadLocalStorage(`${KEY_APPROVAL_PREFIX}${secretName}`);
+		const approvedHost = typeof stored === "string" ? stored : null;
+		if (!needsKeyApproval({ providerId, firstPartyProviders: FIRST_PARTY_PROVIDER_IDS, baseUrl, secretName, approvedHost })) {
+			return;
+		}
+		const host = endpointHost(baseUrl) ?? baseUrl;
+		const approved = await askMateConfirm(this.app, [
+			`Send the stored key "${secretName}" to ${host}?`,
+			"",
+			`${getProviderLabel(providerId)} is set to use this address. The key is sent to it with every request.`,
+			"Only continue if you set this address yourself. A settings file synced from another computer could have changed it."
+		].join("\n"));
+		if (!approved) {
+			throw new Error(`AskMate did not send the key to ${host}. Check the address in AskMate settings, or approve it when asked.`);
+		}
+		this.approveKeyHost(providerId);
+	}
+
+	private approveKeyHost(providerId: TextProviderId): void {
+		const provider = this.getProviderSettings(providerId);
+		const host = endpointHost(provider.baseUrl);
+		if (host && provider.apiKeySecretName.trim()) {
+			this.app.saveLocalStorage(`${KEY_APPROVAL_PREFIX}${provider.apiKeySecretName.trim()}`, host);
+		}
 	}
 
 	async refreshSelectedProviderModels(): Promise<string[]> {
@@ -560,7 +1132,8 @@ export class AskMatePlugin extends Plugin {
 		const sourcePath = context.file?.path ?? "";
 		const noteTitle = context.file?.basename ?? "Untitled";
 		const workflowName = values.workflowName ?? "";
-		return {
+		// One unclosed code fence in the request or the reply would turn every later section of the note into code.
+		return closeOpenFencesInVariables({
 			title: values.title,
 			sourceLink: this.formatSourceLink(context.file),
 			sourcePath,
@@ -582,13 +1155,13 @@ export class AskMatePlugin extends Plugin {
 			currentDateTime: values.dateTime ?? buildDateTemplateValues(now).dateTime,
 			customInstructions: this.settings.workflowCustomInstructions.trim(),
 			resultFolder: cleanFolderPath(this.settings.resultFolder)
-		};
+		}, FENCE_CLOSED_TEMPLATE_KEYS);
 	}
 
 	private buildRequestTemplateVariables(request: AskRequest, responseText: string, model: string): Record<string, string> {
 		return {
 			...this.buildCommonTemplateVariables(request.context, {
-				title: request.title,
+				title: this.getResultNoteTitle(request),
 				request: request.question,
 				response: responseText.trim(),
 				model,
@@ -605,14 +1178,24 @@ export class AskMatePlugin extends Plugin {
 		return buildDateTemplateValues(date).date;
 	}
 
+	/** "Study summary - Meeting notes" for a workflow, the question for a free-form answer, and the caller's own title otherwise. */
+	private getResultNoteTitle(request: AskRequest): string {
+		return deriveResultNoteTitle({
+			title: request.title,
+			question: request.question,
+			workflowName: request.metadata.workflowName,
+			sourceBasename: request.context.file?.basename ?? null
+		});
+	}
+
 	private renderTextResultNoteContent(request: AskRequest, responseText: string, model: string): string {
 		const variables = this.buildRequestTemplateVariables(request, responseText, model);
-		const rendered = renderTemplate(this.getWorkflowResultNoteTemplate(request.metadata.workflowId), variables);
-		if (rendered.trim()) {
-			return `${trimOuterBlankLines(rendered)}\n`;
-		}
-
-		return `${trimOuterBlankLines(renderTemplate(DEFAULT_RESULT_NOTE_TEMPLATE, variables))}\n`;
+		const template = this.getWorkflowResultNoteTemplate(request.metadata.workflowId);
+		const rendered = renderTemplate(template, variables);
+		const usedTemplate = rendered.trim() ? template : DEFAULT_RESULT_NOTE_TEMPLATE;
+		const note = rendered.trim() ? rendered : renderTemplate(DEFAULT_RESULT_NOTE_TEMPLATE, variables);
+		// A template that never places {{response}} would write a note with no answer in it.
+		return `${trimOuterBlankLines(ensureTemplateKeepsAnswer(note, usedTemplate, "response", variables.response))}\n`;
 	}
 
 	private getWorkflowResultNoteTemplate(workflowId: string | null): string {
@@ -627,33 +1210,55 @@ export class AskMatePlugin extends Plugin {
 		return this.settings.resultNoteTemplate;
 	}
 
+	/** Planned prompts and revised prompts come from a model, so they are made safe like any other reply before they reach a note. */
+	private safeImageText(request: AskRequest, text: string): string {
+		return this.prepareForWrite(request, text).text;
+	}
+
 	private renderImageResultNoteContent(request: AskRequest, result: ImageAskMateResult, imageFile: TFile): string {
-		const variables = {
+		const revisedPrompt = this.safeImageText(request, result.image.revisedPrompt ?? "");
+		const fallbackReason = this.safeImageText(request, result.promptPlan.fallbackReason ?? "");
+		const variables = closeOpenFencesInVariables({
 			...this.buildRequestTemplateVariables(request, "", result.model),
 			providerName: "OpenAI",
 			imageEmbed: this.createImageEmbed(imageFile),
-			imagePrompt: result.image.prompt,
-			revisedPrompt: result.image.revisedPrompt ?? "",
-			revisedPromptSection: result.image.revisedPrompt ? `\n\n## Revised prompt\n\n${result.image.revisedPrompt}` : "",
+			imagePrompt: this.safeImageText(request, result.image.prompt),
+			revisedPrompt,
+			revisedPromptSection: revisedPrompt ? `\n\n## Revised prompt\n\n${revisedPrompt}` : "",
 			planningModel: result.promptPlan.planningModel,
 			planningStatus: formatOperationStatus(result.promptPlan.status),
-			planningFallback: result.promptPlan.fallbackReason ?? "",
-			planningFallbackLine: result.promptPlan.fallbackReason ? `Planning fallback: ${result.promptPlan.fallbackReason}` : "",
+			planningFallback: fallbackReason,
+			planningFallbackLine: fallbackReason ? `Planning fallback: ${fallbackReason}` : "",
 			imageGenerationProviderName: "OpenAI"
-		};
+		}, ["imagePrompt", "revisedPrompt", "revisedPromptSection", "planningFallback"]);
 		const rendered = renderTemplate(this.settings.imageResultNoteTemplate, variables);
-		if (rendered.trim()) {
-			return `${trimOuterBlankLines(rendered)}\n`;
-		}
-
-		return `${trimOuterBlankLines(renderTemplate(DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE, variables))}\n`;
+		const usedTemplate = rendered.trim() ? this.settings.imageResultNoteTemplate : DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE;
+		const note = rendered.trim() ? rendered : renderTemplate(DEFAULT_IMAGE_RESULT_NOTE_TEMPLATE, variables);
+		// A template without {{imageEmbed}} would save the picture and leave the note without it.
+		return `${trimOuterBlankLines(ensureTemplateKeepsAnswer(note, usedTemplate, "imageEmbed", variables.imageEmbed))}\n`;
 	}
 
-	async createResultNote(request: AskRequest, responseText: string, options: { model?: string } = {}): Promise<TFile> {
+	/** The model's text made safe to write into this request's note. `sourceText` is what the text replaces, when it replaces any. */
+	private prepareForWrite(request: AskRequest, text: string, sourceText?: string): PreparedWrite {
+		return prepareReplyForWrite(text, { ...(sourceText === undefined ? {} : { sourceText }), allowDiagramHeader: this.requestRunner.getRunFacts(request).diagramValid });
+	}
+
+	/** A diagram that failed AskMate's checks is shown, never written. */
+	private assertDiagramWritable(request: AskRequest): void {
+		if (this.requestRunner.getRunFacts(request).diagramBlocked) {
+			throw new Error("The diagram in this reply did not pass AskMate's checks, so it will not be written into a note. Fix the diagram, ask for another look, or copy the source.");
+		}
+	}
+
+	async createResultNote(request: AskRequest, responseText: string, options: { model?: string; incompleteReason?: string | null } = {}): Promise<TFile> {
+		this.assertDiagramWritable(request);
 		const folder = await this.ensureFolder(this.getResultNoteFolder(request));
-		const baseName = sanitizeFileName(request.title);
+		const baseName = sanitizeFileName(this.getResultNoteTitle(request));
 		const model = options.model ?? request.metadata.selectedModel;
-		const content = this.renderTextResultNoteContent(request, responseText, model);
+		// Only the reply is model output: the question and the note text in the template are the person's own.
+		const reply = this.prepareForWrite(request, responseText);
+		const incompleteReason = options.incompleteReason ?? request.metadata.outputIncompleteReason ?? null;
+		const content = withIncompleteCallout(this.renderTextResultNoteContent(request, reply.text, model), incompleteReason);
 
 		const file = await this.createFileWithUniquePath(folder, baseName, "md", async (path) => await this.app.vault.create(path, content));
 		await this.maybeAppendResultBacklinkToSource(request, file);
@@ -730,103 +1335,83 @@ export class AskMatePlugin extends Plugin {
 
 	private async applyImageToContextOutcome(request: AskRequest, result: ImageAskMateResult): Promise<MutationOutcome> {
 		this.assertTargetAcceptsText(request);
+		const isSelection = request.context.source === "Selected text";
+		const identity = request.context.selectionIdentity ?? null;
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const targetView = request.context.file
 			? this.getOpenMarkdownViewForFile(request.context.file)
 			: activeView ?? this.getLastOpenMarkdownView();
-
-		if (targetView) {
-			const editor = targetView.editor;
-			const file = targetView.file ?? request.context.file;
-			const identity = request.context.selectionIdentity;
-			const initialValue = editor.getValue();
-			const resolution = identity ? resolveSelectionIdentity(initialValue, identity) : null;
-
-			if (request.context.source === "Selected text" && (!identity || !isOriginalSelectionNote(identity.sourcePath, file, request.context.file) || resolution?.endOffset === null)) {
-				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
+		const file = targetView?.file ?? request.context.file ?? this.contextService.getLastMarkdownFile();
+		if (file?.extension !== "md") {
+			throw new Error("Open a Markdown note before inserting an image.");
+		}
+		const cannotPlace = "AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.";
+		let anchorIdentity: SelectionIdentity | null = null;
+		if (isSelection) {
+			if (!identity || !isOriginalSelectionNote(identity.sourcePath, file, request.context.file)) {
+				throw new Error(cannotPlace);
 			}
-
-			const targetLabel = file?.path ?? "the current note";
-			if (!(await askMateConfirm(this.app, `Insert the generated image into "${targetLabel}"?`))) {
-				return cancelledMutation("Image insert cancelled. No note was changed.");
+			const current = targetView ? targetView.editor.getValue() : await this.app.vault.cachedRead(file);
+			if (resolveSelectionIdentity(current, identity).endOffset === null) {
+				throw new Error(cannotPlace);
 			}
-			const imageFile = await this.saveGeneratedImage(request, result);
-			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
-			const latestValue = editor.getValue();
-			const latestResolution = identity ? resolveSelectionIdentity(latestValue, identity) : null;
-
-			if (request.context.source === "Selected text") {
-				if (latestResolution?.endOffset === null || latestResolution?.endOffset === undefined) {
-					return {
-						status: "partial",
-						message: `Saved image ${imageFile.path}, but the original selection changed before insertion.`,
-						targetPath: targetLabel,
-						artifactPaths: [imageFile.path]
-					};
-				}
-				editor.replaceRange(insertion, editor.offsetToPos(latestResolution.endOffset));
-			} else {
-				// A raw cursor insert can split a sentence, land above frontmatter or inside a code fence.
-				const plan = planImageInsertion(latestValue, editor.posToOffset(editor.getCursor()), this.createImageEmbed(imageFile));
-				editor.replaceRange(plan.text, editor.offsetToPos(plan.offset));
-			}
-
-			this.rememberEditorContext(editor, file ?? null);
-			return appliedMutation(`Inserted image in ${targetLabel}. Use Obsidian undo immediately if needed.`, targetLabel);
+			anchorIdentity = identity;
 		}
 
-		const file = request.context.file ?? this.contextService.getLastMarkdownFile();
-		if (request.context.source === "Selected text") {
-			const identity = request.context.selectionIdentity;
-			if (!file || !identity || !isOriginalSelectionNote(identity.sourcePath, file, request.context.file)) {
-				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
-			}
-			const content = await this.app.vault.cachedRead(file);
-			const resolution = resolveSelectionIdentity(content, identity);
-			if (resolution.endOffset === null) {
-				throw new Error("AskMate could not safely find the original selection to place the image after. Select the text again, then insert the image.");
-			}
-			if (!(await askMateConfirm(this.app, `Insert the generated image into "${file.path}" after the original selection?`))) {
-				return cancelledMutation("Image insert cancelled. No note was changed.");
-			}
-			const imageFile = await this.saveGeneratedImage(request, result);
-			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
-			// An object flag, because control-flow narrowing does not see assignments made inside the callback.
-			const outcome = { inserted: false };
-			await this.app.vault.process(file, (latest) => {
-				const latestResolution = resolveSelectionIdentity(latest, identity);
-				if (latestResolution.endOffset === null) {
-					return latest;
-				}
-				outcome.inserted = true;
-				return `${latest.slice(0, latestResolution.endOffset)}${insertion}${latest.slice(latestResolution.endOffset)}`;
-			});
-			if (!outcome.inserted) {
+		const where = isSelection && !targetView ? `"${file.path}" after the original selection` : `"${file.path}"`;
+		if (!(await askMateConfirm(this.app, `Insert the generated image into ${where}?`))) {
+			return cancelledMutation("Image insert cancelled. No note was changed.");
+		}
+		const imageFile = await this.saveGeneratedImage(request, result);
+		const embed = this.createImageEmbed(imageFile);
+		// Saving the image took time: the editor read before it may belong to another note by now, so the note is looked up again.
+		const placed = await this.placeImageEmbed(file, embed, anchorIdentity);
+		switch (placed) {
+			case "insert":
+				return appliedMutation(`Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`, file.path);
+			case "selection-changed":
 				return {
 					status: "partial",
 					message: `Saved image ${imageFile.path}, but the original selection changed before insertion.`,
 					targetPath: file.path,
 					artifactPaths: [imageFile.path]
 				};
-			}
-			this.rememberMarkdownFile(file);
-			return appliedMutation(`Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`, file.path);
+			case "open-fence":
+				return {
+					status: "partial",
+					message: `Saved image ${imageFile.path}, but ${file.path} ends inside a code block that is never closed, so the image was not inserted. Close the block, then add ${embed} yourself.`,
+					targetPath: file.path,
+					artifactPaths: [imageFile.path]
+				};
 		}
-
-		if (file?.extension === "md") {
-			if (!(await askMateConfirm(this.app, `Insert the generated image into "${file.path}"?`))) {
-				return cancelledMutation("Image insert cancelled. No note was changed.");
-			}
-			const imageFile = await this.saveGeneratedImage(request, result);
-			const insertion = `\n\n${this.createImageEmbed(imageFile)}\n`;
-			await this.app.vault.process(file, (content) => `${content.trimEnd()}${insertion}`);
-			this.rememberMarkdownFile(file);
-			return appliedMutation(`Inserted image in ${file.path}. Use Obsidian undo immediately if needed.`, file.path);
-		}
-
-		throw new Error("Open a Markdown note before inserting an image.");
 	}
 
+	/** Writes the embed through the open editor when the note is open, and through the vault when it is not. */
+	private async placeImageEmbed(file: TFile, embed: string, selection: SelectionIdentity | null): Promise<EmbedPlan["kind"]> {
+		const view = this.getOpenMarkdownViewForFile(file);
+		if (view?.file?.path === file.path) {
+			const editor = view.editor;
+			const plan = planEmbedInsertion(
+				editor.getValue(),
+				embed,
+				selection ? { kind: "selection", identity: selection } : { kind: "offset", offset: editor.posToOffset(editor.getCursor()) }
+			);
+			if (plan.kind === "insert") {
+				editor.replaceRange(plan.text, editor.offsetToPos(plan.offset));
+				this.rememberEditorContext(editor, file);
+			}
+			return plan.kind;
+		}
+		// An object flag, because control-flow narrowing does not see assignments made inside the callback.
+		const outcome: { kind: EmbedPlan["kind"] } = { kind: "insert" };
+		await this.app.vault.process(file, (latest) => {
+			const plan = planEmbedInsertion(latest, embed, selection ? { kind: "selection", identity: selection } : { kind: "end" });
+			outcome.kind = plan.kind;
+			return plan.kind === "insert" ? applyTextInsertion(latest, { offset: plan.offset, text: plan.text }) : latest;
+		});
+		this.rememberMarkdownFile(file);
+		return outcome.kind;
+	}
 
 	private async applyResponseToHeadingSection(request: AskRequest, output: string, headingPath: string): Promise<string> {
 		const target = headingPath.trim();
@@ -857,7 +1442,10 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		const section = matches[0];
-		const { before, next: nextContent } = spliceHeadingSectionBody(content, section, output);
+		// The text the reply replaces is the section as it is now: constructs it already holds are not the model's.
+		const { before } = spliceHeadingSectionBody(content, section, output);
+		const prepared = this.prepareForWrite(request, output, before);
+		const { next: nextContent } = spliceHeadingSectionBody(content, section, prepared.text);
 		const targetLabel = `${file.path} > ${section.path}`;
 
 		if (!(await this.confirmReplaceScopeRisks(request, "heading-section", targetLabel))) {
@@ -865,18 +1453,19 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		if (!(await this.confirmTextApplyPreview({
+			request,
 			scope: "heading-section",
 			targetLabel,
 			before,
-			after: output,
-			warning: this.describeSectionEditsSinceRequest(request, target, before)
+			after: prepared.text,
+			warning: joinWarnings(this.describeSectionEditsSinceRequest(request, target, before), describeWriteChanges(prepared), describeActiveContentAdded(content, nextContent))
 		}))) {
 			return "Apply cancelled. No note was changed.";
 		}
 
 		if (targetView) {
 			assertNoteUnchangedDuringPreview(content, targetView.editor.getValue(), file.path);
-			targetView.editor.setValue(nextContent);
+			this.writeThroughEditor(targetView.editor, content, nextContent);
 			this.rememberEditorContext(targetView.editor, file);
 		} else {
 			await this.app.vault.process(file, (latest) => {
@@ -912,44 +1501,73 @@ export class AskMatePlugin extends Plugin {
 		return "This section changed after you asked. The reply was written from the earlier version, so applying it discards those later edits.";
 	}
 
-	private async appendResponseToCapturedNote(output: string, targetView: MarkdownView | null, file: TFile | null): Promise<string> {
+	/** Changes only the part of an open note that differs, so the cursor, folds and undo history of the rest survive. */
+	private writeThroughEditor(editor: Editor, before: string, after: string): void {
+		const edit = planRangeEdit(before, after);
+		if (edit.start === edit.end && edit.insert === "") {
+			return;
+		}
+		editor.replaceRange(edit.insert, editor.offsetToPos(edit.start), editor.offsetToPos(edit.end));
+	}
+
+	/** A cut-off reply may be appended (it loses nothing), but never without the person seeing that it stops short. */
+	private describeIncompleteReply(request: AskRequest): string {
+		const reason = request.metadata.outputIncompleteReason;
+		return reason ? `This reply is incomplete (${reason}), so the text you append stops mid-answer.` : "";
+	}
+
+	/** Appended text lands inside a code block when the note ends in one that was never closed. */
+	private describeOpenFenceAppend(note: string): string {
+		return endsInsideOpenFence(note)
+			? "The note ends inside a code block that is never closed, so the appended text would become part of that code."
+			: "";
+	}
+
+	private async appendResponseToCapturedNote(request: AskRequest, output: string, targetView: MarkdownView | null, file: TFile | null): Promise<string> {
+		// Appended text sits beside the note, so nothing in it counts as already there.
+		const prepared = this.prepareForWrite(request, output);
+		const safe = prepared.text;
 		if (targetView) {
 			const editor = targetView.editor;
 			const targetLabel = file?.path ?? "the current note";
 			const before = editor.getValue();
-			const after = appendMarkdownBlockToContent(before, output);
+			const after = appendMarkdownBlockToContent(before, safe);
 
 			if (!(await this.confirmTextApplyPreview({
+				request,
 				scope: "append",
 				targetLabel,
 				before,
-				after
+				after,
+				warning: joinWarnings(this.describeIncompleteReply(request), this.describeOpenFenceAppend(before), describeWriteChanges(prepared), describeActiveContentAdded(before, after))
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
 			// Recompute against the latest note body so concurrent edits are not clobbered.
 			const latest = editor.getValue();
-			const next = latest === before ? after : appendMarkdownBlockToContent(latest, output);
-			editor.setValue(next);
+			const next = latest === before ? after : appendMarkdownBlockToContent(latest, safe);
+			this.writeThroughEditor(editor, latest, next);
 			this.rememberEditorContext(editor, file);
 			return `Appended to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
 		}
 
 		if (file?.extension === "md") {
 			const content = await this.app.vault.cachedRead(file);
-			const after = appendMarkdownBlockToContent(content, output);
+			const after = appendMarkdownBlockToContent(content, safe);
 
 			if (!(await this.confirmTextApplyPreview({
+				request,
 				scope: "append",
 				targetLabel: file.path,
 				before: content,
-				after
+				after,
+				warning: joinWarnings(this.describeIncompleteReply(request), this.describeOpenFenceAppend(content), describeWriteChanges(prepared), describeActiveContentAdded(content, after))
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			await this.app.vault.process(file, (latest) => latest === content ? after : appendMarkdownBlockToContent(latest, output));
+			await this.app.vault.process(file, (latest) => latest === content ? after : appendMarkdownBlockToContent(latest, safe));
 			this.rememberMarkdownFile(file);
 			return `Appended to ${file.path}. Use Obsidian undo or file history immediately if needed.`;
 		}
@@ -972,6 +1590,7 @@ export class AskMatePlugin extends Plugin {
 		}
 		this.assertOutputIsApplicable(output);
 		this.assertTargetAcceptsText(request);
+		this.assertDiagramWritable(request);
 
 		// Shared with the review queue: "auto" means the selection for selected-text requests and append otherwise.
 		const scope = resolveApplyScope(options.scope ?? this.settings.partialApplyDefaultScope, request.context.source);
@@ -1006,6 +1625,11 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
+			// A faithful rewrite of the selection keeps whatever the selection already held; only what the model adds is defused.
+			const prepared = this.prepareForWrite(request, output, originalText);
+			const safe = prepared.text;
+			const warning = joinWarnings(describeWriteChanges(prepared), describeActiveContentAdded(originalText, safe));
+
 			if (targetView) {
 				const editor = targetView.editor;
 				const selectedText = editor.getSelection().trim();
@@ -1014,17 +1638,19 @@ export class AskMatePlugin extends Plugin {
 
 				if (!identity && selectedText === originalText) {
 					if (!(await this.confirmTextApplyPreview({
+						request,
 						scope: "selected-text",
 						targetLabel: file?.path ?? "the current note",
 						before: originalText,
-						after: output
+						after: safe,
+						warning
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
 					if (editor.getSelection().trim() !== originalText) {
 						throw new Error("Selection changed while the Apply preview was open. Select the text again, then apply.");
 					}
-					editor.replaceSelection(output);
+					editor.replaceSelection(safe);
 					this.rememberEditorContext(editor, file);
 					return `Applied to selected text in ${file?.path ?? "the current note"}. Use Obsidian undo immediately if needed.`;
 				}
@@ -1036,10 +1662,12 @@ export class AskMatePlugin extends Plugin {
 
 				if (occurrences.length === 1) {
 					if (!(await this.confirmTextApplyPreview({
+						request,
 						scope: "selected-text",
 						targetLabel: file?.path ?? "the current note",
 						before: originalText,
-						after: output
+						after: safe,
+						warning
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
@@ -1053,7 +1681,7 @@ export class AskMatePlugin extends Plugin {
 					}
 					const latestStart = latestOccurrences[0];
 					editor.replaceRange(
-						output,
+						safe,
 						editor.offsetToPos(latestStart),
 						editor.offsetToPos(latestStart + originalText.length)
 					);
@@ -1073,10 +1701,12 @@ export class AskMatePlugin extends Plugin {
 
 				if (occurrences.length === 1) {
 					if (!(await this.confirmTextApplyPreview({
+						request,
 						scope: "selected-text",
 						targetLabel: file.path,
 						before: originalText,
-						after: output
+						after: safe,
+						warning
 					}))) {
 						return "Apply cancelled. No note was changed.";
 					}
@@ -1089,7 +1719,7 @@ export class AskMatePlugin extends Plugin {
 							throw new Error("Note changed while the Apply preview was open. Select the text again, then apply.");
 						}
 						const latestStart = latestOccurrences[0];
-						return `${latest.slice(0, latestStart)}${output}${latest.slice(latestStart + originalText.length)}`;
+						return `${latest.slice(0, latestStart)}${safe}${latest.slice(latestStart + originalText.length)}`;
 					});
 					this.rememberMarkdownFile(file);
 					return `Applied to selected text in ${file.path}. Use Obsidian undo immediately if needed.`;
@@ -1100,7 +1730,7 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		if (scope === "append") {
-			return await this.appendResponseToCapturedNote(output, targetView, file);
+			return await this.appendResponseToCapturedNote(request, output, targetView, file);
 		}
 
 		this.assertOutputCompleteForReplace(request);
@@ -1114,23 +1744,25 @@ export class AskMatePlugin extends Plugin {
 			}
 
 			const before = editor.getValue();
-			const prepared = await this.prepareFrontmatterAwareApply(before, output);
+			const prepared = await this.planFullNoteApply(request, before, output);
 			if (prepared.cancelled) {
 				return "Apply cancelled. No note was changed.";
 			}
 
 			if (!(await this.confirmTextApplyPreview({
+				request,
 				scope: "full-note",
 				targetLabel,
 				before,
 				after: prepared.text,
-				warning: [this.describeNoteEditsSinceRequest(request, before), prepared.warning].filter(Boolean).join(" ")
+				warning: joinWarnings(this.describeNoteEditsSinceRequest(request, before), prepared.warning)
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
 
 			assertNoteUnchangedDuringPreview(before, editor.getValue(), targetLabel);
-			editor.setValue(prepared.text);
+			// Only the changed part is written, so the cursor, folds and undo history of the rest of the note survive.
+			this.writeThroughEditor(editor, before, prepared.text);
 			this.rememberEditorContext(editor, file);
 			return `Applied to ${targetLabel}. Use Obsidian undo or file history immediately if needed.`;
 		}
@@ -1141,17 +1773,18 @@ export class AskMatePlugin extends Plugin {
 				return "Apply cancelled. No note was changed.";
 			}
 
-			const prepared = await this.prepareFrontmatterAwareApply(content, output);
+			const prepared = await this.planFullNoteApply(request, content, output);
 			if (prepared.cancelled) {
 				return "Apply cancelled. No note was changed.";
 			}
 
 			if (!(await this.confirmTextApplyPreview({
+				request,
 				scope: "full-note",
 				targetLabel: file.path,
 				before: content,
 				after: prepared.text,
-				warning: [this.describeNoteEditsSinceRequest(request, content), prepared.warning].filter(Boolean).join(" ")
+				warning: joinWarnings(this.describeNoteEditsSinceRequest(request, content), prepared.warning)
 			}))) {
 				return "Apply cancelled. No note was changed.";
 			}
@@ -1165,6 +1798,24 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		throw new Error("Open the original Markdown note before applying changes.");
+	}
+
+	/**
+	 * What a full-note Apply would write: the reply made safe against the note it replaces, shaped by the frontmatter
+	 * policy, and in the note's own line endings. A question the policy raises (malformed or changed frontmatter) is
+	 * asked here; a "no" cancels the Apply.
+	 */
+	private async planFullNoteApply(request: AskRequest, before: string, output: string): Promise<{ text: string; warning: string; cancelled: boolean }> {
+		const prepared = this.prepareForWrite(request, output, before);
+		const plan = prepareFrontmatterAwareApply(before, prepared.text, this.settings.frontmatterApplyPolicy);
+		if (plan.confirm && !(await askMateConfirm(this.app, plan.confirm))) {
+			return { text: plan.text, warning: plan.warning, cancelled: true };
+		}
+		return {
+			text: plan.text,
+			warning: joinWarnings(plan.warning, describeWriteChanges(prepared), describeActiveContentAdded(before, plan.text)),
+			cancelled: false
+		};
 	}
 
 	// A cut-off reply would silently delete the text it failed to reproduce; appending it loses nothing.
@@ -1218,7 +1869,12 @@ export class AskMatePlugin extends Plugin {
 		].join("\n"));
 	}
 
-	private shouldUseDiffApproval(scope: TextApplyPreviewScope): boolean {
+	private shouldUseDiffApproval(scope: TextApplyPreviewScope, forceDiff: boolean): boolean {
+		// A reply built from tool results is always reviewed as a diff, whatever the approval mode says.
+		if (forceDiff) {
+			return true;
+		}
+
 		const mode = normalizeApplyApprovalMode(this.settings.applyApprovalMode, this.settings.showApplyPreview);
 
 		if (mode === "manual") {
@@ -1233,87 +1889,52 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private async confirmTextApplyPreview({
+		request,
 		scope,
 		targetLabel,
 		before,
 		after,
 		warning
 	}: {
+		/** The request the reply answers, when there is one. A review-queue item has none. */
+		request?: AskRequest;
 		scope: TextApplyPreviewScope;
 		targetLabel: string;
 		before: string;
 		after: string;
 		warning?: string;
 	}): Promise<boolean> {
-		if (this.shouldUseDiffApproval(scope)) {
+		const forceDiff = request !== undefined && this.requestRunner.getRunFacts(request).toolDerived;
+		const notice = forceDiff ? joinWarnings(warning, "This reply was written from tool results, so check it before it is applied.") : warning;
+		if (this.shouldUseDiffApproval(scope, forceDiff)) {
 			return await askMateDiffConfirm(this.app, {
 				scope,
 				targetLabel,
 				before,
 				after,
-				warning
+				warning: notice
 			});
 		}
 
 		if (scope === "full-note") {
-			const warningText = warning ? `\n\nWarning: ${warning}` : "";
+			const warningText = notice ? `\n\nWarning: ${notice}` : "";
 			return await askMateConfirm(this.app, `Apply AskMate output by replacing the full contents of "${targetLabel}"? This cannot be undone by AskMate.${warningText}`);
 		}
 
 		// Scopes that normally apply without a prompt still stop when there is a warning, such as edits made after asking.
-		if (warning) {
-			return await askMateConfirm(this.app, `Apply AskMate output to "${targetLabel}"?\n\nWarning: ${warning}`);
+		if (notice) {
+			return await askMateConfirm(this.app, `Apply AskMate output to "${targetLabel}"?\n\nWarning: ${notice}`);
 		}
 
 		return true;
 	}
 
-
-
-	private async prepareFrontmatterAwareApply(before: string, proposed: string): Promise<FrontmatterApplyResult> {
-		const beforeBlock = splitMarkdownFrontmatter(before);
-		const proposedBlock = splitMarkdownFrontmatter(proposed);
-		// An unclosed opening "---" in the reply is body text (often a thematic break), so it is never treated as frontmatter.
-		const proposedHasFrontmatter = proposedBlock.exists && !proposedBlock.malformed;
-		if (!beforeBlock.exists && !proposedHasFrontmatter) {
-			return { text: proposed, warning: "", cancelled: false };
-		}
-		if (beforeBlock.malformed) {
-			const confirmed = await askMateConfirm(this.app, "The existing YAML frontmatter appears malformed. Continue with the AI replacement?");
-			return { text: proposed, warning: "Existing YAML frontmatter looked malformed.", cancelled: !confirmed };
-		}
-		if (this.settings.frontmatterApplyPolicy === "replace") {
-			return { text: proposed, warning: proposedHasFrontmatter ? "AskMate will replace YAML frontmatter from the AI output." : "", cancelled: false };
-		}
-		const sameLineEndings = (text: string): string => text.replace(/\r\n/g, "\n");
-		const eol = before.includes("\r\n") ? "\r\n" : "\n";
-		const withNoteLineEndings = (text: string): string => text.replace(/\r?\n/g, eol);
-		if (this.settings.frontmatterApplyPolicy === "confirm" && sameLineEndings(beforeBlock.frontmatter) !== sameLineEndings(proposedBlock.frontmatter)) {
-			const confirmed = await askMateConfirm(this.app, "AskMate output changes YAML frontmatter. Continue with the replacement?");
-			return { text: proposed, warning: "YAML frontmatter differs from the original note.", cancelled: !confirmed };
-		}
-		if (this.settings.frontmatterApplyPolicy === "preserve" && beforeBlock.exists) {
-			const body = proposedHasFrontmatter ? proposedBlock.body : proposed;
-			return {
-				text: `${beforeBlock.frontmatter}${eol}${eol}${withNoteLineEndings(body.trimStart())}`,
-				warning: proposedHasFrontmatter ? "AskMate preserved the original YAML frontmatter and removed AI-proposed frontmatter." : "AskMate preserved the original YAML frontmatter.",
-				cancelled: false
-			};
-		}
-		if (this.settings.frontmatterApplyPolicy === "preserve" && proposedHasFrontmatter) {
-			return {
-				text: proposedBlock.body.trimStart(),
-				warning: "AskMate preserved the original no-frontmatter state and removed AI-proposed frontmatter.",
-				cancelled: false
-			};
-		}
-		return { text: proposed, warning: "", cancelled: false };
-	}
-
+	/** Exactly what the run sends, because the same builders produce it: the instructions and the message. */
 	buildPromptInspectionForRequest(request: AskRequest): PromptInspection {
 		const shouldGenerateImage = request.metadata.forceImage || request.metadata.autoImage || request.metadata.modelCapability === "image";
-		const instructions = shouldGenerateImage ? buildImagePromptPlanningInstructions() : buildTextInstructions(request.customInstructions);
-		const input = shouldGenerateImage ? buildImagePromptPlanningInput(request) : buildPrompt(request);
+		const purpose = shouldGenerateImage ? "image-plan" : "answer";
+		const instructions = buildRequestInstructions(request, { purpose });
+		const input = buildRequestInput(request, { purpose });
 		// Show the capped fallback exactly as RequestRunner would send it if prompt planning fails.
 		const secondaryInput = shouldGenerateImage ? buildFallbackImagePrompt(request) : "";
 		// The fallback image prompt is only sent when planning fails, so it is shown but not counted towards the estimate.
@@ -1335,7 +1956,7 @@ export class AskMatePlugin extends Plugin {
 		};
 	}
 
-	async inspectFinalPrompt(question: string, title: string, options: BuildRequestOptions = {}): Promise<PromptInspection> {
+	async inspectFinalPrompt(question: string, title: string, options: ExtendedBuildOptions = {}): Promise<PromptInspection> {
 		const request = await this.buildRequest(question, title, options);
 		return this.buildPromptInspectionForRequest(request);
 	}
@@ -1353,6 +1974,35 @@ export class AskMatePlugin extends Plugin {
 		}
 		if (guardrails.warnings.length > 0 && !(await askMateConfirm(this.app, `${guardrails.warnings.join("\n\n")}\n\nContinue with this AskMate request?`))) {
 			throw new Error("AskMate request cancelled by usage guardrails.");
+		}
+		await this.confirmHardInputLimit(request, inspection.estimatedInputTokens);
+	}
+
+	/**
+	 * Above a fixed size the person is always asked, even with every guardrail off: the Expanded default can send a whole
+	 * vault note by accident. Balanced trims this one request to a shorter part of the note.
+	 */
+	private async confirmHardInputLimit(request: AskRequest, estimatedInputTokens: number): Promise<void> {
+		const limit = this.usageService.evaluateHardInputLimit(estimatedInputTokens);
+		if (!limit.confirm) {
+			return;
+		}
+		const choice = await askMateChoice(this.app, {
+			title: "Send a very large request?",
+			message: `${limit.reason}\n\nNothing has been sent yet. Balanced sends a shorter part of the note for this request only.`,
+			choices: [
+				{ id: "cancel", label: "Cancel" },
+				{ id: "balanced", label: "Use Balanced for this request" },
+				{ id: "send", label: "Send anyway", primary: true }
+			],
+			focus: "cancel",
+			dismiss: "cancel"
+		});
+		if (choice === "cancel") {
+			throw new Error("AskMate request cancelled: it was too large to send.");
+		}
+		if (choice === "balanced") {
+			this.requestRunner.applyContextBudget(request, "balanced");
 		}
 	}
 
@@ -1378,12 +2028,23 @@ export class AskMatePlugin extends Plugin {
 			new Notice(`AskMate could not open evidence source ${source.sourcePath}.`);
 			return;
 		}
-		let leaf = this.app.workspace.getLeavesOfType("markdown").find((item) => item.view instanceof MarkdownView && item.view.file?.path === file.path);
-		if (!leaf) {
-			leaf = this.app.workspace.getLeaf(false);
-			await leaf.openFile(file);
+		// A tab restored at start-up is a deferred leaf with no view yet, so it is matched by its saved file and loaded on demand.
+		const existing = findLeafForFile(this.app.workspace.getLeavesOfType("markdown"), file.path);
+		let leaf: WorkspaceLeaf;
+		if (existing) {
+			await existing.loadIfDeferred();
+			leaf = existing;
+		} else {
+			// A new tab, so the note the person is reading is never replaced to show a source.
+			leaf = this.app.workspace.getLeaf("tab");
+			await leaf.openFile(file, { state: { mode: "source" }, eState: { line: Math.max(0, source.lineStart - 1) } });
 		}
 		await this.app.workspace.revealLeaf(leaf);
+		// A selection cannot be seen in reading view, so the note is switched to editing first.
+		if (leaf.view instanceof MarkdownView && leaf.view.getMode() !== "source") {
+			const state = leaf.getViewState();
+			await leaf.setViewState({ ...state, state: { ...state.state, mode: "source" } });
+		}
 		if (leaf.view instanceof MarkdownView) {
 			const editor = leaf.view.editor;
 			// Line numbers were captured with the answer; the note may have shrunk since, and out-of-range lines throw.
@@ -1415,7 +2076,22 @@ export class AskMatePlugin extends Plugin {
 	async queueReviewItemFromRequest(request: AskRequest, proposedText: string, model: string, scope: ApplyScope = "auto"): Promise<ReviewQueueItem> {
 		this.assertOutputIsApplicable(proposedText.trim());
 		this.assertTargetAcceptsText(request);
-		return await this.historyService.queueReviewItemFromRequest(request, proposedText, model, scope);
+		this.assertDiagramWritable(request);
+		// A reply built from tool results is always reviewed as a diff, in every approval mode. A queue item does not remember
+		// where its text came from (the run facts belong to the request, and the saved item has no such field), so applying it
+		// later would skip that diff. It is refused here, and Apply on the reply itself shows the diff.
+		if (this.requestRunner.getRunFacts(request).toolDerived) {
+			throw new Error("This reply was written from tool results, so it cannot be queued for later. Apply it directly, which shows the changes before anything is written.");
+		}
+		// A suggestion that replaces the note or the selection keeps what that text already held; one that is appended has no source.
+		const effective = resolveApplyScope(scope, request.context.source);
+		const replaced = effective === "full-note"
+			? request.context.content
+			: effective === "selected-block"
+				? request.context.selectionIdentity?.text ?? request.context.content
+				: undefined;
+		const prepared = this.prepareForWrite(request, proposedText, replaced);
+		return await this.historyService.queueReviewItemFromRequest(request, prepared.text, model, scope);
 	}
 
 	/** Excalidraw files hold drawing data in Markdown; writing model text into them can corrupt the drawing. */
@@ -1461,27 +2137,41 @@ export class AskMatePlugin extends Plugin {
 			const content = await this.app.vault.cachedRead(file);
 			let nextContent = content;
 			let previewScope: "selected-text" | "append" | "full-note" = "full-note";
+			// An item queued by an older build, or brought by a sync, was not made safe when it was queued, so it is made safe now.
+			// The strict header AskMate builds for its own diagrams is allowed through: the guard checks its grammar.
+			const replaced = item.scope === "selected-block" ? item.selectionIdentity?.text : item.scope === "full-note" ? content : undefined;
+			const prepared = prepareReplyForWrite(item.proposedText, { ...(replaced === undefined ? {} : { sourceText: replaced }), allowDiagramHeader: true });
+			const proposed = prepared.text;
+			let planWarning = "";
 			if (item.scope === "selected-block") {
 				const resolution = item.selectionIdentity ? resolveSelectionIdentity(content, item.selectionIdentity) : null;
 				if (!resolution || resolution.startOffset === null) {
 					throw new Error("AskMate could not safely find the original queued text in the current note.");
 				}
-				nextContent = `${content.slice(0, resolution.startOffset)}${item.proposedText}${content.slice(resolution.endOffset ?? resolution.startOffset)}`;
+				nextContent = `${content.slice(0, resolution.startOffset)}${proposed}${content.slice(resolution.endOffset ?? resolution.startOffset)}`;
 				previewScope = "selected-text";
 			} else if (item.scope === "append") {
-				nextContent = appendMarkdownBlockToContent(content, item.proposedText);
+				nextContent = appendMarkdownBlockToContent(content, proposed);
 				previewScope = "append";
+				planWarning = this.describeOpenFenceAppend(content);
 			} else {
 				if (content !== item.beforeText) {
 					throw new Error("The source note changed since this review item was queued. Re-run or requeue the suggestion before applying it.");
 				}
-				const prepared = await this.prepareFrontmatterAwareApply(content, item.proposedText);
-				if (prepared.cancelled) {
+				const plan = prepareFrontmatterAwareApply(content, proposed, this.settings.frontmatterApplyPolicy);
+				if (plan.confirm && !(await askMateConfirm(this.app, plan.confirm))) {
 					return "Review item apply cancelled. No note was changed.";
 				}
-				nextContent = prepared.text;
+				nextContent = plan.text;
+				planWarning = plan.warning;
 			}
-			if (!(await this.confirmTextApplyPreview({ scope: previewScope, targetLabel: file.path, before: content, after: nextContent }))) {
+			if (!(await this.confirmTextApplyPreview({
+				scope: previewScope,
+				targetLabel: file.path,
+				before: content,
+				after: nextContent,
+				warning: joinWarnings(planWarning, describeWriteChanges(prepared), describeActiveContentAdded(content, nextContent))
+			}))) {
 				return "Review item apply cancelled. No note was changed.";
 			}
 			const currentItem = normalizeReviewQueueItems(this.settings.reviewQueue, this.settings.reviewQueueMaxItems).find((candidate) => candidate.id === id);
@@ -1491,14 +2181,14 @@ export class AskMatePlugin extends Plugin {
 			const previewedContent = nextContent;
 			await this.app.vault.process(file, (latest) => {
 				if (item.scope === "append") {
-					return appendMarkdownBlockToContent(latest, item.proposedText);
+					return appendMarkdownBlockToContent(latest, proposed);
 				}
 				if (item.scope === "selected-block") {
 					const latestResolution = item.selectionIdentity ? resolveSelectionIdentity(latest, item.selectionIdentity) : null;
 					if (!latestResolution || latestResolution.startOffset === null) {
 						throw new Error("Note changed while the Apply preview was open. Re-queue or select the text again.");
 					}
-					return `${latest.slice(0, latestResolution.startOffset)}${item.proposedText}${latest.slice(latestResolution.endOffset ?? latestResolution.startOffset)}`;
+					return `${latest.slice(0, latestResolution.startOffset)}${proposed}${latest.slice(latestResolution.endOffset ?? latestResolution.startOffset)}`;
 				}
 				assertNoteUnchangedDuringPreview(content, latest, file.path);
 				return previewedContent;
@@ -1564,10 +2254,6 @@ export class AskMatePlugin extends Plugin {
 		}
 	}
 
-	describeLastVaultMentions(): string[] {
-		return this.contextService.describeLastVaultMentions();
-	}
-
 	/** Existing vault tags with a leading "#", for @tag: suggestions. */
 	getVaultTags(): string[] {
 		return rankVaultTags(this.contextService.collectVaultData(null, true).notes);
@@ -1615,7 +2301,16 @@ export class AskMatePlugin extends Plugin {
 		if (!options.folderPath.trim()) {
 			throw new Error("Choose a batch folder first: a folder path inside the vault, without \".\" or \"..\" segments.");
 		}
-		const files = await this.getBatchWorkflowTargetFiles(options.folderPath, options.maxFiles);
+		let files: TFile[] = [];
+		let folderMissing = false;
+		try {
+			files = await this.getBatchWorkflowTargetFiles(options.folderPath, options.maxFiles);
+		} catch (error) {
+			if (!(error instanceof FolderNotFoundError)) {
+				throw error;
+			}
+			folderMissing = true;
+		}
 		const summary: BatchWorkflowRunSummary = { total: files.length, completed: 0, failed: 0, createdNotes: [], queuedReviews: 0, stoppedReason: null, failures: [] };
 		const report = (currentPath: string, message: string): void => {
 			onProgress?.({ total: files.length, completed: summary.completed, failed: summary.failed, currentPath, message });
@@ -1625,9 +2320,17 @@ export class AskMatePlugin extends Plugin {
 			report("", `${reason} ${summary.completed} completed, ${summary.failed} failed, ${files.length - summary.completed - summary.failed} not run.`);
 			return summary;
 		};
-		if (files.length > 0 && !(await askMateConfirm(this.app, this.describeBatchRun(workflow, files.length, options, queueScope)))) {
+		if (files.length === 0) {
+			// A folder with no notes, or no folder at all, is not a batch that ran and completed nothing.
+			return stop(describeEmptyBatch(options.folderPath, !folderMissing));
+		}
+		if (!(await askMateConfirm(this.app, this.describeBatchRun(workflow, files.length, options, queueScope)))) {
 			return stop("Batch cancelled before it started.");
 		}
+		// The provider and effort the person confirmed are the ones every note uses, even if settings change while the batch runs.
+		const providerRef = this.getSelectedProviderModelRef();
+		const reasoningEffort = this.getSelectedReasoningEffort();
+		let runState = INITIAL_BATCH_STATE;
 		// Asking once keeps a long batch usable while still surfacing budget overruns that the per-request flow would confirm.
 		let usageWarningsAccepted = false;
 		for (const [index, file] of files.entries()) {
@@ -1639,17 +2342,24 @@ export class AskMatePlugin extends Plugin {
 			}
 			report(file.path, `Running ${workflow.name} on ${file.path}`);
 			try {
-				const request = await this.buildRequest(this.getWorkflowPrompt(workflow), workflow.name, {
+				const request = await this.buildRequest(this.getWorkflowPrompt(workflow), batchResultTitle(workflow.name, file.basename), {
 					file,
 					forceFileContext: true,
 					workflow,
 					outputMode: "note",
 					contextBudgetMode: options.contextBudgetMode,
-					commandSource: "command_palette"
+					commandSource: "command_palette",
+					providerRef,
+					reasoningEffort
 				});
 				const guardrails = this.evaluateUsageGuardrails(request);
 				if (guardrails.blockers.length > 0) {
 					throw new Error(guardrails.blockers.join(" "));
+				}
+				const hardLimit = this.usageService.evaluateHardInputLimit(this.buildPromptInspectionForRequest(request).estimatedInputTokens);
+				if (hardLimit.confirm) {
+					// A batch cannot stop to ask about every large note, so a note this large is skipped and named in the summary.
+					throw new Error(`${hardLimit.reason} A batch does not send notes this large. Ask about it on its own from the sidebar.`);
 				}
 				if (guardrails.warnings.length > 0 && !usageWarningsAccepted) {
 					const remaining = files.length - index;
@@ -1677,6 +2387,7 @@ export class AskMatePlugin extends Plugin {
 					summary.createdNotes.push(note.path);
 				}
 				summary.completed += 1;
+				runState = nextBatchDecision(runState, null).state;
 			} catch (error) {
 				if (isAbortError(error)) {
 					return stop("Batch cancelled.");
@@ -1685,6 +2396,12 @@ export class AskMatePlugin extends Plugin {
 				summary.failed += 1;
 				summary.failures.push({ path: file.path, reason });
 				report(file.path, `${file.path}: ${reason}`);
+				// A wrong key or a blocking guardrail fails every note the same way, so a few in a row end the batch.
+				const decision = nextBatchDecision(runState, classifyBatchFailure(reason));
+				runState = decision.state;
+				if (decision.stopReason) {
+					return stop(decision.stopReason);
+				}
 			}
 		}
 		report("", `Batch workflow complete: ${summary.completed} completed, ${summary.failed} failed.`);
@@ -1717,7 +2434,8 @@ export class AskMatePlugin extends Plugin {
 		return await this.getProviderApiKey("openai");
 	}
 
-	async getProviderApiKey(providerId: TextProviderId = this.getSelectedTextProviderId()): Promise<string> {
+	/** The stored key, or an empty string. Reading it asks nothing: it answers "is a key stored", not "may it be sent". */
+	private async readProviderSecret(providerId: TextProviderId): Promise<string> {
 		const secretName = this.getProviderSettings(providerId).apiKeySecretName.trim();
 
 		if (!secretName) {
@@ -1726,6 +2444,16 @@ export class AskMatePlugin extends Plugin {
 
 		const secret = await Promise.resolve(this.app.secretStorage.getSecret(secretName));
 		return secret ?? "";
+	}
+
+	/** The key for a request. A key leaves this device only for an address this device approved for it, so the first use asks. */
+	async getProviderApiKey(providerId: TextProviderId = this.getSelectedTextProviderId()): Promise<string> {
+		const secret = await this.readProviderSecret(providerId);
+		if (!secret) {
+			return "";
+		}
+		await this.assertKeyMayBeSent(providerId, this.getProviderSettings(providerId).apiKeySecretName.trim());
+		return secret;
 	}
 
 	getSelectedTextProviderId(): TextProviderId {
@@ -1794,14 +2522,14 @@ export class AskMatePlugin extends Plugin {
 			} catch {
 				return false;
 			}
-			return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
+			return hasModel && (await this.readProviderSecret(ref.providerId)).trim().length > 0;
 		}
 
 		if (ref.providerId === "azure-ai") {
-			return hasModel && provider.baseUrl.trim().length > 0 && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
+			return hasModel && provider.baseUrl.trim().length > 0 && (await this.readProviderSecret(ref.providerId)).trim().length > 0;
 		}
 
-		return hasModel && (await this.getProviderApiKey(ref.providerId)).trim().length > 0;
+		return hasModel && (await this.readProviderSecret(ref.providerId)).trim().length > 0;
 	}
 
 	getSelectedModel(): string {
@@ -1932,14 +2660,11 @@ export class AskMatePlugin extends Plugin {
 		}
 
 		const existingIds = new Set(this.settings.customWorkflows.map((workflow) => workflow.id));
+		// A preset that does not say what it produces creates new content. It never replaces the note unless it says so.
+		const normalized = normalizeCustomWorkflowsWithDiagnostics(workflowsValue.map(withSafeImportDefaults));
 		const imported: CustomWorkflow[] = [];
 
-		for (const [index, workflowValue] of workflowsValue.entries()) {
-			const workflow = normalizeCustomWorkflow(workflowValue, index);
-			if (!workflow) {
-				continue;
-			}
-
+		for (const [index, workflow] of normalized.workflows.entries()) {
 			if (existingIds.has(workflow.id)) {
 				workflow.id = `custom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
 			}
@@ -1956,10 +2681,18 @@ export class AskMatePlugin extends Plugin {
 			throw new Error(`AskMate already has the maximum of ${MAX_CUSTOM_WORKFLOWS} custom workflows. Delete some before importing more.`);
 		}
 		const kept = imported.slice(0, capacity);
-		this.settings.customWorkflows = normalizeCustomWorkflows([
+		const concerns = findImportConcerns(kept);
+		if (concerns.length > 0 && !(await askMateConfirm(this.app, describeImportConcerns(concerns, kept.length)))) {
+			throw new Error("Workflow import cancelled. Nothing was added.");
+		}
+		this.settings.customWorkflows = normalizeCustomWorkflowsWithDiagnostics([
 			...this.settings.customWorkflows,
 			...kept
-		]);
+		]).workflows;
+		const shortened = normalized.diagnostics.filter((diagnostic) => diagnostic.code === "workflow-prompt-truncated" || diagnostic.code === "workflow-name-truncated");
+		if (shortened.length > 0) {
+			new Notice(shortened.map((diagnostic) => diagnostic.message).join(" "), 10 * NOTICE_SECONDS);
+		}
 		await this.saveSettings();
 		this.registerCustomWorkflowCommands();
 		this.refreshOpenAskMateViews();
@@ -1986,6 +2719,7 @@ export class AskMatePlugin extends Plugin {
 				prompt: workflow.prompt,
 				resultNoteTemplate: workflow.resultNoteTemplate,
 				outputKind: workflow.outputKind ?? "note-edit",
+				...(workflow.skillIds && workflow.skillIds.length > 0 ? { skillIds: workflow.skillIds } : {}),
 				isCustom: true
 			}))
 		];
@@ -2175,7 +2909,7 @@ export class AskMatePlugin extends Plugin {
 			menu.addItem((item) => {
 				item
 					.setTitle(entry.title)
-					.setIcon(entry.kind === "workflow" ? "sparkles" : "bot")
+					.setIcon(entry.kind === "workflow" ? "sparkles" : ASKMATE_ICON_ID)
 					.setSection("askmate")
 					.onClick(() => {
 						// Opening the sidebar moves focus, so the selection is captured before anything else happens.
@@ -2211,8 +2945,19 @@ export class AskMatePlugin extends Plugin {
 		}
 	}
 
-	async buildRequest(question: string, title: string, options: BuildRequestOptions = {}): Promise<AskRequest> {
-		return await this.requestRunner.buildRequest(question, title, options);
+	async buildRequest(question: string, title: string, options: ExtendedBuildOptions = {}): Promise<AskRequest> {
+		const request = await this.requestRunner.buildRequest(question, title, options);
+		this.lastBuiltRequest = request;
+		return request;
+	}
+
+	/**
+	 * What the most recently built request selected through vault mentions.
+	 * Legacy accessor: concurrent builds overwrite each other here. Read getContextReport(request) for the request being
+	 * shown; this stays only until the sidebar stops calling it.
+	 */
+	describeLastVaultMentions(): string[] {
+		return this.lastBuiltRequest ? this.requestRunner.getContextReport(this.lastBuiltRequest).mentions : [];
 	}
 
 	private async recordOperationUsage(params: {
@@ -2229,6 +2974,8 @@ export class AskMatePlugin extends Plugin {
 		usage: OpenAITokenUsage | null;
 		startedAt: Date;
 		errorMessage?: string;
+		/** True once the request was handed to the provider, so a stopped call can still count toward budgets. */
+		sent?: boolean;
 	}): Promise<void> {
 		await this.usageService.recordOperationUsage(params);
 	}
@@ -2255,7 +3002,52 @@ export class AskMatePlugin extends Plugin {
 		await this.usageService.resetTokenUsageStats();
 	}
 
+	/** A notice that stays up while a palette run works, with a button that stops it. */
+	private showRunningNotice(label: string): Notice {
+		const notice = new Notice(`AskMate is running "${label}"...`, 0);
+		const stop = notice.messageEl.createEl("button", { text: "Stop" });
+		stop.type = "button";
+		stop.addEventListener("click", () => {
+			this.commandRuns.stop();
+		});
+		return notice;
+	}
+
+	/** A failure the settings can fix gets a button that opens them, instead of a message that ends in a dead end. */
+	private reportCommandError(error: unknown): void {
+		const message = this.getErrorMessage(error);
+		if (!isAbortError(error) && /\bin AskMate settings\b/i.test(message)) {
+			this.notifyWithAction(message, "Open settings", () => {
+				this.openSettingsTab();
+			}, 15);
+			return;
+		}
+		new Notice(message);
+	}
+
+	/** Opens a note the run created, in a new tab, so the person never has to go looking for it. */
+	private async openCreatedNote(file: TFile): Promise<void> {
+		await this.app.workspace.getLeaf("tab").openFile(file);
+	}
+
+	private announceCreatedNote(file: TFile, incompleteReason: string | null): void {
+		const message = incompleteReason
+			? `AskMate created ${file.path}, but the reply was cut off (${incompleteReason}). Check it before relying on it.`
+			: `AskMate created ${file.path}`;
+		this.notifyWithAction(message, "Open", () => {
+			void this.openCreatedNote(file).catch((error: unknown) => {
+				new Notice(this.getErrorMessage(error));
+			});
+		});
+	}
+
 	private async runWorkflowFromCommand(workflow: Workflow, editor: Editor, noteFile: TFile | null): Promise<void> {
+		const run = this.commandRuns.begin(workflow.name);
+		if (!run) {
+			new Notice(`AskMate is already running "${this.commandRuns.current() ?? "a command"}". Wait for it to finish, or stop it first.`);
+			return;
+		}
+		let working: Notice | null = null;
 		try {
 			if (this.getSelectedProviderModelRef().capability !== "text") {
 				throw new Error(IMAGE_WORKFLOW_MESSAGE);
@@ -2269,21 +3061,37 @@ export class AskMatePlugin extends Plugin {
 				outputMode: "note"
 			});
 			await this.confirmUsageGuardrails(request);
-			new Notice(`AskMate is running "${workflow.name}"...`);
-			const result = await this.runOpenAIRequest(request);
+			working = this.showRunningNotice(workflow.name);
+			const result = await this.runOpenAIRequest(request, { abortSignal: run.signal });
 
 			if (result.kind !== "text") {
 				throw new Error(IMAGE_WORKFLOW_MESSAGE);
 			}
+			if (run.signal.aborted) {
+				// Stopped runs write nothing, even when the reply had already arrived.
+				throw createAbortError("Request was stopped.");
+			}
 
-			const resultFile = await this.createResultNote(request, result.text, { model: result.model });
-			new Notice(`AskMate created ${resultFile.path}`);
+			// A reply that was cut off is saved with a warning at the top and announced as unfinished.
+			const incompleteReason = result.incompleteReason ?? request.metadata.outputIncompleteReason ?? null;
+			const resultFile = await this.createResultNote(request, result.text, { model: result.model, incompleteReason });
+			working.hide();
+			this.announceCreatedNote(resultFile, incompleteReason);
 		} catch (error) {
-			new Notice(this.getErrorMessage(error));
+			this.reportCommandError(error);
+		} finally {
+			working?.hide();
+			run.finish();
 		}
 	}
 
 	private async runImageFromCommand(editor: Editor, noteFile: TFile | null): Promise<void> {
+		const run = this.commandRuns.begin("Generate image");
+		if (!run) {
+			new Notice(`AskMate is already running "${this.commandRuns.current() ?? "a command"}". Wait for it to finish, or stop it first.`);
+			return;
+		}
+		let working: Notice | null = null;
 		try {
 			const request = await this.buildRequest(DEFAULT_IMAGE_PROMPT, "AskMate Image", {
 				editor,
@@ -2293,17 +3101,24 @@ export class AskMatePlugin extends Plugin {
 				forceImage: true
 			});
 			await this.confirmUsageGuardrails(request);
-			new Notice("AskMate is generating an image...");
-			const result = await this.runOpenAIRequest(request, { forceImage: true });
+			working = this.showRunningNotice("Generate image");
+			const result = await this.runOpenAIRequest(request, { forceImage: true, abortSignal: run.signal });
 
 			if (result.kind !== "image") {
 				throw new Error(IMAGE_WORKFLOW_MESSAGE);
 			}
+			if (run.signal.aborted) {
+				throw createAbortError("Request was stopped.");
+			}
 
 			const { noteFile: resultNote } = await this.createImageResultNote(request, result);
-			new Notice(`AskMate created ${resultNote.path}`);
+			working.hide();
+			this.announceCreatedNote(resultNote, null);
 		} catch (error) {
-			new Notice(this.getErrorMessage(error));
+			this.reportCommandError(error);
+		} finally {
+			working?.hide();
+			run.finish();
 		}
 	}
 

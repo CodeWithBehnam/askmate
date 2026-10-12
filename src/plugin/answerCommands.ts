@@ -5,8 +5,13 @@ import { copyAnswerText, insertAnswerIntoEditor } from "../ui/sidebar/answerShel
 import { AskMateView } from "../ui/sidebar/AskMateView";
 import type { AskMatePlugin } from "./AskMatePlugin";
 
-function findLastAnswer(plugin: AskMatePlugin): LastAnswer | null {
+/**
+ * The newest answer in an open sidebar. A sidebar restored at start-up is a deferred leaf whose view is only a
+ * placeholder, so each leaf is loaded before it is asked, or the commands would say there is no answer.
+ */
+async function findLastAnswer(plugin: AskMatePlugin): Promise<LastAnswer | null> {
 	for (const leaf of plugin.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE)) {
+		await leaf.loadIfDeferred();
 		if (leaf.view instanceof AskMateView) {
 			const answer = leaf.view.getLastAnswer();
 			if (answer) {
@@ -22,26 +27,26 @@ export function registerAnswerCommands(plugin: AskMatePlugin): void {
 	plugin.addCommand({
 		id: "copy-last-answer",
 		name: "Copy last answer",
-		callback: () => {
-			const answer = findLastAnswer(plugin);
+		callback: async () => {
+			const answer = await findLastAnswer(plugin);
 			if (!isInsertable(answer)) {
 				new Notice("There is no AskMate answer to copy yet.");
 				return;
 			}
-			void copyAnswerText(answer.text);
+			await copyAnswerText(answer.text);
 		}
 	});
 
 	plugin.addCommand({
 		id: "insert-last-answer",
 		name: "Insert last answer at cursor",
-		editorCallback: (editor, ctx) => {
+		editorCallback: async (editor, ctx) => {
 			// The palette restores the editor, so the command's own editor is the right target even when the view is hidden.
 			if (ctx instanceof MarkdownView && ctx.getMode() !== "source") {
 				new Notice("Switch the note to editing mode (not reading view) to insert the answer.");
 				return;
 			}
-			insertAnswerIntoEditor(editor, findLastAnswer(plugin));
+			insertAnswerIntoEditor(editor, await findLastAnswer(plugin));
 		}
 	});
 }

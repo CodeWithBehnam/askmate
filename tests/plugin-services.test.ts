@@ -1,0 +1,298 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import type { ToolApprovalCard as McpApprovalCard, TrustRequest } from "../src/mcp";
+import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, describeTrustRequest } from "../src/plugin/mcpHost";
+import AskMatePlugin from "../src/plugin/AskMatePlugin";
+import type { EvidenceSource } from "../src/shared/types";
+import { createFakeApp, FakeEditor, leafFor, type FakeApp, type Position } from "./support/fake-app";
+import { installDomGlobals } from "./support/fake-dom";
+import { MarkdownView, Modal, Notice } from "./support/obsidian-fakes";
+
+let restoreDom: () => void;
+
+beforeAll(() => {
+	restoreDom = installDomGlobals();
+});
+
+afterAll(() => {
+	restoreDom();
+});
+
+beforeEach(() => {
+	Notice.clear();
+});
+
+interface TestPlugin extends AskMatePlugin {
+	storedData: unknown;
+}
+
+async function loadPlugin(stored: unknown = {}): Promise<{ plugin: TestPlugin; fake: FakeApp }> {
+	const fake = createFakeApp();
+	const plugin = new AskMatePlugin(fake.app as never, { id: "askmate", name: "AskMate", version: "1.12.0", dir: ".obsidian/plugins/askmate" } as never) as TestPlugin;
+	plugin.storedData = stored;
+	plugin.obsidianApi = { loadMermaid: () => Promise.resolve(null), parseYaml: (text) => Bun.YAML.parse(text) };
+	await plugin.onload();
+	return { plugin, fake };
+}
+
+function hostCard(overrides: Partial<McpApprovalCard> = {}): McpApprovalCard {
+	return {
+		serverId: "notes",
+		serverLabel: "Notes server",
+		toolName: "search",
+		toolTitle: "Search notes",
+		argumentsText: "{\n  \"q\": \"roadmap\"\n}",
+		warnings: [],
+		description: "Finds notes",
+		reason: "mode",
+		changedSinceApproval: false,
+		mode: "always-ask",
+		canAllowForChat: true,
+		claimsReadOnly: false,
+		...overrides
+	};
+}
+
+describe("McpApprovalRouter", () => {
+	test("hands the card to whoever started the run, with the full arguments", async () => {
+		const router = new McpApprovalRouter();
+		const controller = new AbortController();
+		const seen: string[] = [];
+		router.register(controller.signal, (card) => {
+			seen.push(`${card.server}/${card.tool}/${card.argumentsJson}/${String(card.canAllowForChat)}`);
+			return Promise.resolve("allow-chat");
+		});
+
+		expect(await router.confirm(hostCard(), controller.signal)).toBe("allow-chat");
+		expect(seen).toEqual(["Notes server/search/{\n  \"q\": \"roadmap\"\n}/true"]);
+	});
+
+	test("a call with nobody to ask, or after the handler is removed, is refused", async () => {
+		const router = new McpApprovalRouter();
+		const controller = new AbortController();
+		expect(await router.confirm(hostCard(), controller.signal)).toBe("deny");
+		const unregister = router.register(controller.signal, () => Promise.resolve("allow-once"));
+		unregister();
+		expect(await router.confirm(hostCard(), controller.signal)).toBe("deny");
+	});
+
+	test("two runs never see each other's cards", async () => {
+		const router = new McpApprovalRouter();
+		const one = new AbortController();
+		const two = new AbortController();
+		router.register(one.signal, () => Promise.resolve("allow-once"));
+		router.register(two.signal, () => Promise.resolve("deny"));
+
+		expect(await router.confirm(hostCard(), one.signal)).toBe("allow-once");
+		expect(await router.confirm(hostCard(), two.signal)).toBe("deny");
+	});
+
+	test("Stop while the card is open refuses the call, and a stray answer is not consent", async () => {
+		const router = new McpApprovalRouter();
+		const controller = new AbortController();
+		router.register(controller.signal, () => new Promise(() => undefined));
+		const pending = router.confirm(hostCard(), controller.signal);
+		controller.abort();
+		expect(await pending).toBe("deny");
+
+		const other = new AbortController();
+		router.register(other.signal, () => Promise.resolve("maybe" as never));
+		expect(await router.confirm(hostCard(), other.signal)).toBe("deny");
+	});
+});
+
+describe("host adapters", () => {
+	test("device trust is stored in the device's local storage under its own prefix", () => {
+		const fake = createFakeApp();
+		const store = createDeviceTrustStore(fake.app as never);
+
+		expect(store.get("server:a")).toBeNull();
+		store.set("server:a", "hash-1");
+		expect(store.get("server:a")).toBe("hash-1");
+		expect(fake.localStorage.get("askmate-mcp-trust:server:a")).toBe("hash-1");
+		store.remove("server:a");
+		expect(store.get("server:a")).toBeNull();
+	});
+
+	test("HTTP replies carry lower-case header names", async () => {
+		const send = createHttpRequest((params) => Promise.resolve({ status: 200, headers: { "Content-Type": "application/json", "Mcp-Session-Id": "s" }, text: params.body ?? "" }));
+		const response = await send({ url: "https://example.test/mcp", method: "POST", headers: { Accept: "application/json" }, body: "{}" });
+
+		expect(response.headers).toEqual({ "content-type": "application/json", "mcp-session-id": "s" });
+		expect(response.status).toBe(200);
+		expect(response.text).toBe("{}");
+	});
+
+	test("the trust dialog names the exact command and the stored secrets it would pass on", () => {
+		const request: TrustRequest = {
+			transport: "stdio",
+			serverId: "files",
+			label: "Files",
+			reason: "first-use",
+			commandLine: "npx -y some-server --root /tmp",
+			command: "npx",
+			args: ["-y", "some-server"],
+			env: [{ name: "TOKEN", value: "", secret: true, secretId: "askmate-mcp-files-token" }, { name: "MODE", value: "read", secret: false, secretId: null }],
+			risks: ["It uses a stored secret that AskMate did not create for MCP."]
+		};
+		const { title, message } = describeTrustRequest(request);
+
+		expect(title).toBe("Trust the local server Files?");
+		expect(message).toContain("Command: npx -y some-server --root /tmp");
+		expect(message).toContain("TOKEN (stored secret askmate-mcp-files-token)");
+		expect(message).toContain("MODE = read");
+		expect(message).toContain("Warning: It uses a stored secret");
+
+		const http = describeTrustRequest({
+			transport: "http", serverId: "w", label: "Web", reason: "changed", url: "https://tools.example.com/mcp", host: "tools.example.com",
+			headerNames: ["X-Key"], hasBearerToken: true, bearerSecretId: "askmate-mcp-web-token", secretHeaders: [], risks: []
+		});
+		expect(http.message).toContain("changed since you last trusted it");
+		expect(http.message).toContain("https://tools.example.com/mcp");
+		expect(http.message).toContain("askmate-mcp-web-token");
+	});
+});
+
+describe("MCP in the plugin", () => {
+	test("trusting a server asks first, and the trust lands on this device only", async () => {
+		const { plugin, fake } = await loadPlugin({
+			mcp: {
+				enabled: true,
+				servers: [{ id: "web", label: "Web tools", enabled: true, approval: "always-ask", trustsAnnotations: false, transport: "http", url: "https://tools.example.com/mcp", headers: {}, bearerSecretId: null, trustedConfigHash: null }]
+			}
+		});
+		const service = plugin.mcpService;
+		expect(service?.status().map((server) => server.state.kind)).toEqual(["needs-trust"]);
+
+		const seen: string[] = [];
+		const timer = setInterval(() => {
+			for (const modal of [...Modal.opened]) {
+				seen.push(modal.contentEl.textContent ?? "");
+				modal.contentEl.querySelector<HTMLElement>("button.mod-cta")?.click();
+			}
+		}, 1);
+		const outcome = await service?.trust("web");
+		clearInterval(timer);
+
+		expect(outcome?.kind).toBe("trusted");
+		expect(seen.join(" ")).toContain("https://tools.example.com/mcp");
+		expect([...fake.localStorage.keys()].some((key) => key.startsWith("askmate-mcp-trust:"))).toBe(true);
+		expect(JSON.stringify(plugin.storedData)).not.toContain("askmate-mcp-trust");
+	});
+
+	test("with MCP off nothing is created and nothing can start", async () => {
+		const { plugin } = await loadPlugin({});
+		expect(plugin.mcpService).toBeNull();
+	});
+});
+
+describe("skills in the plugin", () => {
+	const SKILL = "---\nname: note-tidy\ndescription: Tidies a note by merging duplicate headings.\n---\n\nMerge duplicate headings and keep the order.\n";
+
+	test("a vault skill is listed, needs review, and approval is stored in settings", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		fake.vault.add("AskMate/Skills/note-tidy/SKILL.md", SKILL);
+		await plugin.skillService.scan();
+
+		const skill = plugin.skillService.get("vault:note-tidy");
+		expect(skill?.valid).toBe(true);
+		expect(skill && plugin.skillService.statusOf(skill)).toBe("needs-review");
+
+		await plugin.skillService.trust("vault:note-tidy", skill?.hash ?? "");
+
+		expect(plugin.settings.skills.trustedHashes["vault:note-tidy"]).toBe(skill?.hash ?? "");
+		expect((plugin.storedData as { skills: { trustedHashes: Record<string, string> } }).skills.trustedHashes["vault:note-tidy"]).toBe(skill?.hash ?? "");
+		expect(plugin.skillService.statusOf(skill ?? plugin.skillService.list()[0])).toBe("ready");
+	});
+
+	test("changing the skills folder in settings scans the new folder", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		fake.vault.add("My skills/tidy.md", SKILL);
+		plugin.settings.skills.folder = "My skills";
+		await plugin.saveSettings();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(plugin.skillService.list().map((skill) => skill.id)).toContain("vault:note-tidy");
+	});
+});
+
+/** Just enough editor for the evidence jump: lines, a selection and a scroll. */
+class JumpEditor extends FakeEditor {
+	selection: { from: Position; to: Position } | null = null;
+
+	lastLine(): number {
+		return this.value.split("\n").length - 1;
+	}
+
+	getLine(line: number): string {
+		return this.value.split("\n")[line] ?? "";
+	}
+
+	setSelection(from: Position, to: Position): void {
+		this.selection = { from, to };
+	}
+
+	scrollIntoView(): void {
+		return undefined;
+	}
+}
+
+describe("opening an evidence source", () => {
+	const SOURCE: EvidenceSource = { id: "S1", sourcePath: "Notes/Evidence.md", title: "Evidence", lineStart: 3, lineEnd: 4, excerpt: "x" } as unknown as EvidenceSource;
+
+	test("a tab restored at start-up is matched by its file, loaded, and shown without replacing the note being read", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		fake.vault.add("Notes/Evidence.md", "one\ntwo\nthree\nfour\nfive");
+		fake.vault.add("Notes/Reading.md", "reading");
+		const editor = new JumpEditor("one\ntwo\nthree\nfour\nfive");
+		const view = new MarkdownView(editor, fake.vault.getFileByPath("Notes/Evidence.md"));
+		const deferred = Object.assign(leafFor({ placeholder: true }, "markdown", "Notes/Evidence.md"), {
+			view: { placeholder: true } as unknown,
+			loadIfDeferred: () => {
+				deferred.view = view;
+				return Promise.resolve();
+			},
+			getViewState: () => ({ type: "markdown", state: { file: "Notes/Evidence.md", mode: "source" } })
+		});
+		fake.workspace.leaves.push(deferred);
+		const calls: string[] = [];
+		Object.assign(fake.workspace, {
+			revealLeaf: () => Promise.resolve(),
+			getLeaf: () => {
+				calls.push("getLeaf");
+				return {};
+			}
+		});
+
+		await plugin.openEvidenceSource(SOURCE);
+
+		expect(calls).toEqual([]);
+		expect(editor.selection?.from.line).toBe(2);
+		expect(editor.selection?.to.line).toBe(3);
+	});
+
+	test("a note that is not open is shown in a new tab, in editing mode, at the evidence line", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		const file = fake.vault.add("Notes/Evidence.md", "one\ntwo\nthree\nfour\nfive");
+		const opened: Array<{ path: string; state: unknown }> = [];
+		const kinds: unknown[] = [];
+		Object.assign(fake.workspace, {
+			revealLeaf: () => Promise.resolve(),
+			getLeaf: (kind: unknown) => {
+				kinds.push(kind);
+				return {
+					view: null,
+					openFile: (target: { path: string }, state: unknown) => {
+						opened.push({ path: target.path, state });
+						return Promise.resolve();
+					}
+				};
+			}
+		});
+
+		await plugin.openEvidenceSource(SOURCE);
+
+		expect(file.path).toBe("Notes/Evidence.md");
+		expect(kinds).toEqual(["tab"]);
+		expect(opened).toEqual([{ path: "Notes/Evidence.md", state: { state: { mode: "source" }, eState: { line: 2 } } }]);
+	});
+});
