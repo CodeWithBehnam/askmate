@@ -1,7 +1,8 @@
-import { Component, ItemView, Keymap, MarkdownRenderer, MarkdownView, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, MarkdownView, Menu, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import { getStatusBarOverlap } from "./statusBarOverlap";
-import { describeIncompleteReason, lastAnswerFromMessages, SAVED_INCOMPLETE_REASON, type LastAnswer } from "./answerActions";
+import { describeIncompleteReason, lastAnswerFromMessages, SAVED_INCOMPLETE_REASON } from "./answerActions";
+import type { InsertableReply } from "./components/insertPlan";
 import { copyAnswerText, insertAnswerAtRememberedCursor } from "./answerShell";
 import { ModelPickerModal } from "./ModelPickerModal";
 import {
@@ -15,17 +16,14 @@ import {
 	resolveProviderQuery,
 	type ModelChoice
 } from "./modelSwitch";
-import { TEXT_PROVIDER_IDS, TEXT_PROVIDER_LABELS } from "../../settings/constants";
+import { ASKMATE_ICON_ID, TEXT_PROVIDER_IDS, TEXT_PROVIDER_LABELS } from "../../settings/constants";
 import type { TextProviderId } from "../../shared/types";
 import {
-	ActiveRun,
 	ASKMATE_VIEW_TYPE,
 	AskRequest,
 	ChatImagePreview,
-	ChatMessage,
 	ChatRole,
 	ComposerLayout,
-	canRunContinue,
 	CONTEXT_BUDGET_OPTIONS,
 	createBuiltRetrySnapshot,
 	createDraftRetrySnapshot,
@@ -53,17 +51,29 @@ import {
 	REASONING_EFFORT_OPTIONS,
 	RequestIntentKind,
 	RequestPrivacyOptions,
-	RetryRequestSnapshot,
 	RunRequestOptions,
 	Workflow
 } from "../../shared/core";
+import type { DiagramRequestMetadata } from "../../shared/types";
 import { AskMatePromptInspectorModal, AskMateTextViewerModal, AskMateNoteHistoryModal, askMateConfirm, askMatePrompt } from "../modals/modals";
 import { AskMateThreadPickerModal } from "../modals/threadModals";
 import { conversationToMarkdown, hasExportableTurns, resolveExportTitle } from "../../output/conversationExport";
-import { createThread, createThreadId, fromSavedMessages, toSavedMessages, renameThreadValue, withThreadMessages, type SavedThread } from "../../threads/threadModel";
+import {
+	applyPathChangeToLiveMessages,
+	createThread,
+	createThreadId,
+	fromSavedMessages,
+	renameThreadValue,
+	settleThreadMessages,
+	withThreadMessages,
+	withThreadSkillIds,
+	type ChatMessageLike,
+	type SavedThread
+} from "../../threads/threadModel";
 import { classifyImagePreviewSource, describeDataImage, extractImageEmbedTargets, sanitizeModelMarkdown } from "./renderSafety";
 import {
 	buildConsoleCommands,
+	classifyConsoleAction,
 	formatConsoleHelp,
 	formatConsoleStatus,
 	getConsoleCompletions,
@@ -74,27 +84,163 @@ import {
 	type ConsoleCompletion,
 	type ConsoleMentions
 } from "./consoleCommands";
+import { createScratchHost, mountSvg, nextRenderId, sourceHash } from "../../diagrams";
+import { MAX_SKILLS_PER_REQUEST, type Skill, type SkillService, type SkillSuggestion } from "../../skills";
+import { NO_NOTE_SOURCE } from "../../context/ContextService";
+import {
+	checkApiKeyInput,
+	deriveSetupState,
+	getProviderCatalogEntry,
+	isReadyToSend,
+	mapProviderErrorToSetupCopy,
+	SETUP_ACTIONS,
+	type SetupAction,
+	type SetupErrorCopy,
+	type SetupStage,
+	type StarterChip
+} from "../../setup";
+import { createAnnouncer, type Announcer } from "./components/announcer";
+import { onboardingTipText } from "./components/onboardingTip";
+import { renderDiagramCard, type DiagramCardHandle, type DiagramPreviewHost, type DrawResult } from "./components/DiagramCard";
+import { presentRunError, type ErrorPresentation } from "./components/errorFix";
+import { parsePlainComposerCommand, resolveDraftRequest, type DraftResolution } from "./components/draftRequest";
+import {
+	buildFixQuestion,
+	canonicalDiagramText,
+	describeDiagramCard,
+	diagramCardStatus,
+	DEFAULT_DIAGRAM_QUESTION,
+	FALLBACK_INSERT_REASON,
+	firstLook,
+	insertMarkFor,
+	MERMAID_SKILL_ID,
+	nextLook,
+	proseAroundDiagram,
+	savedDiagramSummary,
+	withDiagramMark,
+	withDiagramMetadata
+} from "./components/diagramModel";
+import { canUndoDraft, mergeIntoDraft, type DraftUndo } from "./components/composerDraft";
+import { runGuardedAction, type GuardedTaskContext } from "./components/guardedAction";
+import { decideLinkClick } from "./components/linkClicks";
+import { describeOutputBadge, modeAfterRun } from "./components/outputMode";
+import {
+	allowNoNote,
+	runPluginRequest,
+	wave2,
+	type ConnectionTestLike,
+	type DiagramResultInfo,
+	type RunPhaseSignal,
+	type SidebarResult,
+
+	type ToolApprovalChoice,
+	type ToolApprovalRequest,
+	type ToolUiEvent
+} from "./components/pluginApi";
+import { planReplyActions, type ReplyActionSpec } from "./components/replyActions";
+import { planRetry, selectionSignature, type RetryTicket } from "./components/retry";
+import { deriveSetupCardModel, overlayTestResult, type SetupCardError } from "./components/setupCardModel";
+import { renderSetupCard, type SetupCardDraft, type SetupCardHandle } from "./components/SetupCard";
+import { buildSkillChips, renderSkillChips, skillChipsSignature } from "./components/SkillChips";
+import {
+	buildSkillSelection,
+	describeSkillBadge,
+	formatSkillsListing,
+	lookUpSkill,
+	skillStatusLabel,
+	wasSkillAutomatic
+} from "./components/skillSelection";
+import { buildStatusSegments, createStatusSegments, formatMcpStatus, type StatusSegmentsHandle } from "./components/statusSegments";
+import { DRAWING_DIAGRAM_TEXT, isRenderCurrent, planStreamRender, streamRenderDelay } from "./components/streamingDiagram";
+import { createToolCallCard, renderSavedToolCalls, type ToolCardHandle } from "./components/ToolCallCard";
+import { mergeToolEvent, summariseToolCalls } from "./components/toolModel";
+import { createRunController, type RunController, type RunRecord } from "./runController";
 
 let consoleViewCounter = 0;
 
 /** Short labels shown as [label] in the Console layout; the full label stays the accessible name. */
 const CONSOLE_ACTION_LABELS: Record<string, string> = {
 	"Show reply text": "text",
-	"Use reply": "reuse",
+	"Use reply as a new question": "reuse",
 	"Queue for review": "queue",
-	"New note": "note",
-	"Apply reply": "apply",
-	"Replace full note": "replace",
-	"Apply selected block": "apply-sel",
-	"Apply to heading": "heading",
+	"Save as new note": "note",
+	"Apply": "apply",
+	"Replace the whole note": "replace",
+	"Apply to the selected text": "apply-sel",
+	"Apply to a heading": "heading",
+	"Run again without skill": "no-skill",
+	"More actions": "more",
 	"Retry request": "retry",
 	"Edit": "edit",
 	"Copy": "copy",
-	"Insert at cursor": "cursor",
+	"Insert": "cursor",
 	"Show image prompt": "prompt",
 	"New image note": "note",
 	"Insert image": "insert"
 };
+
+/** Where the setup card keeps what the person is doing between redraws. */
+interface SetupFlowState {
+	flowOpen: boolean;
+	welcomeOpen: boolean;
+	provider: TextProviderId | null;
+	/** What was typed into the card, and the provider it was typed for. A draft is never carried to another provider. */
+	draft: SetupCardDraft;
+	draftProvider: TextProviderId | null;
+	test: { status: "ok" | "failed"; providerId: TextProviderId; model: string; copy?: SetupErrorCopy; at: number } | null;
+	testing: boolean;
+	localError: SetupCardError | null;
+}
+
+/** Everything one request needs, so Retry, Another look and Fix can start it again from the same description. */
+interface RunSpec {
+	question: string;
+	title: string;
+	options: RunRequestOptions;
+	builtRequest?: AskRequest;
+	displayText?: string;
+	/** Claims the caller holds itself (Retry's own) that must not count as busy. */
+	ignoreKeys?: readonly string[];
+	/** Skills named for this question only: chips, @skill:name, /skill name question, a diagram request. */
+	skillRefs?: readonly string[];
+	/** "Run again without skill". */
+	suppressAutoSkills?: boolean;
+	/** The look of a diagram request. */
+	diagram?: DiagramRequestMetadata;
+	/** Retry reuses the question that failed instead of adding it a second time. */
+	reuse?: { userTurn: ChatMessageLike; userElements: MessageElements | null; errorElements: MessageElements | null };
+	/** Called once the request is built and accepted, when the typed text can leave the composer. */
+	onSent?: (() => void) | undefined;
+}
+
+type ReplyHandler = (context: GuardedTaskContext) => void | Promise<void>;
+type ReplyActionOptions = MessageActionOptions & { variant?: "primary" | "more"; disabledReason?: string | null };
+
+/** How long a connection test run from this view outranks the plugin's own record of the last test. */
+const LOCAL_TEST_MAX_AGE_MS = 10 * 60 * 1000;
+
+/** What the usage guardrails throw when the person answers Cancel at the size warning. */
+const DECLINED_AT_WARNING = /cancelled by usage guardrails/i;
+
+/** Pictures drawn for diagram cards are kept by source; this many are enough for a long conversation. */
+const MAX_CACHED_DIAGRAMS = 24;
+
+function emptySetupDraft(): SetupCardDraft {
+	return { apiKey: "", baseUrl: "", model: "" };
+}
+
+/** A request made with no note open carries the "No note" source; until the shared type names it, it is read as a string. */
+function isNoNoteSource(source: string): boolean {
+	return source === NO_NOTE_SOURCE;
+}
+
+function assertNeverAction(action: never): never {
+	throw new Error(`Unhandled console action: ${JSON.stringify(action)}`);
+}
+
+function assertNeverSetupAction(kind: never): never {
+	throw new Error(`Unhandled setup action: ${String(kind)}`);
+}
 
 export class AskMateView extends ItemView {
 	private readonly plugin: AskMatePlugin;
@@ -106,14 +252,16 @@ export class AskMateView extends ItemView {
 	private imageButton: HTMLButtonElement | null = null;
 	private stopButton!: HTMLButtonElement;
 	private clearButton: HTMLButtonElement | null = null;
-	private activeRun: ActiveRun | null = null;
-	private nextRunId = 0;
+	/** Which request is running and which short claims are held; the view only wires it to buttons. */
+	private readonly runs: RunController = createRunController();
 	private isClosed = false;
-	private messages: ChatMessage[] = [];
+	private messages: ChatMessageLike[] = [];
+	/** Questions whose run is still going. They are left out of a saved snapshot, so a question never saves without its answer. */
+	private readonly pendingTurns = new Set<ChatMessageLike>();
 	/** Identity and title of the conversation shown in the sidebar; its messages live in `messages`. */
 	private threadMeta: SavedThread = this.createFreshThread();
 	/** Generated images are saved to the vault later, so the path is read from the result when a snapshot is taken. */
-	private readonly generatedImages = new WeakMap<ChatMessage, { savedImagePath: string | null }>();
+	private readonly generatedImages = new WeakMap<ChatMessageLike, { savedImagePath: string | null }>();
 	private shouldFollowMessages = true;
 	private readonly autoScrollThresholdPx = 48;
 	private rootEl: HTMLElement | null = null;
@@ -150,20 +298,52 @@ export class AskMateView extends ItemView {
 	private requestPreviewContextGeneration = 0;
 	private contextLabelGeneration = 0;
 	private onboardingTipsShown = false;
-	private readonly activeActionKeys = new Set<string>();
 	private consoleCommands: ConsoleCommand[] = [];
 	private consoleCompletionsEl: HTMLElement | null = null;
 	private consoleStatusEl: HTMLElement | null = null;
-	private consoleStatusSegmentsEl: HTMLElement | null = null;
-	private consoleModeButton: HTMLButtonElement | null = null;
-	private consoleModelButton: HTMLButtonElement | null = null;
-	private lastAnswer: LastAnswer | null = null;
+	private statusSegments: StatusSegmentsHandle | null = null;
+	private lastAnswer: InsertableReply | null = null;
 	private consoleStopButton: HTMLButtonElement | null = null;
 	private consoleCompletion: { from: number; to: number; items: ConsoleCompletion[]; index: number; navigated: boolean } | null = null;
 	/** Unique per view, so two open AskMate sidebars never share listbox or option ids. */
 	private readonly consoleIdPrefix = `askmate-console-${++consoleViewCounter}`;
 	private consoleHistory: string[] = [];
 	private consoleHistoryIndex = -1;
+	/** One status element for assistive technology; streamed text never goes there. */
+	private announcer: Announcer | null = null;
+	/** The Connect card lives in the transcript as its first entry, in every layout. */
+	private setupHostEl: HTMLElement | null = null;
+	private setupHandle: SetupCardHandle | null = null;
+	private readonly setup: SetupFlowState = {
+		flowOpen: false,
+		welcomeOpen: false,
+		provider: null,
+		draft: emptySetupDraft(),
+		draftProvider: null,
+		test: null,
+		testing: false,
+		localError: null
+	};
+	private hasOpenNote = false;
+	/** Skills chosen for the next question only. Conversation-wide skills live in `threadMeta.skillIds`. */
+	private onceSkillIds: string[] = [];
+	private skillChipsEl: HTMLElement | null = null;
+	private skillChipsSignature = "";
+	private skillChipsTimer = 0;
+	private skillPickerButton: HTMLButtonElement | null = null;
+	/** The console line already echoed for this submit, so a failure after an early echo does not echo it again. */
+	private echoedConsoleLine: string | null = null;
+	private draftUndo: DraftUndo | null = null;
+	private draftUndoEl: HTMLElement | null = null;
+	private outputBadgeEl: HTMLElement | null = null;
+	/** Previews of linked pictures are off until the person turns them on with /images. */
+	private imagePreviewsEnabled = false;
+	/** Drawn previews by diagram source, so scrolling back or re-showing a conversation never draws the same diagram twice. */
+	private readonly diagramPreviews = new Map<string, string>();
+	private readonly toolCards = new Map<string, ToolCardHandle>();
+	/** What streaming last rendered into each body, and the "Drawing the diagram..." note beside it. */
+	private readonly streamedText = new WeakMap<HTMLElement, string>();
+	private readonly drawingNotes = new WeakMap<HTMLElement, HTMLElement>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: AskMatePlugin) {
 		super(leaf);
@@ -179,17 +359,31 @@ export class AskMateView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "bot";
+		return ASKMATE_ICON_ID;
+	}
+
+	private get activeRun(): RunRecord | null {
+		return this.runs.getActiveRun();
 	}
 
 	async onOpen(): Promise<void> {
+		// One AskMate sidebar at a time: two would save over each other's conversation.
+		const existing = this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE).find((leaf) => leaf !== this.leaf);
+		if (existing) {
+			this.isClosed = true;
+			this.leaf.detach();
+			await this.app.workspace.revealLeaf(existing);
+			return;
+		}
+
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("askmate-sidebar");
 		this.rootEl = container;
 		this.applyComposerLayoutClass();
 		this.isClosed = false;
-		this.activeRun = null;
+		this.runs.shutdown();
+		this.pendingTurns.clear();
 		// Keep DOM and logical transcript aligned: reopening rebuilds the message pane from the saved thread, if any.
 		this.messages = [];
 		this.threadMeta = this.createFreshThread();
@@ -204,38 +398,60 @@ export class AskMateView extends ItemView {
 		this.workflowSectionEl = null;
 		this.workflowToggleButton = null;
 		this.requestPreviewEl = null;
+		this.skillChipsEl = null;
+		this.draftUndoEl = null;
+		this.outputBadgeEl = null;
+		this.setupHandle = null;
+		this.setupHostEl = null;
+		this.statusSegments = null;
+		this.skillChipsSignature = "";
+		this.onceSkillIds = [];
 		this.resetRequestOptionsFromSettings();
 		this.workflowsVisible = false;
 		this.onboardingTipsShown = false;
+		this.imagePreviewsEnabled = this.readImagePreviewSetting();
 
 		this.plugin.rememberActiveMarkdownContext();
 
+		// A quiet, labelled region: streamed text is not a live region, because a screen reader would read it word by word.
 		this.messagesEl = container.createDiv({ cls: "askmate-messages" });
-		this.messagesEl.setAttribute("role", "log");
-		this.messagesEl.setAttribute("aria-live", "polite");
-		this.messagesEl.setAttribute("aria-relevant", "additions text");
+		this.messagesEl.setAttribute("role", "region");
+		this.messagesEl.setAttribute("aria-label", "AskMate conversation");
+		this.messagesEl.tabIndex = 0;
 		this.statusEl = container.createDiv({ cls: "askmate-visually-hidden" });
 		this.statusEl.setAttribute("role", "status");
 		this.statusEl.setAttribute("aria-live", "polite");
+		this.statusEl.setAttribute("aria-atomic", "true");
+		this.announcer = createAnnouncer((text) => this.statusEl?.setText(text));
 		this.shouldFollowMessages = true;
 		this.registerDomEvent(this.messagesEl, "scroll", () => {
 			this.shouldFollowMessages = this.isScrolledNearBottom();
 		});
+		// Capture phase: this runs before Obsidian's own link handling, so a blocked link never reaches it.
 		this.registerDomEvent(this.messagesEl, "click", (event) => {
-			this.openInternalLink(event);
-		});
+			this.handleTranscriptLink(event);
+		}, { capture: true });
 		this.registerDomEvent(this.messagesEl, "auxclick", (event) => {
 			if (event.button === 1) {
-				this.openInternalLink(event);
+				this.handleTranscriptLink(event);
 			}
-		});
-		this.renderOnboardingTips();
+		}, { capture: true });
+		this.mountSetupHost();
+
+		this.register(this.plugin.threads.onDidClear(() => this.handleThreadsCleared()));
+		this.register(this.plugin.threads.onDidRewritePaths((change) => this.handlePathChange(applyPathChangeToLiveMessages(this.messages, change))));
+		const skills = wave2(this.plugin).skillService;
+		if (skills) {
+			this.register(skills.onChange(() => this.scheduleSkillChips()));
+		}
 
 		this.refreshConsoleCommands();
 		this.renderWorkflowGrid(container);
 		this.renderComposer(container);
 		this.refreshConsoleStatus();
 		this.restoreActiveThread();
+		this.refreshSetupCard();
+		this.refreshSkillChips();
 
 		const refreshContext = (): void => {
 			this.plugin.rememberActiveMarkdownContext();
@@ -286,26 +502,70 @@ export class AskMateView extends ItemView {
 		rootEl.setCssProps({ "--askmate-status-bar-clearance": `${overlap}px` });
 	}
 
-	/** MarkdownRenderer emits wikilinks as `a.internal-link` but leaves navigation to the host view. */
-	private openInternalLink(event: MouseEvent): void {
+	/**
+	 * Every link in the transcript is decided here, in the capture phase. MarkdownRenderer emits wikilinks as
+	 * `a.internal-link` but leaves navigation to the host view, and Obsidian opens `obsidian://` links without asking,
+	 * so a link that is not a web link or a note that exists is stopped and never reaches Obsidian.
+	 */
+	private handleTranscriptLink(event: MouseEvent): void {
 		// targetNode and instanceOf stay correct when the sidebar is moved to a popout window.
 		const target = event.targetNode;
 		if (!target || !target.instanceOf(Element)) {
 			return;
 		}
-		const link = target.closest("a.internal-link");
+		const link = target.closest("a");
 		if (!link || !this.messagesEl.contains(link)) {
 			return;
 		}
-		const linktext = link.getAttribute("data-href") ?? link.getAttribute("href");
-		if (!linktext) {
+		const internalClass = link.classList.contains("internal-link");
+		const decision = decideLinkClick({
+			rawHref: internalClass ? link.getAttribute("data-href") ?? link.getAttribute("href") : link.getAttribute("href"),
+			internalClass,
+			sourcePath: link.closest("[data-askmate-source-path]")?.getAttribute("data-askmate-source-path") ?? "",
+			newLeaf: Keymap.isModEvent(event) !== false,
+			resolve: (linkpath, sourcePath) => {
+				const file = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+				return file ? { path: file.path } : null;
+			}
+		});
+		if (decision.kind === "ignore") {
 			return;
 		}
-
 		event.preventDefault();
-		const sourcePath = link.closest("[data-askmate-source-path]")?.getAttribute("data-askmate-source-path") ?? "";
-		void this.app.workspace.openLinkText(linktext, sourcePath, Keymap.isModEvent(event))
-			.catch((error: unknown) => new Notice(this.plugin.getErrorMessage(error)));
+		event.stopPropagation();
+		if (decision.kind === "block") {
+			this.notify(decision.message);
+			return;
+		}
+		if (decision.decision.kind === "open") {
+			const open = decision.decision;
+			void this.app.workspace.openLinkText(open.linktext, open.sourcePath, Keymap.isModEvent(event))
+				.catch((error: unknown) => this.notify(this.plugin.getErrorMessage(error)));
+		} else if (decision.decision.kind === "notice") {
+			this.notify(decision.decision.message);
+		}
+	}
+
+	/** A Notice, mirrored into the status element because Notices are silent to screen readers. */
+	private notify(message: string): void {
+		new Notice(message);
+		this.announcer?.announce({ kind: "notice", message });
+	}
+
+	private readImagePreviewSetting(): boolean {
+		try {
+			return this.app.loadLocalStorage("askmate-image-previews") === "on";
+		} catch {
+			return false;
+		}
+	}
+
+	private writeImagePreviewSetting(enabled: boolean): void {
+		try {
+			this.app.saveLocalStorage("askmate-image-previews", enabled ? "on" : null);
+		} catch {
+			// The choice then lasts until the sidebar closes, which is the safe side of a failed write.
+		}
 	}
 
 	onResize(): void {
@@ -357,6 +617,8 @@ export class AskMateView extends ItemView {
 		}
 		void this.refreshReadiness();
 		this.refreshConsoleStatus();
+		this.refreshSetupCard();
+		this.refreshSkillChips();
 		this.scheduleRequestPreviewRefresh();
 	}
 
@@ -399,16 +661,20 @@ export class AskMateView extends ItemView {
 		if (this.onboardingTipsShown || this.rootEl?.querySelector(".askmate-onboarding-message")) {
 			return;
 		}
+		// The Connect card says what to do first, and an open conversation needs no tips; they wait for an empty chat.
+		if (this.setupHandle || this.messages.length > 0) {
+			return;
+		}
 
 		this.onboardingTipsShown = true;
 		const message = this.createMessageEl("system", "", false);
 		message.wrapper.addClass("askmate-onboarding-message");
 		message.body.empty();
 		const card = message.body.createDiv({ cls: "askmate-onboarding-card" });
-		card.createEl("h3", { text: "AskMate tips" });
-		card.createEl("p", {
-			text: "Configure a provider in AskMate settings, then ask about the captured note, generate an image, choose a workflow, or select a safe output mode before sending."
-		});
+		const title = card.createEl("h3");
+		setIcon(title.createSpan({ cls: "askmate-brand-mark", attr: { "aria-hidden": "true" } }), ASKMATE_ICON_ID);
+		title.appendText("AskMate tips");
+		card.createEl("p", { text: onboardingTipText(normalizeComposerLayout(this.plugin.settings.composerLayout)) });
 		const dismiss = card.createEl("button", { text: "Dismiss tips" });
 		dismiss.type = "button";
 		dismiss.addEventListener("click", () => {
@@ -416,7 +682,7 @@ export class AskMateView extends ItemView {
 				this.plugin.settings.onboardingTipsDismissedAt = new Date().toISOString();
 				await this.plugin.saveSettings();
 				message.wrapper.remove();
-			})().catch((error) => new Notice(this.plugin.getErrorMessage(error)));
+			})().catch((error) => this.notify(this.plugin.getErrorMessage(error)));
 		});
 	}
 
@@ -484,14 +750,22 @@ export class AskMateView extends ItemView {
 		this.composerEl = composer;
 		const header = composer.createDiv({ cls: "askmate-composer-header" });
 		const headerLeft = header.createDiv({ cls: "askmate-composer-header-left" });
+		setIcon(headerLeft.createSpan({ cls: "askmate-brand-mark", attr: { "aria-hidden": "true" } }), ASKMATE_ICON_ID);
 		const brand = headerLeft.createDiv({ cls: "askmate-composer-brand", text: "AskMate" });
 		this.readinessEl = brand;
+		this.readinessEl.addEventListener("click", () => this.openSetupFromReadiness());
+		this.readinessEl.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" || event.key === " ") {
+				event.preventDefault();
+				this.openSetupFromReadiness();
+			}
+		});
 		void this.refreshReadiness();
 		this.contextEl = this.createActionButton(headerLeft, "file-text", "Show request context", "askmate-context-button");
 		this.contextEl.addEventListener("click", () => {
 			void this.showContextNotice();
 		});
-		const historyButton = this.createActionButton(headerLeft, "history", "Show note AskMate history", "askmate-history-button");
+		const historyButton = this.createActionButton(headerLeft, "history", "Show note AskMate history", "askmate-context-button askmate-history-button");
 		historyButton.addEventListener("click", () => {
 			void this.showNoteHistory();
 		});
@@ -516,6 +790,11 @@ export class AskMateView extends ItemView {
 			attr: { id: `${this.consoleIdPrefix}-completions`, role: "listbox", "aria-label": "Command suggestions" }
 		});
 		this.consoleCompletionsEl.hidden = true;
+
+		this.skillChipsEl = composer.createDiv({ cls: "askmate-skill-chips" });
+		this.skillChipsEl.hidden = true;
+		this.draftUndoEl = composer.createDiv({ cls: "askmate-draft-undo" });
+		this.draftUndoEl.hidden = true;
 
 		const inputShell = composer.createDiv({ cls: "askmate-input-shell" });
 		inputShell.createSpan({ cls: "askmate-console-prompt", text: "›", attr: { "aria-hidden": "true" } });
@@ -546,6 +825,8 @@ export class AskMateView extends ItemView {
 			this.consoleHistoryIndex = -1;
 			this.updateConsoleCompletions();
 			this.scheduleRequestPreviewRefresh();
+			this.scheduleSkillChips();
+			this.hideDraftUndoIfChanged();
 		});
 		this.questionEl.addEventListener("blur", () => {
 			this.closeConsoleCompletions();
@@ -577,30 +858,15 @@ export class AskMateView extends ItemView {
 			this.stopActiveRun();
 		});
 
-		const clearButton = this.createActionButton(actions, "trash-2", "Clear chat", "askmate-clear-button");
+		// Clearing the chat starts a new conversation and keeps the old one in Saved conversations, so nothing is lost by a click.
+		const clearButton = this.createActionButton(actions, "eraser", "Clear chat (starts a new conversation)", "askmate-clear-button");
 		this.clearButton = clearButton;
 		clearButton.addEventListener("click", () => {
-			this.clearChat();
+			this.runUiTask(this.startNewThread());
 		});
 
 		this.renderOutputToggle(footer);
 		this.renderConsoleStatusBar(composer);
-	}
-
-	private clearChat(): void {
-		if (this.activeRun) {
-			new Notice("Stop the current request before clearing chat.");
-			return;
-		}
-
-		this.messages = [];
-		this.lastAnswer = null;
-		this.releaseAllMarkdownComponents();
-		this.messagesEl.empty();
-		this.shouldFollowMessages = true;
-		this.addMessage("system", "Chat cleared.");
-		this.queueThreadSave();
-		void this.plugin.threads.flush();
 	}
 
 	private renderRequestPreview(parent: HTMLElement): void {
@@ -788,7 +1054,16 @@ export class AskMateView extends ItemView {
 		}
 
 		const raw = this.questionEl?.value.trim() || "Preview request";
-		const { options, ...command } = this.resolveDraftRequest(raw);
+		const draft = this.resolveDraftRequest(raw);
+		if (draft.kind === "none") {
+			// A command, not a question: there is nothing to build, so say so instead of previewing the wrong thing.
+			this.lastRequestPreviewKey = null;
+			++this.requestPreviewRefreshId;
+			summary.setText(draft.hint);
+			summary.classList.remove("has-blocker");
+			return;
+		}
+		const { options, ...command } = draft;
 		const previewKey = this.getRequestPreviewKey(command.question, command.forceImage, options);
 		if (previewKey === this.lastRequestPreviewKey) {
 			return;
@@ -799,7 +1074,7 @@ export class AskMateView extends ItemView {
 		try {
 			const inspection = await this.plugin.inspectFinalPrompt(
 				command.question,
-				command.forceImage ? "AskMate Image" : "AskMate Answer",
+				command.title,
 				options
 			);
 			if (refreshId !== this.requestPreviewRefreshId || !this.requestPreviewEl) {
@@ -851,7 +1126,7 @@ export class AskMateView extends ItemView {
 		this.addIcon(this.workflowToggleButton, "sparkles", "askmate-segment-icon");
 		this.workflowToggleButton.addEventListener("click", () => {
 			if (this.activeRun) {
-				new Notice("Wait for the current AskMate request to finish, or stop it first.");
+				this.notify("Wait for the current AskMate request to finish, or stop it first.");
 				return;
 			}
 
@@ -896,6 +1171,10 @@ export class AskMateView extends ItemView {
 			this.outputButtons[option.mode] = button;
 		}
 
+		// Visible whenever the mode is not chat, so a note or apply mode is never a surprise.
+		this.outputBadgeEl = controls.createSpan({ cls: "askmate-output-badge" });
+		this.outputBadgeEl.hidden = true;
+		this.renderSkillPicker(controls);
 		this.renderReasoningSelector(controls);
 		const modelButton = this.createActionButton(controls, "cpu", "Switch model or provider", "askmate-workflow-toggle askmate-model-switch");
 		modelButton.addEventListener("click", () => {
@@ -906,7 +1185,7 @@ export class AskMateView extends ItemView {
 
 	private async selectOutputMode(mode: OutputMode): Promise<void> {
 		if (this.activeRun) {
-			new Notice("Wait for the current AskMate request to finish, or stop it first.");
+			this.notify("Wait for the current AskMate request to finish, or stop it first.");
 			this.refreshOutputToggle();
 			return;
 		}
@@ -923,11 +1202,32 @@ export class AskMateView extends ItemView {
 		this.plugin.refreshOpenAskMateViews();
 	}
 
+	/** A note or apply mode chosen in settings is spent by the request that uses it; the next question goes back to chat. */
+	private async spendOutputMode(mode: OutputMode): Promise<void> {
+		const next = modeAfterRun({ mode, fromSetting: true });
+		if (next === null || this.plugin.settings.outputMode === next) {
+			return;
+		}
+		this.plugin.settings.outputMode = next;
+		this.refreshOutputToggle();
+		await this.plugin.saveSettings();
+		this.plugin.refreshOpenAskMateViews();
+	}
+
 	private refreshOutputToggle(): void {
+		const current = normalizeOutputMode(this.plugin.settings.outputMode);
 		for (const [mode, button] of Object.entries(this.outputButtons) as Array<[OutputMode, HTMLButtonElement]>) {
-			const isActive = this.plugin.settings.outputMode === mode;
+			const isActive = current === mode;
 			button.classList.toggle("is-active", isActive);
 			button.setAttribute("aria-pressed", String(isActive));
+		}
+		const badge = describeOutputBadge(current);
+		if (this.outputBadgeEl) {
+			this.outputBadgeEl.hidden = badge === null;
+			this.outputBadgeEl.setText(badge?.label ?? "");
+			this.outputBadgeEl.setAttribute("title", badge?.title ?? "");
+			this.outputBadgeEl.classList.toggle("is-note", badge?.tone === "note");
+			this.outputBadgeEl.classList.toggle("is-apply", badge?.tone === "apply");
 		}
 		this.refreshConsoleStatus();
 	}
@@ -961,7 +1261,7 @@ export class AskMateView extends ItemView {
 
 	private async selectReasoningEffort(value: unknown): Promise<void> {
 		if (this.activeRun) {
-			new Notice("Wait for the current AskMate request to finish, or stop it first.");
+			this.notify("Wait for the current AskMate request to finish, or stop it first.");
 			this.refreshReasoningSelector();
 			return;
 		}
@@ -1053,116 +1353,105 @@ export class AskMateView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		if (!this.rootEl) {
+			// A duplicate sidebar that never opened has nothing to close.
+			return;
+		}
 		this.isClosed = true;
 		this.statusBarObserver?.disconnect();
 		this.statusBarObserver = null;
-		const wasRunning = this.activeRun !== null;
 		this.stopActiveRun(false);
-		this.activeRun = null;
-		this.activeActionKeys.clear();
+		this.runs.shutdown();
 		if (this.requestPreviewTimer !== null) {
 			window.clearTimeout(this.requestPreviewTimer);
 			this.requestPreviewTimer = null;
 		}
-		this.queueThreadSave(wasRunning);
-		void this.plugin.threads.flush();
+		window.clearTimeout(this.skillChipsTimer);
+		// A question that was still being answered is left out; the rest of the conversation is written before the view goes.
+		await this.persistThread();
+		this.pendingTurns.clear();
 		this.messages = [];
+		this.setup.draft = emptySetupDraft();
+		this.setup.draftProvider = null;
 		for (const timer of this.pendingMarkdownTimerIds) {
 			window.clearTimeout(timer);
 		}
 		this.pendingMarkdownTimerIds.clear();
 		this.releaseAllMarkdownComponents();
+		this.toolCards.clear();
 		this.containerEl.empty();
+		this.rootEl = null;
 	}
 
-	private ensureIdleForNewRequest(): boolean {
-		if (!this.activeRun && this.activeActionKeys.size === 0) {
+	private ensureIdleForNewRequest(ignoreKeys: readonly string[] = []): boolean {
+		const busy = this.runs.getBusyMessage(ignoreKeys);
+		if (busy === null) {
 			return true;
 		}
-
-		new Notice(this.activeRun
-			? "AskMate is already working. Stop the current request before starting another."
-			: "Wait for the current AskMate action to finish before starting another request.");
+		this.notify(busy);
 		return false;
 	}
 
-	private beginRun(intentKind: RequestIntentKind): ActiveRun | null {
-		if (!this.ensureIdleForNewRequest()) {
+	private beginRun(intentKind: RequestIntentKind, ignoreKeys: readonly string[] = []): RunRecord | null {
+		const begun = this.runs.begin(intentKind, { ignoreKeys });
+		if (!begun.ok) {
+			this.notify(begun.message);
 			return null;
 		}
-
-		const run: ActiveRun = {
-			id: ++this.nextRunId,
-			abortController: new AbortController(),
-			intentKind,
-			phase: "building",
-			startedAt: new Date().toISOString()
-		};
-
-		this.activeRun = run;
 		this.setLoading(true);
-		return run;
+		this.announcer?.announce({ kind: "started" });
+		return begun.run;
 	}
 
-	private isRunActive(run: ActiveRun): boolean {
-		return canRunContinue(this.activeRun, run, this.isClosed);
+	private isRunActive(run: RunRecord): boolean {
+		return this.runs.canContinue(run, this.isClosed);
 	}
 
 	private stopActiveRun(notify = true): void {
-		const run = this.activeRun;
-		if (!run) {
+		const outcome = this.runs.stop({ notify });
+		if (outcome.kind === "idle") {
 			return;
 		}
-		if (notify && run.phase === "post-processing") {
-			// The reply has arrived and its note write may be under way; unlocking now would report a stop that
-			// did not happen and let another write to the same note start.
-			new Notice("AskMate is saving the reply. Wait for it to finish.");
+		if (outcome.kind === "blocked") {
+			// The reply has arrived and its note write may be under way; unlocking now would report a stop that did not happen.
+			this.notify(outcome.message);
 			return;
 		}
-		run.abortController.abort();
-		this.activeRun = null;
+		// A tool waiting for a decision is answered "deny", so the run it belongs to can end.
+		this.cancelPendingApprovals();
 		this.setLoading(false);
 		if (notify && !this.isClosed) {
-			const message = run.phase === "generating"
-				? "AskMate stopped waiting for this request. The provider may still finish it in the background."
-				: "AskMate stopped this request before sending it.";
-			this.addMessage("system", message);
-			this.statusEl?.setText("AskMate request stopped locally.");
-			new Notice(message);
+			this.addMessage("system", outcome.message);
+			this.notify(outcome.message);
 		}
 	}
 
-	private setRunPhase(run: ActiveRun, phase: ActiveRun["phase"]): void {
-		if (this.activeRun?.id === run.id) {
-			run.phase = phase;
+	private setRunPhase(run: RunRecord, phase: RunRecord["phase"]): void {
+		if (this.runs.setPhase(run, phase)) {
 			this.refreshStopButton();
 		}
 	}
 
 	private refreshStopButton(): void {
-		const canStop = Boolean(this.activeRun) && this.activeRun?.phase !== "post-processing";
-		this.stopButton.hidden = !this.activeRun;
-		this.stopButton.disabled = !canStop;
-		this.stopButton.setAttribute("aria-hidden", String(!this.activeRun));
-		const label = this.activeRun?.phase === "post-processing" ? "Saving reply" : "Stop request";
-		this.stopButton.setAttribute("aria-label", label);
-		this.stopButton.setAttribute("title", label);
+		const control = this.runs.describeStopControl();
+		this.stopButton.hidden = !control.visible;
+		this.stopButton.disabled = !control.enabled;
+		this.stopButton.setAttribute("aria-hidden", String(!control.visible));
+		this.stopButton.setAttribute("aria-label", control.label);
+		this.stopButton.setAttribute("title", control.label);
 		if (this.consoleStopButton) {
-			this.consoleStopButton.hidden = !this.activeRun;
-			this.consoleStopButton.disabled = !canStop;
-			this.consoleStopButton.setText(this.activeRun?.phase === "post-processing" ? "saving" : "stop");
-			this.consoleStopButton.setAttribute("aria-label", `${label} (Esc)`);
-			this.consoleStopButton.setAttribute("title", `${label} (Esc)`);
+			this.consoleStopButton.hidden = !control.visible;
+			this.consoleStopButton.disabled = !control.enabled;
+			this.consoleStopButton.setText(control.consoleText);
+			this.consoleStopButton.setAttribute("aria-label", `${control.label} (Esc)`);
+			this.consoleStopButton.setAttribute("title", `${control.label} (Esc)`);
 		}
 	}
 
-	private finishRun(run: ActiveRun): void {
-		if (this.activeRun?.id !== run.id) {
-			return;
+	private finishRun(run: RunRecord): void {
+		if (this.runs.finish(run)) {
+			this.setLoading(false);
 		}
-
-		this.activeRun = null;
-		this.setLoading(false);
 	}
 
 	private async submitQuestion(): Promise<void> {
@@ -1185,21 +1474,32 @@ export class AskMateView extends ItemView {
 
 		const rawQuestion = this.questionEl.value.trim();
 		if (!rawQuestion) {
-			new Notice("Type a question first.");
+			this.notify("Type a question first.");
+			return;
+		}
+		// The setup, skills, diagram, tools and test commands work in every layout.
+		if (/^\/(?:setup|connect|welcome|skills?|diagram|mcp|test|images)(?:\s|$)/i.test(rawQuestion)) {
+			await this.submitConsoleInput();
 			return;
 		}
 		// "/image ..." goes to OpenAI Images whatever chat provider is selected, so check the matching readiness.
-		const command = this.parseComposerCommand(rawQuestion);
+		const command = parsePlainComposerCommand(rawQuestion);
 		const isReady = command.forceImage
-			? await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured())
-			: await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before sending.");
+			? await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image")
+			: await this.isProviderReadyForSubmit("Connect an AI provider before sending.");
 		if (!isReady) {
 			this.questionEl.focus();
 			return;
 		}
+		this.assertSkillsUsable(this.onceSkillIds);
 
-		this.questionEl.value = "";
-		await this.runRequest(command.question, command.forceImage ? "AskMate Image" : "AskMate Answer", this.getRequestDraftOptions(command.forceImage));
+		// The text stays in the box until the request has been built and confirmed, so a failure never loses it.
+		await this.runRequest({
+			question: command.question,
+			title: command.forceImage ? "AskMate Image" : "AskMate Answer",
+			options: this.getRequestDraftOptions(command.forceImage),
+			onSent: () => this.clearComposerIf(rawQuestion)
+		});
 	}
 
 	private async submitImageQuestion(): Promise<void> {
@@ -1207,88 +1507,82 @@ export class AskMateView extends ItemView {
 			return;
 		}
 		// Image generation always uses OpenAI Images, whichever chat provider is selected.
-		if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured()))) {
+		if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image"))) {
 			return;
 		}
 
 		// Match Enter: "/image a red fox" sends "a red fox", as the request preview shows.
 		const rawQuestion = this.questionEl.value.trim();
-		const question = rawQuestion ? this.parseComposerCommand(rawQuestion).question : DEFAULT_IMAGE_PROMPT;
-		this.questionEl.value = "";
-		await this.runRequest(question, "AskMate Image", this.getRequestDraftOptions(true));
+		const question = rawQuestion ? parsePlainComposerCommand(rawQuestion).question : DEFAULT_IMAGE_PROMPT;
+		await this.runRequest({
+			question,
+			title: "AskMate Image",
+			options: this.getRequestDraftOptions(true),
+			onSent: () => this.clearComposerIf(rawQuestion)
+		});
+	}
+
+	/** Empties the composer once the text has been sent, unless the person has typed something else in the meantime. */
+	private clearComposerIf(sent: string): void {
+		if (sent && this.questionEl && this.questionEl.value.trim() === sent) {
+			this.questionEl.value = "";
+			this.scheduleRequestPreviewRefresh();
+			this.scheduleSkillChips();
+		}
 	}
 
 	/**
 	 * Holds a claim while the provider check awaits, so a second submit or a workflow click in that gap gets the
-	 * usual "busy" notice instead of racing for the run and clearing the composer.
+	 * usual "busy" notice instead of racing for the run and clearing the composer. When the provider is not set up, the
+	 * Connect card opens and the typed text stays where it is.
 	 */
 	private async isProviderReadyForSubmit(
 		notConfiguredMessage: string,
-		isConfigured: () => Promise<boolean> = () => this.plugin.isSelectedProviderConfigured()
+		isConfigured: () => Promise<boolean> = () => this.plugin.isSelectedProviderConfigured(),
+		kind: "chat" | "image" = "chat"
 	): Promise<boolean> {
-		const claim = "submit";
-		this.activeActionKeys.add(claim);
+		const claim = this.runs.claim("submit");
+		if (!claim.ok) {
+			this.notify(claim.message);
+			return false;
+		}
 		try {
 			if (await isConfigured()) {
 				return true;
 			}
 		} finally {
-			this.activeActionKeys.delete(claim);
+			claim.release();
 		}
 
 		await this.refreshReadiness();
-		new Notice(notConfiguredMessage);
+		if (kind === "chat") {
+			this.openSetupFlow({ message: notConfiguredMessage });
+		} else {
+			this.notify(notConfiguredMessage);
+			this.openSettings();
+		}
 		return false;
 	}
 
 	private runUiTask(task: Promise<void>): void {
 		void task.catch((error: unknown) => {
-			new Notice(this.plugin.getErrorMessage(error));
+			this.notify(this.plugin.getErrorMessage(error));
 		});
 	}
 
 	/**
-	 * Question and options the composer would send for `raw`. In console layout this follows the same parsing as
-	 * sending (`parseConsoleInput` plus @mentions); other inputs, and anything that fails to parse, keep the plain reading.
+	 * What the composer would send for `raw`. In console layout this follows the same parsing as sending (commands and
+	 * @mentions); other inputs keep the plain reading. A line that is a command and not a question has nothing to build.
 	 */
-	private resolveDraftRequest(raw: string): { question: string; forceImage: boolean; options: RunRequestOptions } {
-		if (this.isConsoleLayout()) {
-			try {
-				const action = parseConsoleInput(raw, this.consoleCommands);
-				if (action.kind === "ask") {
-					const draft = this.getRequestDraftOptions(false);
-					const withMode = action.outputMode ? { ...draft, outputMode: action.outputMode } : draft;
-					const options = this.applyConsoleMentions(action.literal ? { ...withMode, intentKind: "freeform_text" } : withMode, action.mentions);
-					return { question: action.question, forceImage: false, options };
-				}
-				if (action.kind === "image") {
-					return { question: action.prompt, forceImage: true, options: this.applyConsoleMentions(this.getRequestDraftOptions(true), action.mentions) };
-				}
-				if (action.kind === "inspect") {
-					return { question: action.question || "Preview request", forceImage: false, options: this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions) };
-				}
-			} catch {
-				// A bad mention is reported when the user sends; the preview just falls back to the plain reading.
-			}
-		}
-		const command = this.parseComposerCommand(raw);
-		return { ...command, options: this.getRequestDraftOptions(command.forceImage) };
-	}
-
-	private parseComposerCommand(value: string): { question: string; forceImage: boolean } {
-		const imageMatch = value.match(/^\/(?:image|img)\b\s*/i);
-
-		if (imageMatch) {
-			return {
-				question: value.slice(imageMatch[0].length).trim() || DEFAULT_IMAGE_PROMPT,
-				forceImage: true
-			};
-		}
-
-		return {
-			question: value,
-			forceImage: false
-		};
+	private resolveDraftRequest(raw: string): DraftResolution {
+		return resolveDraftRequest(raw, {
+			isConsole: this.isConsoleLayout(),
+			commands: this.consoleCommands,
+			baseOptions: (forceImage) => this.getRequestDraftOptions(forceImage),
+			applyMentions: (options, mentions) => this.applyConsoleMentions(options, mentions),
+			findWorkflow: (id) => this.plugin.getAllWorkflows().find((workflow) => workflow.id === id),
+			workflowPrompt: (workflow) => this.plugin.getWorkflowPrompt(workflow)
+		});
 	}
 
 	private getFolderContextOptions(): FolderContextOptions {
@@ -1300,7 +1594,7 @@ export class AskMateView extends ItemView {
 		};
 	}
 
-	private getThreadMessagesForNextRequest(): ChatMessage[] {
+	private getThreadMessagesForNextRequest(): ChatMessageLike[] {
 		if (!this.plugin.settings.threadedChatEnabled) {
 			return [];
 		}
@@ -1316,27 +1610,107 @@ export class AskMateView extends ItemView {
 		}
 
 		if (this.plugin.getSelectedProviderModelRef().capability !== "text") {
-			new Notice(IMAGE_WORKFLOW_MESSAGE);
+			this.notify(IMAGE_WORKFLOW_MESSAGE);
 			return;
 		}
-		if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before running a workflow."))) {
+		if (!(await this.isProviderReadyForSubmit("Connect an AI provider before running a workflow."))) {
 			return;
 		}
 
-		await this.runRequest(this.plugin.getWorkflowPrompt(workflow), workflow.name, { workflow });
+		await this.runRequest({ question: this.plugin.getWorkflowPrompt(workflow), title: workflow.name, options: { workflow } });
 	}
 
-	private async runRequest(
-		question: string,
-		title: string,
-		options: RunRequestOptions = {},
-		builtRequest?: AskRequest,
-		displayText?: string
-	): Promise<void> {
+	/** Draws a Mermaid diagram of the note (or of what the person describes). */
+	private async runDiagram(prompt: string, options: { options?: RunRequestOptions; displayText?: string; skillRefs?: readonly string[]; onSent?: () => void } = {}): Promise<void> {
+		if (!this.ensureIdleForNewRequest()) {
+			return;
+		}
+		if (!this.plugin.settings.diagrams.enabled) {
+			throw new Error("Diagrams are turned off. Turn them on in AskMate settings, under Skills and tools.");
+		}
+		if (this.plugin.getSelectedProviderModelRef().capability !== "text") {
+			throw new Error("Diagrams need a text model. Choose a text model, or use /image for a picture.");
+		}
+		if (!(await this.isProviderReadyForSubmit("Connect an AI provider before drawing a diagram."))) {
+			return;
+		}
+		const refs = [MERMAID_SKILL_ID, ...(options.skillRefs ?? [])];
+		this.assertSkillsUsable(refs);
+		await this.runRequest({
+			question: prompt || DEFAULT_DIAGRAM_QUESTION,
+			title: "AskMate Diagram",
+			options: { ...(options.options ?? this.getRequestDraftOptions(false)), intentKind: "diagram" },
+			skillRefs: refs,
+			diagram: firstLook(this.plugin.settings.diagrams),
+			...(options.displayText ? { displayText: options.displayText } : {}),
+			...(options.onSent ? { onSent: options.onSent } : {})
+		});
+	}
+
+	private currentNotePath(): string {
+		return this.plugin.getLastOpenMarkdownView()?.file?.path ?? this.app.workspace.getActiveFile()?.path ?? "";
+	}
+
+	/** What Retry compares against what the failed request captured. */
+	private currentRetrySignature(): string {
+		const ref = this.plugin.getChatProviderModelRef();
+		return selectionSignature({
+			providerId: ref.providerId,
+			model: ref.model,
+			effort: this.plugin.getSelectedReasoningEffort(),
+			notePath: this.currentNotePath()
+		});
+	}
+
+	private async retryRun(spec: RunSpec, ticket: RetryTicket, reuse: NonNullable<RunSpec["reuse"]>, ignoreKeys: readonly string[]): Promise<void> {
+		const plan = planRetry(ticket, this.currentRetrySignature(), this.runs);
+		await this.runRequest({
+			...spec,
+			// A rebuilt request takes the conversation as it is now, which no longer holds the question that failed.
+			options: plan.mode === "rebuild" ? { ...spec.options, threadMessages: undefined } : spec.options,
+			builtRequest: plan.mode === "reuse" ? plan.request : undefined,
+			ignoreKeys,
+			reuse,
+			onSent: undefined
+		});
+	}
+
+	private async buildRunRequest(spec: RunSpec, intentKind: RequestIntentKind, title: string, threadMessages: ChatMessageLike[]): Promise<AskRequest> {
+		const options = spec.options;
+		const built = await this.plugin.buildRequest(spec.question, title, allowNoNote({
+			...options,
+			intentKind,
+			outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
+			privacy: options.privacy ?? this.privacyOptions,
+			contextBudgetMode: options.contextBudgetMode ?? this.contextBudgetMode,
+			additionalContextPaths: options.additionalContextPaths ?? this.additionalContextPaths,
+			folderContext: options.folderContext ?? this.getFolderContextOptions(),
+			threadMessages,
+			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
+		}));
+		return intentKind === "diagram"
+			? withDiagramMetadata(built, spec.diagram ?? built.metadata.diagram ?? firstLook(this.plugin.settings.diagrams))
+			: built;
+	}
+
+	/** Tools are offered on ordinary chat questions when a tool server is ready; never for diagrams, images, notes or applied answers. */
+	private shouldUseTools(request: AskRequest): boolean {
+		const mcp = wave2(this.plugin).mcpService;
+		if (!mcp || request.metadata.outputMode !== "chat" || request.metadata.modelCapability !== "text") {
+			return false;
+		}
+		if (request.metadata.intentKind === "diagram" || request.metadata.forceImage || request.metadata.autoImage) {
+			return false;
+		}
+		return mcp.status().some((server) => server.state.kind === "ready" || server.state.kind === "idle");
+	}
+
+	private async runRequest(spec: RunSpec): Promise<void> {
+		const { question, options } = spec;
 		const intentKind = this.plugin.classifyRequestIntent(question, options);
 		const willGenerateImage = intentKind === "explicit_image" || intentKind === "auto_image" || this.plugin.getSelectedProviderModelRef().capability === "image";
 		const threadMessages = options.threadMessages ?? this.getThreadMessagesForNextRequest();
-		const run = this.beginRun(intentKind);
+		const run = this.beginRun(intentKind, spec.ignoreKeys);
 
 		if (!run) {
 			return;
@@ -1344,15 +1718,40 @@ export class AskMateView extends ItemView {
 
 		void this.updateContextLabel();
 		this.shouldFollowMessages = true;
-		const requestTitle = title === "AskMate Answer" && willGenerateImage ? "AskMate Image" : title;
-		const isUserPrompt = requestTitle === "AskMate Answer" || requestTitle === "AskMate Image";
+		const requestTitle = spec.title === "AskMate Answer" && willGenerateImage ? "AskMate Image" : spec.title;
+		const isUserPrompt = requestTitle === "AskMate Answer" || requestTitle === "AskMate Image" || requestTitle === "AskMate Diagram";
 		// Thread history keeps the clean question; the console shows (and Edit restores) the line as typed.
 		const historyText = isUserPrompt ? question : requestTitle;
-		const userTurn = this.addMessage("user", displayText ?? historyText, displayText ?? (isUserPrompt ? question : undefined), historyText);
+		let userTurn: ChatMessageLike;
+		let userElements: MessageElements | null;
+		if (spec.reuse) {
+			// Retry keeps the question that is already on screen and replaces the error under it.
+			userTurn = spec.reuse.userTurn;
+			userElements = spec.reuse.userElements;
+			const stale = spec.reuse.errorElements?.wrapper;
+			if (stale) {
+				const hadFocus = stale.contains(stale.doc.activeElement);
+				stale.remove();
+				if (hadFocus) {
+					// The Retry button that had the focus is gone with the error it belonged to.
+					this.questionEl.focus();
+				}
+			}
+			if (!this.messages.includes(userTurn)) {
+				this.messages.push(userTurn);
+			}
+		} else {
+			const added = this.addMessageWithElements("user", spec.displayText ?? historyText, spec.displayText ?? (isUserPrompt ? question : undefined), historyText);
+			userTurn = added.chat;
+			userElements = added.elements;
+		}
+		this.pendingTurns.add(userTurn);
 		let answered = false;
 		let assistantMessage: MessageElements | null = null;
 		let responseText = "";
-		let retrySnapshot: RetryRequestSnapshot = createDraftRetrySnapshot(question, requestTitle, {
+		let request: AskRequest | null = null;
+		let toolEvents: ToolUiEvent[] = [];
+		const draft = createDraftRetrySnapshot(question, requestTitle, {
 			...options,
 			outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
 			privacy: { ...(options.privacy ?? this.privacyOptions) },
@@ -1362,20 +1761,11 @@ export class AskMateView extends ItemView {
 			threadMessages: threadMessages.map((message) => ({ ...message })),
 			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
 		});
+		let ticket: RetryTicket = { draft, built: null };
 
 		try {
-			const request = builtRequest ?? await this.plugin.buildRequest(question, requestTitle, {
-				...options,
-				intentKind,
-				outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
-				privacy: options.privacy ?? this.privacyOptions,
-				contextBudgetMode: options.contextBudgetMode ?? this.contextBudgetMode,
-				additionalContextPaths: options.additionalContextPaths ?? this.additionalContextPaths,
-				folderContext: options.folderContext ?? this.getFolderContextOptions(),
-				threadMessages,
-				includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
-			});
-			retrySnapshot = createBuiltRetrySnapshot(request);
+			request = spec.builtRequest ?? await this.buildRunRequest(spec, intentKind, requestTitle, threadMessages);
+			ticket = { draft, built: createBuiltRetrySnapshot(request) };
 
 			if (!this.isRunActive(run)) {
 				return;
@@ -1389,34 +1779,72 @@ export class AskMateView extends ItemView {
 			}
 
 			this.setRunPhase(run, "generating");
+			// The question has been built and accepted: now it leaves the composer, and a note or apply mode is spent.
+			spec.onSent?.();
+			// A mode typed in the command (/note followed by a question) is for that question alone and leaves the setting as it is.
+			if ((options.outputMode ?? this.plugin.settings.outputMode) === this.plugin.settings.outputMode) {
+				void this.spendOutputMode(request.metadata.outputMode).catch((error: unknown) => this.notify(this.plugin.getErrorMessage(error)));
+			}
 			const shouldGenerateImage = request.metadata.forceImage
 				|| request.metadata.autoImage
 				|| request.metadata.modelCapability === "image";
+			const isDiagramRun = request.metadata.intentKind === "diagram";
 			const sourcePath = request.context.file?.path ?? "";
 			if (sourcePath) {
 				userTurn.sourcePath = sourcePath;
 			}
-			if (request.metadata.privacy.includeImageReferences && this.shouldShowContextImagePreviews(question)) {
+			if (this.imagePreviewsEnabled && request.metadata.privacy.includeImageReferences && this.shouldShowContextImagePreviews(question)) {
 				this.renderContextImagePreviews(request);
 			}
-			assistantMessage = this.createMessageEl(
+			const message = this.createMessageEl(
 				"assistant",
 				shouldGenerateImage ? "Improving image prompt..." : "",
 				!shouldGenerateImage
 			);
-			const activeAssistantMessage = assistantMessage;
-			const result = await this.plugin.runOpenAIRequest(request, {
+			assistantMessage = message;
+			if (isDiagramRun) {
+				this.showDrawingNote(message.body, DRAWING_DIAGRAM_TEXT);
+			}
+			// Chips and the picker name skills for this question only, so the question keeps them: Retry, Another look and
+			// Fix are the same question, and must run with the skills the person chose for it.
+			const explicitRefs = Array.from(new Set([...(spec.skillRefs ?? []), ...this.onceSkillIds]));
+			spec.skillRefs = explicitRefs;
+			const selection = buildSkillSelection({
+				explicit: explicitRefs.map((ref) => this.skillIdFor(ref)),
+				sticky: this.threadMeta.skillIds ?? [],
+				autoEnabled: spec.suppressAutoSkills !== true
+			});
+			// The skills picked for one question are used up by it.
+			if (this.onceSkillIds.length > 0) {
+				this.onceSkillIds = [];
+				this.refreshSkillChips();
+			}
+			const result: SidebarResult = await runPluginRequest(this.plugin, request, {
 				onTextDelta: (delta) => {
 					if (!this.isRunActive(run)) {
 						return;
 					}
 
 					responseText += delta;
-					this.renderMarkdownSoon(activeAssistantMessage.body, responseText, sourcePath);
-					this.maybeScrollMessagesToBottom();
+					// A diagram reply is replaced by its card, so its half-written source is never drawn.
+					if (!isDiagramRun) {
+						this.renderMarkdownSoon(message.body, responseText, sourcePath);
+						this.maybeScrollMessagesToBottom();
+					}
 				},
 				abortSignal: run.abortController.signal,
-				forceImage: shouldGenerateImage
+				forceImage: shouldGenerateImage,
+				skillSelection: selection,
+				...(this.shouldUseTools(request) ? { toolsEnabled: true } : {}),
+				onToolEvent: (event) => {
+					toolEvents = mergeToolEvent(toolEvents, event);
+					if (this.isRunActive(run)) {
+						this.upsertToolCard(message, event);
+						this.maybeScrollMessagesToBottom();
+					}
+				},
+				confirmToolCall: (card) => this.confirmToolCall(run, message, card),
+				onPhase: (phase) => this.handleRunPhase(run, message, phase)
 			});
 
 			if (!this.isRunActive(run)) {
@@ -1425,29 +1853,61 @@ export class AskMateView extends ItemView {
 			this.setRunPhase(run, "post-processing");
 
 			if (result.kind === "text") {
-				const finalText = result.text.trim() || responseText.trim();
-				if (!finalText) {
+				const finalRaw = result.text.trim() || responseText.trim();
+				if (!finalRaw) {
 					// An empty reply must not be saved to history or written into the note as if it were an answer.
 					throw new Error(`${request.metadata.providerName} returned no text. Try again or choose another model.`);
 				}
-				responseText = finalText;
+				const diagram = result.diagram ?? null;
+				// A diagram reply is kept as its words plus the diagram source, so Copy, Insert and a saved copy all hold the diagram.
+				const savedText = diagram ? canonicalDiagramText(finalRaw, diagram) : finalRaw;
+				responseText = savedText;
+				// The note may have been renamed while the request ran, so the path is read when the reply lands.
+				const completedSourcePath = userTurn.sourcePath ?? sourcePath;
 				if (!this.isClosed) {
-					this.renderMarkdownNow(activeAssistantMessage.body, responseText, sourcePath);
-					if (result.incompleteReason) {
-						this.renderIncompleteWarning(activeAssistantMessage, result.incompleteReason);
+					this.showDrawingNote(message.body, null);
+					this.renderMarkdownNow(message.body, diagram ? proseAroundDiagram(finalRaw) : savedText, completedSourcePath);
+					for (const call of result.toolCalls ?? []) {
+						toolEvents = mergeToolEvent(toolEvents, call);
+						this.upsertToolCard(message, call);
 					}
-					this.lastAnswer = { text: responseText, incompleteReason: result.incompleteReason ?? null };
-					this.renderAssistantMessageActions(activeAssistantMessage.actions, activeAssistantMessage.evidence, request, () => responseText, result.model, this.lastAnswer);
+					if (result.incompleteReason) {
+						this.renderIncompleteWarning(message, result.incompleteReason);
+					}
+					this.lastAnswer = {
+						text: responseText,
+						incompleteReason: result.incompleteReason ?? null,
+						...(diagram ? { diagram: insertMarkFor(diagram.status) } : {})
+					};
+					this.renderAssistantMessageActions(message, {
+						request,
+						getText: () => responseText,
+						model: result.model,
+						answer: this.lastAnswer,
+						spec,
+						skillsUsed: result.skillsUsed ?? [],
+						diagram
+					});
 					this.messages.push({
 						role: "assistant",
 						text: responseText,
 						createdAt: new Date().toISOString(),
 						model: result.model,
-						...(sourcePath ? { sourcePath } : {}),
-						...(result.incompleteReason ? { incomplete: true } : {})
+						...(completedSourcePath ? { sourcePath: completedSourcePath } : {}),
+						...(result.incompleteReason ? { incomplete: true } : {}),
+						...(toolEvents.length > 0 ? { tools: summariseToolCalls(toolEvents) } : {}),
+						...(diagram ? { diagram: savedDiagramSummary(diagram) } : {})
 					});
+					this.pendingTurns.delete(userTurn);
 					answered = true;
-					this.queueThreadSave();
+					this.announcer?.announce({
+						kind: "completed",
+						text: finalRaw,
+						incompleteReason: result.incompleteReason ?? null,
+						diagram: diagram !== null,
+						toolCalls: toolEvents.length
+					});
+					await this.persistThread();
 				}
 				await this.plugin.recordNoteHistoryTurn(request, responseText, result.model);
 				if (!this.isRunActive(run)) {
@@ -1455,7 +1915,13 @@ export class AskMateView extends ItemView {
 				}
 
 				try {
-					if (request.metadata.outputMode === "note") {
+					const writes = request.metadata.outputMode === "note" || request.metadata.outputMode === "apply";
+					if (writes && diagram?.status === "fallback") {
+						// The card says a diagram that did not draw cannot be saved; a Note or Apply run must say the same and write nothing.
+						const unsaved = "The diagram did not draw, so it was not written to a note. Use Fix on the diagram to ask for a corrected one.";
+						this.addMessage("system", unsaved);
+						this.notify(unsaved);
+					} else if (request.metadata.outputMode === "note") {
 						const file = await this.plugin.createResultNote(request, responseText, { model: result.model });
 						this.notifySideEffect(`Created note: ${file.path}`, `AskMate created ${file.path}`);
 					} else if (request.metadata.outputMode === "apply") {
@@ -1463,30 +1929,33 @@ export class AskMateView extends ItemView {
 						this.notifySideEffect(outcome.message, outcome.message);
 					}
 				} catch (error) {
-					if (this.activeRun?.id === run.id && !this.isClosed) {
-						const message = this.plugin.getErrorMessage(error);
-						this.addMessage("system", `Generated reply preserved. Output action failed: ${message}`);
-						new Notice(message);
+					if (this.runs.getActiveRun()?.id === run.id && !this.isClosed) {
+						const failure = this.plugin.getErrorMessage(error);
+						this.addMessage("system", `Generated reply preserved. Output action failed: ${failure}`);
+						this.notify(failure);
 					}
 				}
 				return;
 			}
 
 			if (!this.isClosed) {
-				this.renderGeneratedImage(activeAssistantMessage.body, result);
-				this.renderAssistantImageActions(activeAssistantMessage.actions, request, () => result);
-				const imageTurn: ChatMessage = {
+				this.renderGeneratedImage(message.body, result);
+				this.renderAssistantImageActions(message.actions, request, () => result);
+				const imageSourcePath = userTurn.sourcePath ?? sourcePath;
+				const imageTurn: ChatMessageLike = {
 					role: "assistant",
 					text: `Generated image with ${result.model}.`,
 					createdAt: new Date().toISOString(),
 					model: result.model,
 					image: true,
-					...(sourcePath ? { sourcePath } : {})
+					...(imageSourcePath ? { sourcePath: imageSourcePath } : {})
 				};
 				this.messages.push(imageTurn);
 				this.generatedImages.set(imageTurn, result.image);
+				this.pendingTurns.delete(userTurn);
 				answered = true;
-				this.queueThreadSave();
+				this.announcer?.announce({ kind: "completed", image: true });
+				await this.persistThread();
 			}
 			await this.plugin.recordNoteHistoryTurn(request, `Generated image. Prompt: ${result.image.prompt}`, result.model);
 			if (!this.isRunActive(run)) {
@@ -1500,41 +1969,59 @@ export class AskMateView extends ItemView {
 						`Created note: ${noteFile.path} and image: ${imageFile.path}`,
 						`AskMate created ${noteFile.path}`
 					);
+					// The image was saved to the vault now, so the saved copy of the reply learns its path.
+					this.queueThreadSave();
 				} else if (request.metadata.outputMode === "apply") {
 					const outcome = await this.plugin.applyImageToContext(request, result);
 					this.notifySideEffect(outcome.message, outcome.message);
+					this.queueThreadSave();
 				}
 			} catch (error) {
-				if (this.activeRun?.id === run.id && !this.isClosed) {
-					const message = this.plugin.getErrorMessage(error);
-					this.addMessage("system", `Generated image preserved. Output action failed: ${message}`);
-					new Notice(message);
+				if (this.runs.getActiveRun()?.id === run.id && !this.isClosed) {
+					const failure = this.plugin.getErrorMessage(error);
+					this.addMessage("system", `Generated image preserved. Output action failed: ${failure}`);
+					this.notify(failure);
 				}
 			}
 		} catch (error) {
-			if (this.isClosed || this.activeRun?.id !== run.id || run.abortController.signal.aborted) {
+			if (this.isClosed || this.runs.getActiveRun()?.id !== run.id || run.abortController.signal.aborted) {
 				return;
 			}
 
-			const message = isAbortError(error) ? "AskMate request stopped." : this.plugin.getErrorMessage(error);
+			const aborted = isAbortError(error);
+			const plain = aborted ? "AskMate request stopped." : this.plugin.getErrorMessage(error);
+			// Choosing Cancel at the size warning is the person's decision, not a failure.
+			const declined = !aborted && DECLINED_AT_WARNING.test(plain);
+			const presented = aborted
+				? { message: plain, detail: null, fix: null, mapped: false }
+				: declined
+					? { message: "Not sent. You chose not to continue after the size warning. Your text is still in the box.", detail: null, fix: null, mapped: false }
+					: presentRunError(error, plain, request ? "provider" : "build", this.errorContext(request));
 			if (!assistantMessage) {
 				assistantMessage = this.createMessageEl("assistant", "", false);
 			}
-			this.cancelPendingMarkdown(assistantMessage.body);
-			assistantMessage.body.setText(message);
-			if (!isAbortError(error)) {
-				this.createMessageAction(assistantMessage.actions, "rotate-ccw", "Retry request", () => {
-					if (retrySnapshot.kind === "built") {
-						void this.runRequest(retrySnapshot.request.question, retrySnapshot.request.title, {}, retrySnapshot.request);
-					} else {
-						void this.runRequest(retrySnapshot.question, retrySnapshot.title, retrySnapshot.options);
-					}
-				}, { requiresIdle: true });
-			}
+			const failed = assistantMessage;
+			this.cancelPendingMarkdown(failed.body);
+			this.showDrawingNote(failed.body, null);
+			this.renderRunError(failed, presented, declined ? "notice" : "error");
 			// A status role keeps provider errors out of the thread history sent with the next request.
-			this.messages.push({ role: "system", text: message });
-			new Notice(message);
+			const errorTurn: ChatMessageLike = { role: "system", text: presented.message };
+			this.messages.push(errorTurn);
+			if (!aborted) {
+				const reuse = { userTurn, userElements, errorElements: failed };
+				const retryWith = (context: { ignoreKeys: readonly string[] }): Promise<void> => {
+					this.messages = this.messages.filter((candidate) => candidate !== errorTurn);
+					return this.retryRun(spec, ticket, reuse, context.ignoreKeys);
+				};
+				if (presented.fix) {
+					this.renderErrorFix(failed, presented.fix);
+				}
+				this.createMessageAction(failed.actions, "rotate-ccw", "Retry request", retryWith, { requiresIdle: true, lockKey: "Retry request" });
+			}
+			new Notice(presented.message);
+			this.announcer?.announce({ kind: "failed", message: presented.message });
 		} finally {
+			this.pendingTurns.delete(userTurn);
 			if (!answered) {
 				// An unanswered question would otherwise be resent as a dangling user turn.
 				this.messages = this.messages.filter((message) => message !== userTurn);
@@ -1542,12 +2029,17 @@ export class AskMateView extends ItemView {
 					if (responseText.trim()) {
 						// Keep what arrived (a pending render still draws the latest text); it stays out of the thread.
 						this.renderMessageWarning(assistantMessage, "Stopped. This reply is partial and was not saved.");
+						this.announcer?.announce({ kind: "stopped", partial: true });
 					} else {
 						this.cancelPendingMarkdown(assistantMessage.body);
+						this.showDrawingNote(assistantMessage.body, null);
 						assistantMessage.body.setText("Stopped.");
+						this.announcer?.announce({ kind: "stopped", partial: false });
 					}
 				}
 			}
+			this.cancelPendingApprovals();
+			this.toolCards.clear();
 			this.finishRun(run);
 		}
 	}
@@ -1584,11 +2076,15 @@ export class AskMateView extends ItemView {
 		if (!this.isClosed) {
 			this.addMessage("system", systemMessage);
 		}
-		new Notice(noticeMessage);
+		this.notify(noticeMessage);
 	}
 
-	private addMessage(role: ChatRole, text: string, editableText?: string, historyText?: string): ChatMessage {
-		const chatMessage: ChatMessage = { role, text: historyText ?? text, createdAt: new Date().toISOString() };
+	private addMessage(role: ChatRole, text: string, editableText?: string, historyText?: string): ChatMessageLike {
+		return this.addMessageWithElements(role, text, editableText, historyText).chat;
+	}
+
+	private addMessageWithElements(role: ChatRole, text: string, editableText?: string, historyText?: string): { chat: ChatMessageLike; elements: MessageElements } {
+		const chatMessage: ChatMessageLike = { role, text: historyText ?? text, createdAt: new Date().toISOString() };
 		this.messages.push(chatMessage);
 		const message = this.createMessageEl(role, text, false);
 
@@ -1597,7 +2093,123 @@ export class AskMateView extends ItemView {
 				this.useTextInComposer(editableText);
 			});
 		}
-		return chatMessage;
+		return { chat: chatMessage, elements: message };
+	}
+
+	/** The line under a reply that says a diagram is being drawn. It sits beside the body, so a render never removes it. */
+	private showDrawingNote(body: HTMLElement, text: string | null): void {
+		const existing = this.drawingNotes.get(body);
+		if (text === null) {
+			existing?.remove();
+			this.drawingNotes.delete(body);
+			return;
+		}
+		if (existing) {
+			existing.setText(text);
+			return;
+		}
+		// Created through the body so it belongs to this view's window (popouts included), then moved beside it.
+		const note = body.createDiv({ cls: "askmate-diagram-placeholder", text });
+		note.setAttribute("role", "note");
+		body.after(note);
+		this.drawingNotes.set(body, note);
+	}
+
+	private upsertToolCard(message: MessageElements, event: ToolUiEvent): ToolCardHandle {
+		const existing = this.toolCards.get(event.id);
+		if (existing) {
+			existing.update(event);
+			return existing;
+		}
+		let host = message.wrapper.querySelector<HTMLElement>(":scope > .askmate-tool-cards");
+		if (!host) {
+			host = message.wrapper.createDiv({ cls: "askmate-tool-cards" });
+			message.wrapper.insertBefore(host, message.body);
+		}
+		const handle = createToolCallCard(host, event);
+		this.toolCards.set(event.id, handle);
+		return handle;
+	}
+
+	/** Asks inside the answer, with the full arguments, and waits. Stopping the run or closing the sidebar answers "deny". */
+	private async confirmToolCall(run: RunRecord, message: MessageElements, request: ToolApprovalRequest): Promise<ToolApprovalChoice> {
+		if (!this.isRunActive(run)) {
+			return "deny";
+		}
+		const handle = this.upsertToolCard(message, {
+			id: request.id,
+			server: request.server,
+			tool: request.tool,
+			status: "pending-approval",
+			argumentsJson: request.argumentsJson
+		});
+		this.setRunPhase(run, "awaiting-approval");
+		this.announcer?.announce({ kind: "approval", toolName: request.title || request.tool, serverName: request.server });
+		this.maybeScrollMessagesToBottom();
+		try {
+			return await handle.requestApproval(request, { canAllowForChat: true });
+		} finally {
+			if (this.isRunActive(run)) {
+				this.setRunPhase(run, "tool-calling");
+			}
+		}
+	}
+
+	private cancelPendingApprovals(): void {
+		for (const handle of this.toolCards.values()) {
+			handle.cancelApproval();
+		}
+	}
+
+	private handleRunPhase(run: RunRecord, message: MessageElements, phase: RunPhaseSignal): void {
+		if (!this.isRunActive(run)) {
+			return;
+		}
+		switch (phase) {
+			case "tool-calling":
+			case "awaiting-approval":
+				this.setRunPhase(run, phase);
+				return;
+			case "drawing-diagram":
+				this.showDrawingNote(message.body, DRAWING_DIAGRAM_TEXT);
+				this.announcer?.say("AskMate is drawing the diagram.");
+				return;
+			case "repairing-diagram":
+				this.showDrawingNote(message.body, "Fixing the diagram...");
+				this.announcer?.say("AskMate is fixing the diagram.");
+				return;
+		}
+	}
+
+	private errorContext(request: AskRequest | null): { providerId: TextProviderId; baseUrl: string; model: string } {
+		const providerId = request?.metadata.providerId ?? this.plugin.getChatProviderId();
+		return {
+			providerId,
+			baseUrl: this.plugin.getProviderSettings(providerId).baseUrl,
+			model: request?.metadata.selectedModel ?? this.plugin.getChatProviderModelRef().model
+		};
+	}
+
+	/** The failure in one sentence, with what AskMate was told in a disclosure when it was translated. */
+	private renderRunError(message: MessageElements, presented: ErrorPresentation, tone: "error" | "notice" = "error"): void {
+		message.body.setText(presented.message);
+		if (tone === "error") {
+			message.wrapper.addClass("askmate-message-error");
+			message.body.setAttribute("role", "alert");
+		}
+		if (presented.detail) {
+			const details = message.body.createEl("details");
+			details.createEl("summary", { text: "Details" });
+			details.createEl("pre", { text: presented.detail });
+		}
+	}
+
+	/** The button that fixes the cause of a failure, under the message. */
+	private renderErrorFix(message: MessageElements, fix: SetupAction): void {
+		const row = message.evidence.createDiv({ cls: "askmate-setup-actions" });
+		const button = row.createEl("button", { text: fix.label, cls: "mod-cta" });
+		button.type = "button";
+		button.addEventListener("click", () => this.handleSetupAction(fix));
 	}
 
 	private createMessageEl(role: ChatRole, text: string, renderMarkdown: boolean): MessageElements {
@@ -1645,7 +2257,7 @@ export class AskMateView extends ItemView {
 			return false;
 		}
 
-		return /\b(?:show|display|preview|view|see|open|image|images|picture|pictures|photo|photos|screenshot|drawing|diagram|visual|excalidraw)\b/u.test(normalized);
+		return /\b(?:show|display|preview|view|see|open|image|images|picture|pictures|photo|photos|screenshot|drawing|visual|excalidraw)\b/u.test(normalized);
 	}
 
 	private renderContextImagePreviews(request: AskRequest): void {
@@ -1744,83 +2356,318 @@ export class AskMateView extends ItemView {
 		};
 	}
 
-	/** Copy and Insert need only the raw reply, so restored thread messages get them too. */
-	private renderAnswerActions(parent: HTMLElement, answer: LastAnswer): void {
-		this.createMessageAction(parent, "copy", "Copy", () => copyAnswerText(answer.text));
-		this.createMessageAction(parent, "text-cursor-input", "Insert at cursor", () => {
-			insertAnswerAtRememberedCursor(this.app.workspace.getActiveViewOfType(MarkdownView), this.plugin.getLastOpenMarkdownView(), answer);
+	/** A restored reply has no request behind it, but Insert, Copy and Show reply text need only the saved text. */
+	private renderRestoredActions(parent: HTMLElement, answer: InsertableReply): void {
+		const plan = planReplyActions({
+			hasRequest: false,
+			source: "",
+			skillWasAutomatic: false,
+			writeBlockedReason: answer.diagram === "fallback" ? FALLBACK_INSERT_REASON : null
+		});
+		this.renderReplyActionButtons(parent, plan, {
+			insert: () => this.insertAnswer(answer),
+			copy: () => copyAnswerText(answer.text),
+			"show-text": () => this.showText(answer.text, "AskMate reply"),
+			"use-reply": () => this.useTextInComposer(answer.text)
+		}, () => "");
+	}
+
+	private insertAnswer(answer: InsertableReply): Promise<void> {
+		return insertAnswerAtRememberedCursor(this.app, this.app.workspace.getActiveViewOfType(MarkdownView), this.plugin.getLastOpenMarkdownView(), answer);
+	}
+
+	/** A finished vault change, said once in the chat and once as a Notice. */
+	private reportOutcome(message: string): void {
+		this.addMessage("system", message);
+		this.notify(message);
+	}
+
+	private renderReplyActionButtons(
+		parent: HTMLElement,
+		plan: ReturnType<typeof planReplyActions>,
+		handlers: Partial<Record<ReplyActionSpec["id"], ReplyHandler>>,
+		lockKeyFor: (spec: ReplyActionSpec) => string
+	): void {
+		for (const spec of plan.primary) {
+			const handler = handlers[spec.id];
+			if (handler) {
+				this.createMessageAction(parent, spec.icon, spec.label, handler, {
+					requiresIdle: spec.requiresIdle,
+					lockKey: lockKeyFor(spec),
+					variant: "primary",
+					disabledReason: spec.disabledReason
+				});
+			}
+		}
+		const menuRead = plan.menuRead.filter((spec) => handlers[spec.id]);
+		const menuWrite = plan.menuWrite.filter((spec) => handlers[spec.id]);
+		if (menuRead.length === 0 && menuWrite.length === 0) {
+			return;
+		}
+		this.createMoreMenu(parent, menuRead, menuWrite, (spec) => {
+			const handler = handlers[spec.id];
+			if (handler) {
+				this.runReplyAction(spec.label, handler, { requiresIdle: spec.requiresIdle, lockKey: lockKeyFor(spec) });
+			}
+		});
+	}
+
+	/** One menu with text labels; the items that change a note come after a separator. */
+	private createMoreMenu(parent: HTMLElement, read: readonly ReplyActionSpec[], write: readonly ReplyActionSpec[], run: (spec: ReplyActionSpec) => void): HTMLButtonElement {
+		parent.closest(".askmate-message")?.addClass("askmate-message-has-actions");
+		const button = parent.createEl("button", { cls: "askmate-message-action askmate-message-action-more" });
+		button.type = "button";
+		button.dataset.consoleLabel = CONSOLE_ACTION_LABELS["More actions"] ?? "more";
+		button.setAttribute("aria-label", "More actions");
+		button.setAttribute("aria-haspopup", "menu");
+		button.setAttribute("title", "More actions");
+		this.addIcon(button, "more-horizontal", "askmate-message-action-icon");
+		button.createSpan({ cls: "askmate-visually-hidden", text: "More actions" });
+		button.addEventListener("click", (event) => {
+			const menu = new Menu();
+			const addItems = (specs: readonly ReplyActionSpec[]): void => {
+				for (const spec of specs) {
+					menu.addItem((item) => {
+						item.setTitle(spec.label)
+							.setIcon(spec.icon)
+							.setDisabled(Boolean(spec.disabledReason) || (spec.requiresIdle && Boolean(this.activeRun)))
+							.onClick(() => run(spec));
+					});
+				}
+			};
+			addItems(read);
+			if (read.length > 0 && write.length > 0) {
+				menu.addSeparator();
+			}
+			addItems(write);
+			if (event.detail === 0) {
+				// Opened from the keyboard: the click has no pointer position, so the menu opens under the button.
+				const rect = button.getBoundingClientRect();
+				menu.showAtPosition({ x: rect.left, y: rect.bottom });
+			} else {
+				menu.showAtMouseEvent(event);
+			}
+		});
+		return button;
+	}
+
+	/** Runs a menu item with the same busy and claim rules as a button. */
+	private runReplyAction(label: string, handler: ReplyHandler, options: { requiresIdle: boolean; lockKey: string }): void {
+		void runGuardedAction(this.runs, { lockKey: options.lockKey || (options.requiresIdle ? label : ""), requiresIdle: options.requiresIdle }, handler, {
+			busy: (message) => this.notify(message),
+			failed: (error) => this.notify(this.plugin.getErrorMessage(error))
 		});
 	}
 
 	private renderAssistantMessageActions(
-		parent: HTMLElement,
-		evidenceParent: HTMLElement,
-		request: AskRequest,
-		getText: () => string,
-		model: string,
-		answer: LastAnswer
+		message: MessageElements,
+		input: {
+			request: AskRequest;
+			getText: () => string;
+			model: string;
+			answer: InsertableReply;
+			spec: RunSpec;
+			skillsUsed: ReadonlyArray<{ id: string; name: string; source: "built-in" | "vault"; channel: string }>;
+			diagram: DiagramResultInfo | null;
+		}
 	): void {
-		parent.empty();
-		evidenceParent.empty();
-		this.renderAnswerActions(parent, answer);
-		this.createMessageAction(parent, "file-text", "Show reply text", () => {
-			this.showText(getText(), "AskMate reply");
+		const { request, getText, model, answer, spec, diagram } = input;
+		message.actions.empty();
+		message.evidence.empty();
+		const path = request.context.file?.path ?? "global";
+		const diagramBlocked = diagram?.status === "fallback" ? "This diagram did not draw, so it cannot be written to a note." : null;
+		const plan = planReplyActions({
+			hasRequest: true,
+			source: request.context.source,
+			skillWasAutomatic: wasSkillAutomatic(input.skillsUsed),
+			writeBlockedReason: diagramBlocked
 		});
-		this.createMessageAction(parent, "corner-down-left", "Use reply", () => {
-			this.useTextInComposer(getText());
-		});
+		const handlers: Partial<Record<ReplyActionSpec["id"], ReplyHandler>> = {
+			insert: () => this.insertAnswer(answer),
+			copy: () => copyAnswerText(answer.text),
+			apply: async () => {
+				const outcome = await this.plugin.applyResponseToContext(request, getText());
+				this.reportOutcome(outcome.message);
+			},
+			"show-text": () => this.showText(getText(), "AskMate reply"),
+			"use-reply": () => this.useTextInComposer(getText()),
+			"rerun-without-skill": (context) => this.runRequest({
+				...spec,
+				options: { ...spec.options, threadMessages: undefined },
+				builtRequest: undefined,
+				suppressAutoSkills: true,
+				displayText: spec.displayText ? `${spec.displayText} (without skill)` : undefined,
+				ignoreKeys: context.ignoreKeys,
+				reuse: undefined,
+				onSent: undefined
+			}),
+			queue: async () => {
+				const item = await this.plugin.queueReviewItemFromRequest(request, getText(), model);
+				this.notify(`Queued AskMate review for ${item.sourcePath}.`);
+			},
+			"new-note": async () => {
+				const file = await this.plugin.createResultNote(request, getText(), { model });
+				this.reportOutcome(`Created note: ${file.path}`);
+			},
+			"replace-note": async () => {
+				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "full-note" });
+				this.reportOutcome(outcome.message);
+			},
+			"apply-selection": async () => {
+				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "selected-block" });
+				this.reportOutcome(outcome.message);
+			},
+			"apply-heading": async () => {
+				const heading = await askMatePrompt(this.app, "Heading title or path to replace, for example Project Plan > Risks", request.context.activeHeadingPath ?? "");
+				if (heading === null) {
+					return;
+				}
+				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "heading-section", headingPath: heading });
+				this.reportOutcome(outcome.message);
+			}
+		};
+		const lockKeyFor = (spec: ReplyActionSpec): string => {
+			switch (spec.id) {
+				case "queue":
+					return `review:${path}`;
+				case "rerun-without-skill":
+					return "Run again without skill";
+				case "apply":
+				case "new-note":
+				case "replace-note":
+				case "apply-selection":
+				case "apply-heading":
+					return `mutation:${path}`;
+				default:
+					return "";
+			}
+		};
+		// A diagram reply has its own card for Insert and New note, so only Copy and the menu remain here.
+		const shown = diagram
+			? { primary: plan.primary.filter((entry) => entry.id === "copy"), menuRead: plan.menuRead, menuWrite: [] }
+			: plan;
+		this.renderReplyActionButtons(message.actions, shown, handlers, lockKeyFor);
+
+		this.renderSkillBadges(message.evidence, input.skillsUsed);
 		const citations = this.plugin.extractEvidenceCitations(getText(), request.evidenceSources).slice(0, 6);
 		if (citations.length > 0) {
-			evidenceParent.createSpan({ cls: "askmate-evidence-label", text: "Sources" });
+			message.evidence.createSpan({ cls: "askmate-evidence-label", text: "Sources" });
 			for (const citation of citations) {
-				const button = evidenceParent.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
+				const button = message.evidence.createEl("button", { cls: "askmate-evidence-chip", text: `${citation.sourceId}: ${citation.source.sourcePath.split("/").pop() ?? citation.source.sourcePath} L${citation.source.lineStart}-${citation.source.lineEnd}` });
 				button.type = "button";
 				button.addEventListener("click", () => {
 					this.runUiTask(this.plugin.openEvidenceSource(citation.source));
 				});
 			}
 		}
-		this.createMessageAction(parent, "inbox", "Queue for review", async () => {
-			const item = await this.plugin.queueReviewItemFromRequest(request, getText(), model);
-			new Notice(`Queued AskMate review for ${item.sourcePath}.`);
-		}, { requiresIdle: true, lockKey: `review:${request.context.file?.path ?? "global"}` });
-		this.createMessageAction(parent, "file-plus", "New note", async () => {
-			const file = await this.plugin.createResultNote(request, getText(), { model });
-			this.addMessage("system", `Created note: ${file.path}`);
-			new Notice(`AskMate created ${file.path}`);
-		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
-		this.createMessageAction(parent, "pencil", "Apply reply", async () => {
-			const outcome = await this.plugin.applyResponseToContext(request, getText());
-			this.addMessage("system", outcome.message);
-			new Notice(outcome.message);
-		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
-		if (request.context.source === "Current note") {
-			this.createMessageAction(parent, "file-text", "Replace full note", async () => {
-				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "full-note" });
-				this.addMessage("system", outcome.message);
-				new Notice(outcome.message);
-			}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
+		if (diagram) {
+			this.renderDiagramReply(message, { request, diagram, getText, model, spec });
 		}
-		if (request.context.source === "Selected text") {
-			this.createMessageAction(parent, "text-cursor-input", "Apply selected block", async () => {
-				const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "selected-block" });
-				this.addMessage("system", outcome.message);
-				new Notice(outcome.message);
-			}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
-		}
-		this.createMessageAction(parent, "heading-1", "Apply to heading", async () => {
-			const heading = await askMatePrompt(this.app, "Heading title or path to replace, for example Project Plan > Risks", request.context.activeHeadingPath ?? "");
-			if (heading === null) {
-				return;
-			}
-			const outcome = await this.plugin.applyResponseToContext(request, getText(), {
-				scope: "heading-section",
-				headingPath: heading
-			});
-			this.addMessage("system", outcome.message);
-			new Notice(outcome.message);
-		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 	}
+
+	private renderSkillBadges(parent: HTMLElement, used: ReadonlyArray<{ id: string; name: string; source: "built-in" | "vault"; channel: string }>): void {
+		for (const skill of used) {
+			const badge = describeSkillBadge(skill);
+			parent.createSpan({ cls: "askmate-skill-badge", text: badge.text, attr: { title: badge.title } });
+		}
+	}
+
+	/** The diagram, drawn through Obsidian's own Mermaid, with Insert (through the Apply preview), New note, Copy source, Fix and Another look. */
+	private renderDiagramReply(
+		message: MessageElements,
+		input: { request: AskRequest; diagram: DiagramResultInfo; getText: () => string; model: string; spec: RunSpec }
+	): DiagramCardHandle {
+		const { request, diagram, getText, model, spec } = input;
+		const hasNote = !isNoNoteSource(request.context.source);
+		const path = request.context.file?.path ?? "global";
+		let card: DiagramCardHandle | null = null;
+		const act = (lockKey: string, requiresIdle: boolean, task: (context: { ignoreKeys: readonly string[] }) => Promise<void>): void => {
+			void runGuardedAction(this.runs, { lockKey, requiresIdle }, task, {
+				busy: (text) => this.notify(text),
+				failed: (error) => this.notify(this.plugin.getErrorMessage(error)),
+				started: () => card?.setBusy(true),
+				settled: () => card?.setBusy(false)
+			});
+		};
+		card = renderDiagramCard(
+			message.wrapper,
+			{ status: diagramCardStatus(diagram), copy: describeDiagramCard(diagram, { hasNote }), source: diagram.source, hasNote },
+			{
+				onInsert: () => act(`mutation:${path}`, true, async () => {
+					// The same preview and approval as every other write to a note.
+					const outcome = await this.plugin.applyResponseToContext(request, getText(), { scope: "append" });
+					this.reportOutcome(outcome.status === "applied"
+						? `${outcome.message} If Obsidian asks whether to trust Mermaid diagrams in this vault, choose Trust to see it in the note.`
+						: outcome.message);
+				}),
+				onNewNote: () => act(`mutation:${path}`, true, async () => {
+					const file = await this.plugin.createResultNote(request, getText(), { model });
+					this.reportOutcome(`Created note: ${file.path}`);
+				}),
+				onCopy: () => act("", false, () => copyAnswerText(diagram.source)),
+				onFix: () => act("diagram-fix", true, (context) => this.runRequest({
+					question: buildFixQuestion(diagram),
+					title: "AskMate Diagram",
+					options: { ...this.getRequestDraftOptions(false), intentKind: "diagram" },
+					displayText: "Fix the diagram",
+					skillRefs: [MERMAID_SKILL_ID],
+					diagram: request.metadata.diagram ?? firstLook(this.plugin.settings.diagrams),
+					ignoreKeys: context.ignoreKeys
+				})),
+				onAnotherLook: () => act("diagram-look", true, (context) => this.runRequest({
+					...spec,
+					options: { ...spec.options, threadMessages: undefined },
+					builtRequest: undefined,
+					displayText: "Another look at the diagram",
+					diagram: nextLook(request.metadata.diagram, this.plugin.settings.diagrams),
+					ignoreKeys: context.ignoreKeys,
+					reuse: undefined,
+					onSent: undefined
+				}))
+			},
+			this.createDiagramPreviewHost()
+		);
+		message.wrapper.insertBefore(card.el, message.evidence);
+		this.maybeScrollMessagesToBottom();
+		return card;
+	}
+
+	/** Draws through Obsidian's own Mermaid, so it works even when the vault has not turned on diagrams in notes. */
+	private createDiagramPreviewHost(): DiagramPreviewHost {
+		return {
+			draw: async (target, source): Promise<DrawResult> => {
+				const key = sourceHash(source);
+				const cached = this.diagramPreviews.get(key);
+				if (cached !== undefined) {
+					return mountSvg(target, cached) ? "drawn" : "failed";
+				}
+				const api = await wave2(this.plugin).loadMermaidApi?.();
+				if (!api) {
+					return "unavailable";
+				}
+				const scratch = createScratchHost(target.ownerDocument.body).open();
+				try {
+					const { svg } = await api.render(nextRenderId(), source, scratch.container);
+					if (!mountSvg(target, svg)) {
+						return "failed";
+					}
+					this.diagramPreviews.set(key, svg);
+					if (this.diagramPreviews.size > MAX_CACHED_DIAGRAMS) {
+						const oldest = this.diagramPreviews.keys().next();
+						if (!oldest.done) {
+							this.diagramPreviews.delete(oldest.value);
+						}
+					}
+					return "drawn";
+				} catch {
+					return "failed";
+				} finally {
+					scratch.close();
+				}
+			}
+		};
+	}
+
 
 	private renderGeneratedImage(body: HTMLElement, result: ImageAskMateResult): void {
 		this.releaseMarkdownComponent(body);
@@ -1832,7 +2679,8 @@ export class AskMateView extends ItemView {
 		shell.createEl("img", {
 			cls: "askmate-generated-image",
 			attr: {
-				alt: "Generated image from AskMate",
+				// The prompt describes the picture, so it is the alternative text.
+				alt: `Generated image: ${result.image.prompt.replace(/\s+/g, " ").trim().slice(0, 140) || "no description"}`,
 				src: `data:${result.image.mimeType};base64,${result.image.base64}`
 			}
 		});
@@ -1866,59 +2714,70 @@ export class AskMateView extends ItemView {
 		});
 		this.createMessageAction(parent, "file-plus", "New image note", async () => {
 			const { noteFile, imageFile } = await this.plugin.createImageResultNote(request, getResult());
-			this.addMessage("system", `Created note: ${noteFile.path} and image: ${imageFile.path}`);
-			new Notice(`AskMate created ${noteFile.path}`);
+			this.reportOutcome(`Created note: ${noteFile.path} and image: ${imageFile.path}`);
+			// Saving the note also saved the picture, so the saved copy of this reply can now point at it.
+			this.queueThreadSave();
 		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 		this.createMessageAction(parent, "image-plus", "Insert image", async () => {
 			const outcome = await this.plugin.applyImageToContext(request, getResult());
-			this.addMessage("system", outcome.message);
-			new Notice(outcome.message);
+			this.reportOutcome(outcome.message);
+			this.queueThreadSave();
 		}, { requiresIdle: true, lockKey: `mutation:${request.context.file?.path ?? "global"}` });
 	}
 
+	/**
+	 * One button. Busy rules and claims come from the run controller: an action that changes something holds a named
+	 * claim while it works (so a second click, or a new request, is refused) and one that needs the sidebar idle is
+	 * refused while a request runs. The action receives the key it holds, for a request it starts itself (Retry).
+	 */
 	private createMessageAction(
 		parent: HTMLElement,
 		icon: string,
 		label: string,
-		onClick: () => void | Promise<void>,
-		options: MessageActionOptions = {}
+		onClick: ReplyHandler,
+		options: ReplyActionOptions = {}
 	): HTMLButtonElement {
 		const wrapper = parent.closest(".askmate-message");
 		if (wrapper instanceof HTMLElement) {
 			wrapper.addClass("askmate-message-has-actions");
 		}
 
-		const button = parent.createEl("button", { cls: "askmate-message-action" });
+		const blocked = Boolean(options.disabledReason);
+		const button = parent.createEl("button", { cls: options.variant === "primary" ? "askmate-message-action is-primary" : "askmate-message-action" });
 		button.type = "button";
 		button.dataset.consoleLabel = CONSOLE_ACTION_LABELS[label] ?? label.toLowerCase().split(" ")[0];
 		button.setAttribute("aria-label", label);
-		button.setAttribute("title", label);
+		button.setAttribute("title", options.disabledReason ? `${label}. ${options.disabledReason}` : label);
+		if (blocked) {
+			button.dataset.askmateBlocked = "true";
+			button.disabled = true;
+		}
 		if (options.requiresIdle) {
 			button.dataset.askmateRequiresIdle = "true";
-			button.disabled = Boolean(this.activeRun);
+			button.disabled = blocked || Boolean(this.activeRun);
 		}
 		this.addIcon(button, icon, "askmate-message-action-icon");
 		button.createSpan({ cls: "askmate-visually-hidden", text: label });
 		button.addEventListener("click", () => {
-			if (options.requiresIdle && this.activeRun) {
-				new Notice("Wait for the current AskMate request to finish, or stop it first.");
-				return;
-			}
 			const lockKey = options.lockKey ?? (options.requiresIdle ? label : "");
-			if (lockKey && this.activeActionKeys.has(lockKey)) {
-				return;
-			}
-			if (lockKey) {
-				this.activeActionKeys.add(lockKey);
-				button.disabled = true;
-			}
-
-			void Promise.resolve(onClick()).catch((error) => {
-				new Notice(this.plugin.getErrorMessage(error));
-			}).finally(() => {
-				if (lockKey) {
-					this.activeActionKeys.delete(lockKey);
-					button.disabled = options.requiresIdle ? Boolean(this.activeRun) : false;
+			// A button that disables itself while it works must hand the focus back when it is enabled again.
+			const hadFocus = button.ownerDocument.activeElement === button;
+			void runGuardedAction(this.runs, { lockKey, requiresIdle: Boolean(options.requiresIdle) }, onClick, {
+				busy: (message) => this.notify(message),
+				failed: (error) => this.notify(this.plugin.getErrorMessage(error)),
+				started: () => {
+					if (lockKey) {
+						button.disabled = true;
+					}
+				},
+				settled: () => {
+					if (!lockKey) {
+						return;
+					}
+					button.disabled = blocked || (options.requiresIdle ? Boolean(this.activeRun) : false);
+					if (hadFocus && !button.disabled && button.isConnected) {
+						button.focus();
+					}
 				}
 			});
 		});
@@ -1929,7 +2788,7 @@ export class AskMateView extends ItemView {
 		const value = text.trim();
 
 		if (!value) {
-			new Notice("Nothing to show yet.");
+			this.notify("Nothing to show yet.");
 			return;
 		}
 
@@ -1951,15 +2810,62 @@ export class AskMateView extends ItemView {
 		this.questionEl.setSelectionRange(caret, caret);
 	}
 
+	/** Puts text in the composer without destroying a draft: it goes below the draft, and the draft can be restored. */
 	private useTextInComposer(text: string): void {
-		this.questionEl.value = text.trim();
+		const change = mergeIntoDraft(this.questionEl.value, text);
+		this.questionEl.value = change.text;
+		this.draftUndo = change.previous === null ? null : { previous: change.previous, merged: change.text };
+		this.refreshDraftUndo();
 		this.questionEl.focus();
 		this.questionEl.setSelectionRange(this.questionEl.value.length, this.questionEl.value.length);
+		this.scheduleRequestPreviewRefresh();
+		this.scheduleSkillChips();
+	}
+
+	private refreshDraftUndo(): void {
+		const host = this.draftUndoEl;
+		if (!host) {
+			return;
+		}
+		host.empty();
+		host.hidden = this.draftUndo === null;
+		if (this.draftUndo === null) {
+			return;
+		}
+		host.setAttribute("role", "status");
+		host.createSpan({ text: "Added below your draft." });
+		const undo = host.createEl("button", { text: "Undo" });
+		undo.type = "button";
+		undo.addEventListener("click", () => {
+			const pending = this.draftUndo;
+			if (pending && canUndoDraft(pending, this.questionEl.value)) {
+				this.questionEl.value = pending.previous;
+				this.questionEl.focus();
+				this.scheduleRequestPreviewRefresh();
+				this.scheduleSkillChips();
+			}
+			this.draftUndo = null;
+			this.refreshDraftUndo();
+		});
+	}
+
+	/** The undo is offered only for the text it would restore; any edit makes it stale. */
+	private hideDraftUndoIfChanged(): void {
+		if (this.draftUndo !== null && !canUndoDraft(this.draftUndo, this.questionEl.value)) {
+			this.draftUndo = null;
+			this.refreshDraftUndo();
+		}
 	}
 
 	private renderMarkdownSoon(body: HTMLElement, markdown: string, sourcePath: string): void {
+		// A diagram that is still being written is shown as a note and drawn once, when its last line arrives.
+		const plan = planStreamRender(markdown);
+		this.showDrawingNote(body, plan.drawing ? DRAWING_DIAGRAM_TEXT : null);
+		if (isRenderCurrent(plan, this.streamedText.get(body))) {
+			return;
+		}
 		// Throttle rather than debounce, so a steady stream of deltas still renders every 120 ms.
-		this.pendingMarkdown.set(body, { markdown, sourcePath });
+		this.pendingMarkdown.set(body, { markdown: plan.settled, sourcePath });
 		if (this.markdownRenderTimers.has(body)) {
 			return;
 		}
@@ -1974,9 +2880,10 @@ export class AskMateView extends ItemView {
 			const latest = this.pendingMarkdown.get(body);
 			this.pendingMarkdown.delete(body);
 			if (latest) {
+				this.streamedText.set(body, latest.markdown);
 				this.renderMarkdownNow(body, latest.markdown, latest.sourcePath);
 			}
-		}, 120);
+		}, streamRenderDelay(plan));
 		this.markdownRenderTimers.set(body, timer);
 		this.pendingMarkdownTimerIds.add(timer);
 	}
@@ -1991,7 +2898,7 @@ export class AskMateView extends ItemView {
 		return !/^(?:#{1,6}\s|[-*+]\s|\d+\.\s|>|```|~~~|\|)|!\[|!\[\[/u.test(text);
 	}
 
-	private renderMarkdownNow(body: HTMLElement, markdown: string, sourcePath: string): void {
+	private renderMarkdownNow(body: HTMLElement, markdown: string, sourcePath: string, allowPluginHeader = false): void {
 		const pending = this.markdownRenderTimers.get(body);
 
 		if (pending !== undefined) {
@@ -2025,7 +2932,9 @@ export class AskMateView extends ItemView {
 		this.markdownRendersInFlight.set(body, (this.markdownRendersInFlight.get(body) ?? 0) + 1);
 
 		// Model output can carry prompt-injected remote images or plugin code blocks, so render a defused copy.
-		void MarkdownRenderer.render(this.app, sanitizeModelMarkdown(markdown), host, sourcePath, component)
+		// A saved diagram carries the strict header AskMate built for it; the guard still checks that header against its closed schema.
+		const safe = allowPluginHeader ? sanitizeModelMarkdown(markdown, { allowPluginMermaidHeader: true }) : sanitizeModelMarkdown(markdown);
+		void MarkdownRenderer.render(this.app, safe, host, sourcePath, component)
 			.then(() => {
 				if (!isCurrent()) {
 					this.removeChild(component);
@@ -2089,12 +2998,8 @@ export class AskMateView extends ItemView {
 		});
 
 		if (role === "assistant") {
-			avatar.createDiv({ cls: "askmate-avatar-robot-antenna" });
-			const face = avatar.createDiv({ cls: "askmate-avatar-robot-face" });
-			const eyes = face.createDiv({ cls: "askmate-avatar-robot-eyes" });
-			eyes.createSpan();
-			eyes.createSpan();
-			face.createDiv({ cls: "askmate-avatar-robot-smile" });
+			// The registered AskMate mark; its colours come from the theme and the brand tokens in the style sheet.
+			setIcon(avatar.createSpan({ cls: "askmate-brand-mark", attr: { "aria-hidden": "true" } }), ASKMATE_ICON_ID);
 			return avatar;
 		}
 
@@ -2136,9 +3041,23 @@ export class AskMateView extends ItemView {
 		this.readinessEl.classList.toggle("is-api-key-set", isReady);
 		this.readinessEl.classList.toggle("is-ready", isReady);
 		this.readinessEl.classList.toggle("is-not-ready", !isReady);
-		this.readinessEl.setAttribute("role", "status");
 		this.readinessEl.setAttribute("aria-label", label);
-		this.readinessEl.setAttribute("title", isReady ? "AskMate is ready" : "Configure the selected provider in AskMate settings");
+		if (isReady) {
+			this.readinessEl.setAttribute("role", "status");
+			this.readinessEl.removeAttribute("tabindex");
+			this.readinessEl.setAttribute("title", "AskMate is ready");
+		} else {
+			// Not ready is something to act on, so the chip is a button that opens the Connect card.
+			this.readinessEl.setAttribute("role", "button");
+			this.readinessEl.tabIndex = 0;
+			this.readinessEl.setAttribute("title", "Connect an AI provider");
+		}
+	}
+
+	private openSetupFromReadiness(): void {
+		if (this.readinessEl?.classList.contains("is-not-ready")) {
+			this.openSetupFlow();
+		}
 	}
 
 	private getRequestDefaultsKey(): string {
@@ -2201,20 +3120,22 @@ export class AskMateView extends ItemView {
 	private async openPromptInspector(questionOverride?: string, optionsOverride?: RunRequestOptions): Promise<void> {
 		try {
 			const raw = questionOverride?.trim() || this.questionEl.value.trim() || "Preview request";
-			const command = this.parseComposerCommand(raw);
-			const draft = optionsOverride || !this.isConsoleLayout() ? undefined : this.resolveDraftRequest(raw);
-			const inspection = await this.plugin.inspectFinalPrompt(draft?.question ?? command.question, (draft?.forceImage ?? command.forceImage) ? "AskMate Image" : "AskMate Answer", optionsOverride ?? draft?.options ?? {
-				forceImage: command.forceImage,
-				privacy: this.privacyOptions,
-				contextBudgetMode: this.contextBudgetMode,
-				additionalContextPaths: this.additionalContextPaths,
-				folderContext: this.getFolderContextOptions(),
-				threadMessages: this.getThreadMessagesForNextRequest(),
-				includeThreadHistory: this.plugin.settings.threadedChatEnabled
-			});
+			if (optionsOverride) {
+				const plain = parsePlainComposerCommand(raw);
+				const inspection = await this.plugin.inspectFinalPrompt(plain.question, plain.forceImage ? "AskMate Image" : "AskMate Answer", optionsOverride);
+				new AskMatePromptInspectorModal(this.app, inspection).open();
+				return;
+			}
+			// The same reading as the request preview, so Inspect prompt shows what Enter would send, workflow commands included.
+			const draft = this.resolveDraftRequest(raw);
+			if (draft.kind === "none") {
+				this.notify(draft.hint);
+				return;
+			}
+			const inspection = await this.plugin.inspectFinalPrompt(draft.question, draft.title, draft.options);
 			new AskMatePromptInspectorModal(this.app, inspection).open();
 		} catch (error) {
-			new Notice(this.plugin.getErrorMessage(error));
+			this.notify(this.plugin.getErrorMessage(error));
 		}
 	}
 
@@ -2224,30 +3145,33 @@ export class AskMateView extends ItemView {
 	}
 
 	/**
-	 * Plain-data snapshot of the sidebar conversation; also refreshes the remembered title. While a request runs, its
-	 * question is still the last message, so it is left out: saving it would restore a question with no answer.
+	 * Plain-data snapshot of the sidebar conversation; also refreshes the remembered title. A question whose run is
+	 * still going is left out by identity, so saving never stores a question with no answer.
 	 */
-	private snapshotThread(dropPendingQuestion = this.activeRun !== null): SavedThread {
+	private snapshotThread(): SavedThread {
 		for (const message of this.messages) {
 			const image = this.generatedImages.get(message);
 			if (image?.savedImagePath) {
 				message.imagePath = image.savedImagePath;
 			}
 		}
-		const last = this.messages[this.messages.length - 1];
-		const settled = dropPendingQuestion && last?.role === "user" ? this.messages.slice(0, -1) : this.messages;
 		const now = new Date();
-		const snapshot = withThreadMessages(this.threadMeta, toSavedMessages(settled, now.toISOString()), now);
+		const snapshot = withThreadMessages(this.threadMeta, settleThreadMessages(this.messages, [...this.pendingTurns], now.toISOString()), now);
 		this.threadMeta = { ...snapshot, messages: [] };
 		return snapshot;
 	}
 
-	private queueThreadSave(dropPendingQuestion?: boolean): void {
-		this.plugin.threads.scheduleSave(this.snapshotThread(dropPendingQuestion));
+	private queueThreadSave(): void {
+		this.plugin.threads.scheduleSave(this.snapshotThread());
+	}
+
+	/** Writes the conversation now and waits for the write, so closing, switching and finishing never rely on a timer. */
+	private async persistThread(): Promise<void> {
+		await this.plugin.threads.saveNow(this.snapshotThread());
 	}
 
 	private async saveThreadNow(): Promise<void> {
-		this.queueThreadSave();
+		await this.persistThread();
 		await this.plugin.threads.flush();
 	}
 
@@ -2261,8 +3185,13 @@ export class AskMateView extends ItemView {
 	private showThread(saved: SavedThread): void {
 		this.threadMeta = { ...saved, messages: [] };
 		this.messages = fromSavedMessages(saved.messages);
-		this.releaseAllMarkdownComponents();
-		this.messagesEl.empty();
+		this.pendingTurns.clear();
+		this.renderTranscript();
+	}
+
+	/** Draws the conversation from `messages`. System lines (stops, errors, command output) are not part of a conversation. */
+	private renderTranscript(): void {
+		this.emptyTranscript();
 		this.shouldFollowMessages = true;
 		for (const message of this.messages) {
 			if (message.role === "user") {
@@ -2272,22 +3201,80 @@ export class AskMateView extends ItemView {
 				});
 				continue;
 			}
+			if (message.role !== "assistant") {
+				continue;
+			}
 			const assistant = this.createMessageEl("assistant", "", true);
 			const markdown = message.image && message.imagePath ? `${message.text}\n\n![[${message.imagePath}]]` : message.text;
-			this.renderMarkdownNow(assistant.body, markdown, message.sourcePath ?? "");
+			this.renderMarkdownNow(assistant.body, markdown, message.sourcePath ?? "", Boolean(message.diagram));
 			if (message.incomplete) {
 				this.renderMessageWarning(assistant, "This reply may be incomplete. Review it before applying it to a note.");
 			}
+			if (message.tools && message.tools.length > 0) {
+				const list = renderSavedToolCalls(assistant.wrapper, message.tools);
+				if (list) {
+					assistant.wrapper.insertBefore(list, assistant.body);
+				}
+			}
 			if (!message.image) {
-				this.renderAnswerActions(assistant.actions, { text: message.text, incompleteReason: message.incomplete ? SAVED_INCOMPLETE_REASON : null });
+				this.renderRestoredActions(assistant.actions, {
+					text: message.text,
+					incompleteReason: message.incomplete ? SAVED_INCOMPLETE_REASON : null,
+					...(message.diagram ? { diagram: insertMarkFor(message.diagram.status) } : {})
+				});
 			}
 		}
-		this.lastAnswer = lastAnswerFromMessages(this.messages);
+		this.lastAnswer = withDiagramMark(lastAnswerFromMessages(this.messages), this.messages);
+		this.refreshSkillChips();
+		this.refreshConsoleStatus();
 		this.scrollMessagesToBottom();
 	}
 
+	/** Empties the transcript and puts the Connect card's place back at the top, where the first entry belongs. */
+	private emptyTranscript(): void {
+		this.releaseAllMarkdownComponents();
+		this.messagesEl.empty();
+		this.toolCards.clear();
+		this.setupHostEl = null;
+		this.setupHandle = null;
+		this.mountSetupHost();
+		this.refreshSetupCard();
+	}
+
+	/** Saved conversations were deleted in settings: what the sidebar shows must go too, or its next save would bring them back. */
+	private handleThreadsCleared(): void {
+		if (this.isClosed || !this.messagesEl) {
+			return;
+		}
+		this.stopActiveRun(false);
+		this.threadMeta = this.createFreshThread();
+		this.messages = [];
+		this.pendingTurns.clear();
+		this.lastAnswer = null;
+		this.onceSkillIds = [];
+		this.renderTranscript();
+		this.printConsoleOutput("Saved conversations were deleted, so this conversation was cleared too.");
+	}
+
+	/** A note the conversation mentions was renamed or deleted: the open transcript follows, or its next save would undo the change. */
+	private handlePathChange(changed: readonly ChatMessageLike[]): void {
+		if (changed.length === 0 || this.isClosed || !this.messagesEl) {
+			return;
+		}
+		for (const message of changed) {
+			const image = this.generatedImages.get(message);
+			if (image) {
+				image.savedImagePath = message.imagePath ?? null;
+			}
+		}
+		// A reply that is still arriving is redrawn with the next conversation change.
+		if (!this.activeRun) {
+			this.renderTranscript();
+		}
+	}
+
 	private assertNoActiveRequest(action: string): void {
-		if (this.activeRun || this.activeActionKeys.size > 0) {
+		if (this.runs.getBusyReason() !== null) {
 			throw new Error(`Stop the current request before ${action}.`);
 		}
 	}
@@ -2299,10 +3286,10 @@ export class AskMateView extends ItemView {
 		this.assertNoActiveRequest("starting a new conversation");
 		this.threadMeta = this.createFreshThread();
 		this.messages = [];
+		this.pendingTurns.clear();
 		this.lastAnswer = null;
-		this.releaseAllMarkdownComponents();
-		this.messagesEl.empty();
-		this.shouldFollowMessages = true;
+		this.onceSkillIds = [];
+		this.renderTranscript();
 		await this.plugin.threads.markActive(null);
 		this.printConsoleOutput(this.plugin.threads.isEnabled()
 			? "Started a new conversation. The previous one is saved; use /threads to switch back."
@@ -2312,7 +3299,7 @@ export class AskMateView extends ItemView {
 	private openThreadSwitcher(purpose: "switch" | "delete" = "switch"): void {
 		const threads = this.plugin.threads.listThreads();
 		if (threads.length === 0) {
-			new Notice(this.plugin.threads.isEnabled()
+			this.notify(this.plugin.threads.isEnabled()
 				? "No saved conversations yet. Ask a question first."
 				: "Saving conversations is off. Turn on Save conversations in AskMate settings to keep threads.");
 			return;
@@ -2334,6 +3321,7 @@ export class AskMateView extends ItemView {
 		if (!target) {
 			throw new Error("That conversation is no longer saved.");
 		}
+		this.onceSkillIds = [];
 		this.showThread(target);
 		await this.plugin.threads.markActive(target.id);
 		this.printConsoleOutput(`Switched to "${target.title}".`);
@@ -2351,25 +3339,33 @@ export class AskMateView extends ItemView {
 			return;
 		}
 		const isCurrent = thread.id === this.threadMeta.id;
-		if (isCurrent) {
-			this.assertNoActiveRequest("deleting this conversation");
+		// While the delete is under way no request may start, and a request that started during the confirmation is not interrupted.
+		const outcome = await this.runs.withClaim("delete-thread", async () => {
+			const removed = await this.plugin.threads.remove(thread.id);
+			if (removed && isCurrent) {
+				this.threadMeta = this.createFreshThread();
+				this.messages = [];
+				this.pendingTurns.clear();
+				this.lastAnswer = null;
+				this.onceSkillIds = [];
+				this.renderTranscript();
+			}
+			return removed;
+		}, { requireIdle: isCurrent });
+		if (!outcome.ok) {
+			throw new Error(outcome.message);
 		}
-		await this.plugin.threads.remove(thread.id);
-		if (isCurrent) {
-			this.threadMeta = this.createFreshThread();
-			this.messages = [];
-			this.lastAnswer = null;
-			this.releaseAllMarkdownComponents();
-			this.messagesEl.empty();
-		}
-		this.printConsoleOutput(`Deleted "${thread.title}".`);
+		this.printConsoleOutput(
+			outcome.value ? `Deleted "${thread.title}".` : `AskMate could not delete "${thread.title}". Try again.`,
+			outcome.value ? "info" : "error"
+		);
 	}
 
 	/** Writes the sidebar conversation to a note in the result folder and opens it. */
 	async exportConversation(requestedTitle: string): Promise<void> {
 		this.snapshotThread();
 		if (!hasExportableTurns(this.messages)) {
-			new Notice("There is no conversation to export yet.");
+			this.notify("There is no conversation to export yet.");
 			return;
 		}
 		const ref = this.plugin.getSelectedProviderModelRef();
@@ -2384,7 +3380,7 @@ export class AskMateView extends ItemView {
 			model: lastModel ?? ref.model
 		});
 		const file = await this.plugin.createConversationNote(title, markdown);
-		new Notice(`Exported conversation to ${file.path}`);
+		this.notify(`Exported conversation to ${file.path}`);
 		await this.app.workspace.getLeaf("tab").openFile(file);
 	}
 
@@ -2393,7 +3389,7 @@ export class AskMateView extends ItemView {
 			const context = await this.plugin.getNoteContext();
 			new AskMateNoteHistoryModal(this.app, this.plugin, context.file?.path ?? "").open();
 		} catch (error) {
-			new Notice(this.plugin.getErrorMessage(error));
+			this.notify(this.plugin.getErrorMessage(error));
 		}
 	}
 
@@ -2401,9 +3397,9 @@ export class AskMateView extends ItemView {
 		try {
 			const context = await this.plugin.getNoteContext();
 			const source = context.file?.path ?? "unsaved note";
-			new Notice(`${context.source}: ${source}`);
+			this.notify(`${context.source}: ${source}`);
 		} catch {
-			new Notice("Open a Markdown note or select text to add context.");
+			this.notify("Open a Markdown note or select text to add context.");
 		}
 	}
 
@@ -2412,25 +3408,31 @@ export class AskMateView extends ItemView {
 			return;
 		}
 
+		let hasNote = false;
 		try {
 			const context = await this.plugin.getNoteContext();
 			const source = context.file?.path ?? "unsaved note";
 			const label = `${context.source}: ${source}`;
 			this.contextEl.setAttribute("aria-label", `Show selected note. ${label}`);
 			this.contextEl.setAttribute("title", label);
+			hasNote = true;
 		} catch {
-			const label = "Open a Markdown note or select text to add context.";
+			const label = "No note is open. AskMate can still answer, but not about a note.";
 			this.contextEl.setAttribute("aria-label", label);
 			this.contextEl.setAttribute("title", label);
+		}
+		// The starter chips are disabled with a reason until a note is open, so they follow it.
+		if (hasNote !== this.hasOpenNote && !this.isClosed) {
+			this.hasOpenNote = hasNote;
+			this.refreshSetupCard();
 		}
 	}
 
 	private setLoading(isLoading: boolean): void {
 		this.rootEl?.classList.toggle("is-loading", isLoading);
 		this.messagesEl?.setAttribute("aria-busy", String(isLoading));
-		if (this.statusEl) {
-			this.statusEl.setText(isLoading ? "AskMate is working." : "AskMate is ready for another request.");
-		}
+		const doc = this.rootEl?.doc;
+		const focused = doc?.activeElement ?? null;
 		this.imageButton?.toggleAttribute("disabled", isLoading);
 		this.clearButton?.toggleAttribute("disabled", isLoading);
 		this.workflowToggleButton?.toggleAttribute("disabled", isLoading);
@@ -2445,7 +3447,7 @@ export class AskMateView extends ItemView {
 		this.rootEl
 			?.querySelectorAll<HTMLButtonElement>(".askmate-message-action[data-askmate-requires-idle=\"true\"]")
 			.forEach((button) => {
-				button.disabled = isLoading;
+				button.disabled = isLoading || button.dataset.askmateBlocked === "true";
 			});
 		this.rootEl
 			?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("[data-askmate-preview-control=\"true\"]")
@@ -2453,6 +3455,10 @@ export class AskMateView extends ItemView {
 				control.disabled = isLoading;
 			});
 		this.sendButton.disabled = isLoading;
+		// A control that has focus and is then disabled drops the focus to the page, so keyboard users are put back in the box.
+		if (isLoading && focused && focused !== this.questionEl && this.rootEl?.contains(focused) && (focused as HTMLButtonElement).disabled) {
+			this.questionEl.focus();
+		}
 		this.refreshStopButton();
 		this.setButtonLabel(this.sendButton, isLoading ? "Sending" : "Send");
 		const sendShortcutLabel = this.getSendShortcutLabel();
@@ -2487,22 +3493,19 @@ export class AskMateView extends ItemView {
 		this.consoleStatusEl = composer.createDiv({ cls: "askmate-console-status" });
 		this.consoleStatusEl.setAttribute("role", "group");
 		this.consoleStatusEl.setAttribute("aria-label", "AskMate status");
-		// The mode button is created once and updated in place: re-creating it on every refresh (refreshes run on
-		// pointerdown and focusin) would replace it before a click could land.
-		this.consoleModeButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-segment is-mode" });
-		this.consoleModeButton.type = "button";
-		this.consoleModeButton.addEventListener("click", () => {
-			const order: OutputMode[] = ["chat", "note", "apply"];
-			const current = order.indexOf(normalizeOutputMode(this.plugin.settings.outputMode));
-			this.runUiTask(this.selectOutputMode(order[(current + 1) % order.length]));
+		// Every segment is created once and updated in place: refreshes run on pointerdown and focusin, and a segment that
+		// was replaced would take keyboard focus with it.
+		const segments = this.consoleStatusEl.createDiv({ cls: "askmate-console-status-segments" });
+		this.statusSegments = createStatusSegments(segments, {
+			onMode: () => {
+				const order: OutputMode[] = ["chat", "note", "apply"];
+				const current = order.indexOf(normalizeOutputMode(this.plugin.settings.outputMode));
+				this.runUiTask(this.selectOutputMode(order[(current + 1) % order.length]));
+			},
+			onModel: () => this.openModelPicker(),
+			onSetup: () => this.openSetupFlow()
 		});
-		this.consoleStatusSegmentsEl = this.consoleStatusEl.createDiv({ cls: "askmate-console-status-segments" });
-		// Created detached: refreshConsoleStatus re-attaches it among the segments it rebuilds.
-		this.consoleModelButton = createEl("button", { cls: "askmate-console-segment is-model", attr: { type: "button" } });
-		this.consoleModelButton.addEventListener("click", () => {
-			this.openModelPicker();
-		});
-		this.consoleStopButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-stop", text: "stop" });
+		this.consoleStopButton = this.consoleStatusEl.createEl("button", { cls: "askmate-console-stop", text: this.runs.describeStopControl().consoleText });
 		this.consoleStopButton.type = "button";
 		this.consoleStopButton.hidden = true;
 		this.consoleStopButton.addEventListener("click", () => {
@@ -2511,41 +3514,28 @@ export class AskMateView extends ItemView {
 	}
 
 	private refreshConsoleStatus(): void {
-		if (!this.consoleStatusSegmentsEl) {
+		if (!this.statusSegments) {
 			return;
 		}
 		const ref = this.plugin.getSelectedProviderModelRef();
-		const segments = formatConsoleStatus({
-			mode: normalizeOutputMode(this.plugin.settings.outputMode),
-			providerName: ref.providerName,
-			model: ref.model,
-			effort: this.plugin.supportsSelectedReasoningEffort() ? this.plugin.getSelectedReasoningEffort() : null,
-			dayUsedTokens: this.plugin.getTodayTokenUsage(),
-			dayBudgetTokens: this.plugin.settings.usageDailyTokenBudget
-		});
-		this.consoleStatusSegmentsEl.empty();
-		for (const segment of segments) {
-			if (segment.kind === "mode") {
-				if (this.consoleModeButton) {
-					this.consoleModeButton.setText(segment.text);
-					this.consoleModeButton.setAttribute("title", segment.title);
-					this.consoleModeButton.setAttribute("aria-label", segment.title);
-					this.consoleModeButton.disabled = Boolean(this.activeRun);
-				}
-				continue;
-			}
-			if (segment.kind === "model" && this.consoleModelButton) {
-				// Moved rather than recreated, for the same reason as the mode button.
-				this.consoleModelButton.setText(segment.text);
-				this.consoleModelButton.setAttribute("title", `${segment.title}. Click to switch.`);
-				this.consoleModelButton.setAttribute("aria-label", `${segment.title}. Click to switch model or provider.`);
-				this.consoleModelButton.disabled = Boolean(this.activeRun);
-				this.consoleStatusSegmentsEl.appendChild(this.consoleModelButton);
-				continue;
-			}
-			const span = this.consoleStatusSegmentsEl.createSpan({ cls: `askmate-console-segment is-${segment.kind}`, text: segment.text });
-			span.setAttribute("title", segment.title);
-		}
+		const mode = normalizeOutputMode(this.plugin.settings.outputMode);
+		this.statusSegments.update(buildStatusSegments({
+			console: formatConsoleStatus({
+				mode,
+				providerName: ref.providerName,
+				model: ref.model,
+				effort: this.plugin.supportsSelectedReasoningEffort() ? this.plugin.getSelectedReasoningEffort() : null,
+				dayUsedTokens: this.plugin.getTodayTokenUsage(),
+				dayBudgetTokens: this.plugin.settings.usageDailyTokenBudget
+			}),
+			stage: this.readSetupStage(),
+			stickySkills: this.threadMeta.skillIds?.length ?? 0,
+			mcp: wave2(this.plugin).mcpService?.status() ?? null,
+			busy: Boolean(this.activeRun)
+		}));
+		const modeButton = this.statusSegments.buttons.mode;
+		modeButton?.classList.toggle("is-note", mode === "note");
+		modeButton?.classList.toggle("is-apply", mode === "apply");
 	}
 
 	/** Returns true when the console handled the key (completion, history or stop). */
@@ -2634,7 +3624,8 @@ export class AskMateView extends ItemView {
 			models: listProviderModels(providerId, this.plugin.settings),
 			providers: TEXT_PROVIDER_IDS.map((id) => ({ id, label: TEXT_PROVIDER_LABELS[id] })),
 			// Scanning every note's tags is only worth it while a tag mention is being typed.
-			vaultTags: value.includes("@tag:") ? this.plugin.getVaultTags() : []
+			vaultTags: value.includes("@tag:") ? this.plugin.getVaultTags() : [],
+			skills: this.listUsableSkillsForCompletion()
 		});
 		if (result.items.length === 0) {
 			this.closeConsoleCompletions();
@@ -2695,8 +3686,12 @@ export class AskMateView extends ItemView {
 		}
 	}
 
-	/** Echo of a typed command. Kept out of `messages`, so commands never become thread history. */
+	/** Echo of a typed command. Kept out of `messages`, so commands never become thread history. Said once per submit. */
 	private echoConsoleCommand(raw: string): void {
+		if (this.echoedConsoleLine === raw) {
+			return;
+		}
+		this.echoedConsoleLine = raw;
 		const echo = this.createMessageEl("system", raw, false);
 		echo.wrapper.addClass("askmate-console-echo");
 	}
@@ -2734,41 +3729,46 @@ export class AskMateView extends ItemView {
 	private async submitConsoleInput(): Promise<void> {
 		const raw = this.questionEl.value.trim();
 		if (!raw) {
-			new Notice("Type a question, or /help for commands.");
+			this.notify("Type a question, or /help for commands.");
 			return;
 		}
 		this.closeConsoleCompletions();
 		const action = parseConsoleInput(raw, this.consoleCommands);
-		const sendsRequest = action.kind === "ask" || action.kind === "image" || action.kind === "workflow";
-		if (sendsRequest && !this.ensureIdleForNewRequest()) {
+		if (classifyConsoleAction(action) === "request" && !this.ensureIdleForNewRequest()) {
 			return;
 		}
 		this.rememberConsoleInput(raw);
+		this.echoedConsoleLine = null;
 
 		try {
 			await this.runConsoleAction(action, raw);
 		} catch (error) {
-			// Each action clears the prompt only after its risky work succeeded, so the typed text is still there to fix.
+			// The command is echoed once even if it was already echoed before the failure, and the text comes back to be fixed.
 			this.echoConsoleCommand(raw);
 			this.printConsoleOutput(this.plugin.getErrorMessage(error), "error");
+			if (!this.questionEl.value) {
+				this.questionEl.value = raw;
+			}
 		}
 	}
 
 	/** Clears the prompt and echoes the command once the action is known to succeed. */
 	private commitConsoleCommand(raw: string, echo = true): void {
 		this.questionEl.value = "";
+		this.scheduleRequestPreviewRefresh();
+		this.scheduleSkillChips();
 		if (echo) {
 			this.echoConsoleCommand(raw);
 		}
 	}
 
-	getLastAnswer(): LastAnswer | null {
+	getLastAnswer(): InsertableReply | null {
 		return this.lastAnswer;
 	}
 
 	private openModelPicker(): void {
 		if (this.activeRun) {
-			new Notice("Wait for the current AskMate request to finish, or stop it first.");
+			this.notify("Wait for the current AskMate request to finish, or stop it first.");
 			return;
 		}
 		const ref = this.plugin.getChatProviderModelRef();
@@ -2833,7 +3833,7 @@ export class AskMateView extends ItemView {
 		this.plugin.settings.composerLayout = layout;
 		await this.plugin.saveSettings();
 		this.plugin.refreshOpenAskMateViews();
-		new Notice(layout === "console"
+		this.notify(layout === "console"
 			? "AskMate layout: console. Type /layout compact to switch back."
 			: `AskMate layout: ${layout}. Type /layout console to come back.`);
 	}
@@ -2849,11 +3849,9 @@ export class AskMateView extends ItemView {
 				this.printConsoleOutput(formatConsoleHelp(this.consoleCommands));
 				return;
 			case "clear":
-				if (this.activeRun) {
-					throw new Error("Stop the current request before clearing the conversation.");
-				}
+				// Clearing the chat starts a new conversation and keeps the old one, so it is never a loss.
 				this.commitConsoleCommand(raw, false);
-				this.clearChat();
+				await this.startNewThread();
 				return;
 			case "mode":
 				if (this.activeRun) {
@@ -2861,7 +3859,7 @@ export class AskMateView extends ItemView {
 				}
 				await this.selectOutputMode(action.mode);
 				this.commitConsoleCommand(raw);
-				this.printConsoleOutput(`Output mode: ${formatOutputMode(action.mode)}.`);
+				this.printConsoleOutput(`Output mode: ${formatOutputMode(action.mode)}. It applies to your next question only.`);
 				return;
 			case "effort": {
 				if (action.effort) {
@@ -2876,10 +3874,16 @@ export class AskMateView extends ItemView {
 				return;
 			}
 			case "model":
+				if (action.query.trim() && this.activeRun) {
+					throw new Error("Wait for the current request to finish, or press Esc to stop it, before switching model.");
+				}
 				this.commitConsoleCommand(raw);
 				await this.runModelCommand(action.query);
 				return;
 			case "provider":
+				if (action.query.trim() && this.activeRun) {
+					throw new Error("Wait for the current request to finish, or press Esc to stop it, before switching provider.");
+				}
 				this.commitConsoleCommand(raw);
 				await this.runProviderCommand(action.query);
 				return;
@@ -2925,25 +3929,87 @@ export class AskMateView extends ItemView {
 				this.commitConsoleCommand(raw);
 				this.openThreadSwitcher("delete");
 				return;
+			case "setup":
+				this.commitConsoleCommand(raw);
+				this.openSetupFlow();
+				return;
+			case "welcome":
+				this.commitConsoleCommand(raw);
+				this.openWelcome();
+				return;
+			case "skills":
+				this.commitConsoleCommand(raw);
+				this.printConsoleOutput(this.describeSkills());
+				return;
+			case "mcp":
+				this.commitConsoleCommand(raw);
+				this.printConsoleOutput(formatMcpStatus(wave2(this.plugin).mcpService?.status()));
+				this.refreshConsoleStatus();
+				return;
+			case "test": {
+				this.commitConsoleCommand(raw);
+				const outcome = await this.runConnectionTest();
+				this.printConsoleOutput(outcome.line, outcome.ok ? "info" : "error");
+				if (!outcome.ok) {
+					// The card carries the button that fixes it.
+					this.openSetupFlow();
+				}
+				return;
+			}
+			case "images": {
+				this.commitConsoleCommand(raw);
+				if (action.setting) {
+					this.imagePreviewsEnabled = action.setting === "on";
+					this.writeImagePreviewSetting(this.imagePreviewsEnabled);
+				}
+				this.printConsoleOutput(this.imagePreviewsEnabled
+					? "Image previews are on. Pictures that a note links to are shown above a reply when your question asks to see them. Type /images off to turn them off."
+					: "Image previews are off. Type /images on to show the pictures that a note links to when you ask to see them.");
+				return;
+			}
+			case "skill": {
+				const found = lookUpSkill(this.requireSkillService(), action.name);
+				if (!found.ok) {
+					throw new Error(found.message);
+				}
+				if (!action.question) {
+					// With no question, the skill is chosen for the whole conversation.
+					this.commitConsoleCommand(raw);
+					this.printConsoleOutput(await this.toggleStickySkill(found.skill));
+					return;
+				}
+				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
+				if (!(await this.isProviderReadyForSubmit("Connect an AI provider before sending."))) {
+					return;
+				}
+				const refs = [action.name, ...action.mentions.skills];
+				this.assertSkillsUsable([...refs, ...this.onceSkillIds]);
+				await this.runRequest({ question: action.question, title: "AskMate Answer", options, displayText: raw, skillRefs: refs, onSent: () => this.clearComposerIf(raw) });
+				return;
+			}
+			case "diagram": {
+				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
+				await this.runDiagram(action.prompt, { options, displayText: raw, skillRefs: action.mentions.skills, onSent: () => this.clearComposerIf(raw) });
+				return;
+			}
 			case "ask": {
 				const draft = this.getRequestDraftOptions(false);
 				const withMode = action.outputMode ? { ...draft, outputMode: action.outputMode } : draft;
 				// A "//" line is sent as typed: "//image x" asks about "/image x" and never generates an image.
 				const options = this.applyConsoleMentions(action.literal ? { ...withMode, intentKind: "freeform_text" } : withMode, action.mentions);
-				if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before sending."))) {
+				if (!(await this.isProviderReadyForSubmit("Connect an AI provider before sending."))) {
 					return;
 				}
-				this.commitConsoleCommand(raw, false);
-				await this.runRequest(action.question, "AskMate Answer", options, undefined, raw);
+				this.assertSkillsUsable([...action.mentions.skills, ...this.onceSkillIds]);
+				await this.runRequest({ question: action.question, title: "AskMate Answer", options, displayText: raw, skillRefs: action.mentions.skills, onSent: () => this.clearComposerIf(raw) });
 				return;
 			}
 			case "image": {
 				const options = this.applyConsoleMentions(this.getRequestDraftOptions(true), action.mentions);
-				if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured()))) {
+				if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image"))) {
 					return;
 				}
-				this.commitConsoleCommand(raw, false);
-				await this.runRequest(action.prompt, "AskMate Image", options, undefined, raw);
+				await this.runRequest({ question: action.prompt, title: "AskMate Image", options, displayText: raw, onSent: () => this.clearComposerIf(raw) });
 				return;
 			}
 			case "workflow": {
@@ -2956,13 +4022,529 @@ export class AskMateView extends ItemView {
 				}
 				// The runner rebuilds workflow prompts from the template, so extra text travels as its own option.
 				const options = this.applyConsoleMentions({ workflow, workflowExtra: action.extra || undefined }, action.mentions);
-				if (!(await this.isProviderReadyForSubmit("Configure the selected AskMate provider in settings before running a workflow."))) {
+				if (!(await this.isProviderReadyForSubmit("Connect an AI provider before running a workflow."))) {
 					return;
 				}
-				this.commitConsoleCommand(raw, false);
-				await this.runRequest(this.plugin.getWorkflowPrompt(workflow), workflow.name, options, undefined, raw);
+				this.assertSkillsUsable([...action.mentions.skills, ...this.onceSkillIds]);
+				await this.runRequest({
+					question: this.plugin.getWorkflowPrompt(workflow),
+					title: workflow.name,
+					options,
+					displayText: raw,
+					skillRefs: action.mentions.skills,
+					onSent: () => this.clearComposerIf(raw)
+				});
 				return;
 			}
+			default:
+				return assertNeverAction(action);
+		}
+	}
+
+	// ----- Setup: the Connect card ---------------------------------------------------------------------------------
+
+	/** The card's place in the transcript: always its first entry, in every layout. */
+	private mountSetupHost(): void {
+		this.setupHostEl = this.messagesEl.createDiv({ cls: "askmate-setup-host", prepend: true });
+		this.setupHostEl.hidden = true;
+	}
+
+	private hasSecret = (name: string): boolean => {
+		try {
+			return Boolean(this.app.secretStorage.getSecret(name));
+		} catch {
+			return false;
+		}
+	};
+
+	private hasStoredKey(providerId: TextProviderId): boolean {
+		const name = this.plugin.getProviderSettings(providerId).apiKeySecretName?.trim() ?? "";
+		return name !== "" && this.hasSecret(name);
+	}
+
+	/** One answer to "is AskMate set up?", shared with the status bar and the settings page when the plugin provides it. */
+	private readSetupStage(): SetupStage {
+		const stage = wave2(this.plugin).getSetupState?.() ?? deriveSetupState(this.plugin.settings, this.hasSecret);
+		// A test run here counts for ten minutes; after that the plugin's own record is the only answer.
+		const fresh = this.setup.test && Date.now() - this.setup.test.at < LOCAL_TEST_MAX_AGE_MS ? this.setup.test : null;
+		const overlaid = overlayTestResult(stage, fresh);
+		return this.setup.testing && isReadyToSend(overlaid)
+			? { providerId: overlaid.providerId, label: overlaid.label, model: overlaid.model, kind: "testing" }
+			: overlaid;
+	}
+
+	private refreshSetupCard(): void {
+		const host = this.setupHostEl;
+		if (!host || this.isClosed) {
+			return;
+		}
+		const stage = this.readSetupStage();
+		// The chat provider is what the card is about until the person picks another chip, whichever provider it is. A chip
+		// picked in an earlier visit does not outlive the visit, or a later gap in the chat provider would go unseen.
+		const choosing = this.setup.flowOpen || this.setup.welcomeOpen;
+		const selected = (choosing ? this.setup.provider : null) ?? stage.providerId;
+		const model = deriveSetupCardModel({
+			stage,
+			selectedProvider: selected,
+			flowOpen: this.setup.flowOpen,
+			welcomeOpen: this.setup.welcomeOpen,
+			hasOpenNote: this.hasOpenNote,
+			hasStoredKey: this.hasStoredKey(selected),
+			localError: this.setup.localError
+		});
+		// What was typed survives a redraw, and so does the keyboard focus inside the card. The view's draft is current
+		// because every keystroke reports to it; reading it back from the old card would undo a clear.
+		const hadFocus = host.contains(host.doc.activeElement);
+		this.bindDraftTo(selected);
+		host.empty();
+		this.setupHandle = null;
+		host.hidden = !model.visible;
+		if (!model.visible) {
+			// With the card gone, the tips can take its place.
+			this.renderOnboardingTips();
+			return;
+		}
+		this.setupHandle = renderSetupCard(host, model, {
+			onSelectProvider: (id) => {
+				this.setup.provider = id;
+				this.setup.flowOpen = true;
+				this.setup.localError = null;
+				this.refreshSetupCard();
+				this.setupHandle?.focusKey();
+			},
+			onConnect: (id, draft) => {
+				this.setup.draft = draft;
+				this.runUiTask(this.connectFromCard(id, draft));
+			},
+			onAction: (action) => this.handleSetupAction(action),
+			onStarter: (chip) => this.runStarter(chip),
+			onDismiss: () => this.closeSetupFlow(),
+			onDraft: (draft) => {
+				this.setup.draft = draft;
+			}
+		}, this.setup.draft);
+		if (hadFocus) {
+			this.setupHandle.focusKey();
+		}
+	}
+
+	/** The draft belongs to one provider: a key typed for OpenAI must never reach the Anthropic field or be saved under it. */
+	private bindDraftTo(providerId: TextProviderId): void {
+		if (this.setup.draftProvider !== providerId) {
+			this.setup.draftProvider = providerId;
+			this.setup.draft = emptySetupDraft();
+		}
+	}
+
+	/** The key was used, rejected or abandoned: neither the card nor the view keeps it. */
+	private clearSetupKey(): void {
+		this.setup.draft = { ...this.setup.draft, apiKey: "" };
+		this.setupHandle?.clearKey();
+	}
+
+	/** Shows the Connect card and puts the cursor in its first field. The typed question stays where it is. */
+	private openSetupFlow(options: { message?: string; provider?: TextProviderId } = {}): void {
+		// A new visit starts from the chat provider; a visit already open keeps the chip the person is on.
+		if (options.provider) {
+			this.setup.provider = options.provider;
+		} else if (!this.setup.flowOpen) {
+			this.setup.provider = null;
+		}
+		this.setup.flowOpen = true;
+		this.setup.welcomeOpen = false;
+		this.setup.localError = null;
+		if (options.message) {
+			this.notify(options.message);
+		}
+		this.refreshSetupCard();
+		this.shouldFollowMessages = false;
+		this.messagesEl.scrollTop = 0;
+		this.setupHandle?.focusKey();
+		this.refreshConsoleStatus();
+	}
+
+	private openWelcome(): void {
+		if (!isReadyToSend(this.readSetupStage())) {
+			this.openSetupFlow();
+			return;
+		}
+		this.setup.provider = null;
+		this.setup.flowOpen = false;
+		this.setup.welcomeOpen = true;
+		this.refreshSetupCard();
+		this.shouldFollowMessages = false;
+		this.messagesEl.scrollTop = 0;
+	}
+
+	private closeSetupFlow(): void {
+		this.setup.provider = null;
+		this.setup.flowOpen = false;
+		this.setup.welcomeOpen = false;
+		this.setup.localError = null;
+		this.clearSetupKey();
+		this.refreshSetupCard();
+		this.refreshConsoleStatus();
+		this.questionEl.focus();
+	}
+
+	private failSetup(message: string, action: SetupAction["kind"]): void {
+		this.setup.localError = { message, detail: null, action: SETUP_ACTIONS[action] };
+		this.refreshSetupCard();
+		this.setupHandle?.focusKey();
+	}
+
+	/** Saves the key (or the address of a local server), makes the provider the chat provider, and tests the connection. */
+	private async connectFromCard(providerId: TextProviderId, draft: SetupCardDraft): Promise<void> {
+		if (this.setup.testing) {
+			return;
+		}
+		const catalog = getProviderCatalogEntry(providerId);
+		const settings = this.plugin.settings;
+		this.setup.flowOpen = true;
+		this.setup.welcomeOpen = false;
+		this.setup.localError = null;
+		this.setup.test = null;
+		if (catalog.needsKey) {
+			const typed = draft.apiKey.trim();
+			if (typed) {
+				const checked = checkApiKeyInput(typed);
+				if (!checked.ok) {
+					this.failSetup(checked.message, "update-key");
+					return;
+				}
+				const api = wave2(this.plugin);
+				if (!api.saveProviderApiKey) {
+					this.failSetup("This version of AskMate cannot store a key from here. Open settings to add it.", "open-settings");
+					return;
+				}
+				applyChatSelection(settings, providerId);
+				await this.plugin.saveSettings();
+				await api.saveProviderApiKey(providerId, checked.key);
+				// Stored now: the typed copy goes from the field and from memory before anything redraws the card.
+				this.clearSetupKey();
+			} else if (this.hasStoredKey(providerId)) {
+				applyChatSelection(settings, providerId);
+				await this.plugin.saveSettings();
+			} else {
+				this.failSetup("Paste your API key first.", "update-key");
+				return;
+			}
+		} else {
+			const baseUrl = draft.baseUrl.trim() || catalog.defaultBaseUrl;
+			if (!/^https?:\/\/\S+$/i.test(baseUrl)) {
+				this.failSetup("The address must start with http:// or https://, for example http://localhost:11434/v1.", "check-address");
+				return;
+			}
+			const model = draft.model.trim();
+			settings.providers[providerId].baseUrl = baseUrl;
+			applyChatSelection(settings, providerId, model || undefined);
+			await this.plugin.saveSettings();
+		}
+		this.plugin.refreshOpenAskMateViews();
+		await this.runConnectionTest();
+	}
+
+	/** Tests the selected provider and says the result in plain words, on the card and in the line it returns. */
+	private async runConnectionTest(): Promise<{ ok: boolean; line: string }> {
+		if (this.setup.testing) {
+			return { ok: false, line: "A connection test is already running." };
+		}
+		const ref = this.plugin.getChatProviderModelRef();
+		const context = { providerId: ref.providerId, baseUrl: this.plugin.getProviderSettings(ref.providerId).baseUrl, model: ref.model };
+		this.setup.testing = true;
+		this.setup.test = null;
+		this.setup.localError = null;
+		this.refreshSetupCard();
+		this.refreshConsoleStatus();
+		let result: ConnectionTestLike;
+		try {
+			const api = wave2(this.plugin);
+			result = api.testProviderConnectionDetailed
+				? await api.testProviderConnectionDetailed()
+				: { ok: true, message: await this.plugin.testSelectedProviderConnection() };
+		} catch (error) {
+			result = { ok: false, message: this.plugin.getErrorMessage(error) };
+		}
+		this.setup.testing = false;
+		if (this.isClosed) {
+			return { ok: result.ok, line: result.message };
+		}
+		let line: string;
+		let ok = false;
+		if (result.ok && result.modelFound !== false) {
+			ok = true;
+			this.setup.test = { status: "ok", providerId: ref.providerId, model: ref.model, at: Date.now() };
+			line = `Connected to ${ref.providerName}.`;
+			if (this.setup.flowOpen) {
+				// The person is on the card: the next step is a starter, so the card turns into one.
+				this.setup.welcomeOpen = true;
+			}
+			await this.markFirstRunComplete();
+		} else {
+			const failure = result.ok ? new Error(`The model ${ref.model} was not found. ${result.message}`) : new Error(result.message);
+			const copy = mapProviderErrorToSetupCopy(failure, context);
+			this.setup.test = { status: "failed", providerId: ref.providerId, model: ref.model, copy, at: Date.now() };
+			line = copy.message;
+		}
+		this.refreshSetupCard();
+		this.refreshConsoleStatus();
+		void this.refreshReadiness();
+		return { ok, line };
+	}
+
+	private async markFirstRunComplete(): Promise<void> {
+		if (!this.plugin.settings.firstRunCompletedAt) {
+			this.plugin.settings.firstRunCompletedAt = new Date().toISOString();
+			await this.plugin.saveSettings();
+		}
+	}
+
+	/** The button under an error, whatever the error was: each kind of fix goes to one place. */
+	private handleSetupAction(action: SetupAction): void {
+		switch (action.kind) {
+			case "update-key":
+				// The rejected key must not stay in the field, or the next paste would be added to the end of it.
+				this.clearSetupKey();
+				// No provider override: the card stays on the chip in use. A rejected connection test is only drawn on the chip
+				// of the provider it tested, and a local error (empty or malformed key) belongs to the chip the person typed on,
+				// which is not necessarily the chat provider yet.
+				this.openSetupFlow();
+				return;
+			case "choose-model":
+				this.openModelPicker();
+				return;
+			case "check-address":
+				if (this.plugin.getChatProviderId() === "openai-compatible") {
+					this.openSetupFlow({ provider: "openai-compatible" });
+				} else {
+					this.openSettings();
+				}
+				return;
+			case "start-server":
+			case "retry":
+			case "test":
+				this.runUiTask(this.runConnectionTest().then(() => undefined));
+				return;
+			case "open-settings":
+				this.openSettings();
+				return;
+			default:
+				assertNeverSetupAction(action.kind);
+		}
+	}
+
+	private openSettings(): void {
+		const api = wave2(this.plugin);
+		if (api.openSettingsTab) {
+			api.openSettingsTab();
+		} else {
+			this.notify("Open Obsidian settings, then choose AskMate under Community plugins.");
+		}
+	}
+
+	private runStarter(chip: StarterChip): void {
+		const action = chip.action;
+		this.closeSetupFlow();
+		switch (action.kind) {
+			case "workflow": {
+				const workflow = this.plugin.getAllWorkflows().find((candidate) => candidate.id === action.workflowId);
+				this.runUiTask(workflow ? this.runWorkflow(workflow) : this.runPrompt(action.fallbackPrompt));
+				return;
+			}
+			case "diagram":
+				this.runUiTask(this.runDiagram(""));
+				return;
+			case "prompt":
+				this.runUiTask(this.runPrompt(action.prompt));
+				return;
+		}
+	}
+
+	private async runPrompt(prompt: string): Promise<void> {
+		if (!this.ensureIdleForNewRequest()) {
+			return;
+		}
+		if (!(await this.isProviderReadyForSubmit("Connect an AI provider before sending."))) {
+			return;
+		}
+		await this.runRequest({ question: prompt, title: "AskMate Answer", options: this.getRequestDraftOptions(false) });
+	}
+
+	// ----- Skills ----------------------------------------------------------------------------------------------------
+
+	private requireSkillService(): SkillService {
+		const service = wave2(this.plugin).skillService;
+		if (!service) {
+			throw new Error("Skills are not available in this build of AskMate.");
+		}
+		return service;
+	}
+
+	/** Skills that /skill and @skill: can complete: the ones that can be used right now. */
+	private listUsableSkillsForCompletion(): Array<{ name: string; description: string }> {
+		const service = wave2(this.plugin).skillService;
+		if (!service || !this.plugin.settings.skills.enabled) {
+			return [];
+		}
+		return service.list()
+			.filter((skill) => skill.valid && skill.manifest.userInvocable && (service.statusOf(skill) === "built-in" || service.statusOf(skill) === "ready"))
+			.map((skill) => ({ name: skill.name, description: skill.manifest.description }));
+	}
+
+	/** The id a request carries for a skill the person named by id or by plain name. A name that matches nothing is passed on and noticed by the resolver. */
+	private skillIdFor(ref: string): string {
+		return wave2(this.plugin).skillService?.find(ref)?.id ?? ref;
+	}
+
+	/** Refuses a skill that does not exist or cannot be used yet, with a sentence that says what to do. Nothing is sent. */
+	private assertSkillsUsable(refs: readonly string[]): void {
+		const needed = refs.filter((ref) => ref !== MERMAID_SKILL_ID);
+		if (needed.length === 0) {
+			return;
+		}
+		const service = this.requireSkillService();
+		for (const ref of needed) {
+			const found = lookUpSkill(service, ref);
+			if (!found.ok) {
+				throw new Error(found.message);
+			}
+		}
+	}
+
+	private skillTitle(skill: Skill): string {
+		return skill.manifest.title.trim() || skill.name;
+	}
+
+	/** Turns a skill on or off for the whole conversation, and says which. */
+	private async toggleStickySkill(skill: Skill): Promise<string> {
+		const current = this.threadMeta.skillIds ?? [];
+		const turnOn = !current.includes(skill.id);
+		const next = turnOn ? [...current, skill.id] : current.filter((id) => id !== skill.id);
+		this.threadMeta = withThreadSkillIds(this.threadMeta, next);
+		this.refreshSkillChips();
+		this.refreshConsoleStatus();
+		this.queueThreadSave();
+		const title = this.skillTitle(skill);
+		if (!turnOn) {
+			return `${title} is off for this conversation.`;
+		}
+		const crowded = next.length > MAX_SKILLS_PER_REQUEST ? ` Only ${MAX_SKILLS_PER_REQUEST} skills run at once, so the others are skipped.` : "";
+		return `${title} is on for this conversation. It adds about ${skill.characters.toLocaleString("en-GB")} characters to each request. Click its chip to turn it off.${crowded}`;
+	}
+
+	private describeSkills(): string {
+		const service = wave2(this.plugin).skillService;
+		if (!service) {
+			return "Skills are not available in this build of AskMate.";
+		}
+		return formatSkillsListing(service.list(), (skill) => service.statusOf(skill), this.threadMeta.skillIds ?? []);
+	}
+
+	private scheduleSkillChips(): void {
+		if (!this.skillChipsEl) {
+			return;
+		}
+		window.clearTimeout(this.skillChipsTimer);
+		this.skillChipsTimer = window.setTimeout(() => this.refreshSkillChips(), 300);
+	}
+
+	/** The row above the box: skills that are on, and at most one suggestion for what is being typed. */
+	private refreshSkillChips(): void {
+		const host = this.skillChipsEl;
+		if (!host || this.isClosed) {
+			return;
+		}
+		const service = wave2(this.plugin).skillService;
+		const enabled = Boolean(service) && this.plugin.settings.skills.enabled;
+		this.skillPickerButton?.toggleAttribute("hidden", !enabled);
+		if (!service || !enabled) {
+			if (this.skillChipsSignature !== "") {
+				this.skillChipsSignature = "";
+				renderSkillChips(host, [], { onRemove: () => undefined, onAccept: () => undefined });
+			}
+			return;
+		}
+		const known = (ids: readonly string[]): Skill[] => ids.flatMap((id) => {
+			const skill = service.get(id);
+			return skill ? [skill] : [];
+		});
+		const sticky = known(this.threadMeta.skillIds ?? []);
+		const once = known(this.onceSkillIds);
+		const text = this.questionEl?.value.trim() ?? "";
+		let suggestion: SkillSuggestion | null = null;
+		if (text.length >= 8 && !text.startsWith("/")) {
+			suggestion = service.resolve({ request: text, explicit: [], sticky: sticky.map((skill) => skill.id) }).suggestion;
+		}
+		const suggested = suggestion ? service.get(suggestion.id) : null;
+		const chips = buildSkillChips({
+			sticky,
+			once,
+			suggestion,
+			...(suggested ? { suggestionTitle: this.skillTitle(suggested) } : {})
+		});
+		const signature = skillChipsSignature(chips);
+		if (signature === this.skillChipsSignature) {
+			return;
+		}
+		this.skillChipsSignature = signature;
+		renderSkillChips(host, chips, {
+			onRemove: (chip) => {
+				if (chip.state === "sticky") {
+					this.threadMeta = withThreadSkillIds(this.threadMeta, (this.threadMeta.skillIds ?? []).filter((id) => id !== chip.id));
+					this.queueThreadSave();
+				} else {
+					this.onceSkillIds = this.onceSkillIds.filter((id) => id !== chip.id);
+				}
+				this.refreshSkillChips();
+				this.refreshConsoleStatus();
+				this.questionEl.focus();
+			},
+			onAccept: (chip) => {
+				this.onceSkillIds = Array.from(new Set([...this.onceSkillIds, chip.id]));
+				this.refreshSkillChips();
+				this.questionEl.focus();
+			}
+		});
+	}
+
+	private renderSkillPicker(parent: HTMLElement): void {
+		const button = this.createActionButton(parent, "wand-sparkles", "Choose a skill", "askmate-workflow-toggle askmate-skill-picker");
+		button.hidden = true;
+		this.skillPickerButton = button;
+		button.addEventListener("click", (event) => this.openSkillPicker(event, button));
+	}
+
+	/** Skills the person can keep on for this conversation. A skill that needs review is listed but cannot be picked. */
+	private openSkillPicker(event: MouseEvent, anchor: HTMLElement): void {
+		const service = wave2(this.plugin).skillService;
+		if (!service) {
+			return;
+		}
+		const menu = new Menu();
+		const sticky = this.threadMeta.skillIds ?? [];
+		const skills = service.list().filter((skill) => skill.valid && skill.manifest.userInvocable);
+		for (const skill of skills) {
+			const status = service.statusOf(skill);
+			const usable = status === "built-in" || status === "ready";
+			menu.addItem((item) => {
+				item.setTitle(usable ? this.skillTitle(skill) : `${this.skillTitle(skill)} (${skillStatusLabel(status)})`)
+					.setIcon("wand-sparkles")
+					.setChecked(sticky.includes(skill.id))
+					.setDisabled(!usable)
+					.onClick(() => this.runUiTask(this.toggleStickySkill(skill).then((message) => this.notify(message))));
+			});
+		}
+		if (skills.length > 0) {
+			menu.addSeparator();
+		}
+		menu.addItem((item) => {
+			item.setTitle("Manage skills in settings").setIcon("settings").onClick(() => this.openSettings());
+		});
+		if (event.detail === 0) {
+			const rect = anchor.getBoundingClientRect();
+			menu.showAtPosition({ x: rect.left, y: rect.bottom });
+		} else {
+			menu.showAtMouseEvent(event);
 		}
 	}
 
@@ -2971,7 +4553,7 @@ export class AskMateView extends ItemView {
 		const request = inspection.request;
 		const metadata = request.metadata;
 		const lines = [
-			`source    ${request.context.source}: ${request.context.file?.path ?? "unsaved note"}`,
+			`source    ${isNoNoteSource(request.context.source) ? "no note is open" : `${request.context.source}: ${request.context.file?.path ?? "unsaved note"}`}`,
 			`provider  ${inspection.providerName}: ${inspection.model}`,
 			`output    ${formatOutputMode(metadata.outputMode)}`,
 			`tokens    about ${inspection.estimatedInputTokens.toLocaleString()} input`,
