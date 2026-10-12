@@ -11,33 +11,50 @@ import {
 	type DiffConfirmOptions,
 	type PromptInspection
 } from "../../shared/core";
+import { addModalButton, applyDialogSemantics, copyWithNotice, createButtonRow } from "./dialog";
+import { markInvisibleCharacters } from "./invisibleChars";
+
+/** What a confirmation says and offers. Callers name the action, so a destructive prompt never reads like a routine one. */
+export interface ConfirmOptions {
+	/** Dialog title. Defaults to a generic one, which only suits callers that have not been updated yet. */
+	title?: string;
+	/** A specific verb such as "Delete conversations". Defaults to "Confirm". */
+	confirmLabel?: string;
+	cancelLabel?: string;
+	/** Styles the confirm button as destructive. Cancel keeps the focus either way. */
+	destructive?: boolean;
+	/** Extra lines under the message, for example what is kept. */
+	details?: readonly string[];
+}
 
 class AskMateConfirmModal extends Modal {
 	private readonly message: string;
+	private readonly options: ConfirmOptions;
 	private readonly resolve: (value: boolean) => void;
 	private resolved = false;
 
-	constructor(app: App, message: string, resolve: (value: boolean) => void) {
+	constructor(app: App, message: string, options: ConfirmOptions, resolve: (value: boolean) => void) {
 		super(app);
 		this.message = message;
+		this.options = options;
 		this.resolve = resolve;
 	}
 
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		this.setTitle("Confirm AskMate action");
-		contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const cancelButton = actions.createEl("button", { text: "Cancel" });
-		cancelButton.type = "button";
-		cancelButton.addEventListener("click", () => {
-			this.finish(false);
-		});
-		const confirmButton = actions.createEl("button", { cls: "mod-cta", text: "Confirm" });
-		confirmButton.type = "button";
-		confirmButton.addEventListener("click", () => {
-			this.finish(true);
+		this.setTitle(this.options.title ?? "Confirm AskMate action");
+		const messageEl = contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
+		for (const detail of this.options.details ?? []) {
+			contentEl.createEl("p", { cls: "askmate-modal-message", text: detail });
+		}
+		applyDialogSemantics(this, messageEl);
+		const actions = createButtonRow(contentEl);
+		const cancelButton = addModalButton(actions, this.options.cancelLabel ?? "Cancel", { onClick: () => this.finish(false) });
+		addModalButton(actions, this.options.confirmLabel ?? "Confirm", {
+			cta: !this.options.destructive,
+			warning: this.options.destructive === true,
+			onClick: () => this.finish(true)
 		});
 		// Cancel is the safe default for destructive confirmations; Enter activates whichever button has focus.
 		cancelButton.focus();
@@ -76,9 +93,9 @@ class AskMatePromptModal extends Modal {
 		contentEl.empty();
 		this.setTitle("AskMate input");
 		const messageEl = contentEl.createEl("p", { cls: "askmate-modal-message", text: this.message });
-		messageEl.id = "askmate-prompt-message";
+		applyDialogSemantics(this, messageEl);
 		this.inputEl = contentEl.createEl("input", { type: "text", value: this.initialValue });
-		this.inputEl.setAttribute("aria-label", this.message);
+		// The message names the field through aria-labelledby on the dialog and aria-describedby here; a second label would repeat it.
 		this.inputEl.setAttribute("aria-describedby", messageEl.id);
 		this.inputEl.addClass("askmate-modal-input");
 		this.inputEl.addEventListener("keydown", (event) => {
@@ -88,17 +105,9 @@ class AskMatePromptModal extends Modal {
 				this.finish(this.inputEl?.value ?? "");
 			}
 		});
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const cancelButton = actions.createEl("button", { text: "Cancel" });
-		cancelButton.type = "button";
-		cancelButton.addEventListener("click", () => {
-			this.finish(null);
-		});
-		const submitButton = actions.createEl("button", { cls: "mod-cta", text: "Continue" });
-		submitButton.type = "button";
-		submitButton.addEventListener("click", () => {
-			this.finish(this.inputEl?.value ?? "");
-		});
+		const actions = createButtonRow(contentEl);
+		addModalButton(actions, "Cancel", { onClick: () => this.finish(null) });
+		addModalButton(actions, "Continue", { cta: true, onClick: () => this.finish(this.inputEl?.value ?? "") });
 		this.inputEl.focus();
 		this.inputEl.select();
 	}
@@ -116,6 +125,13 @@ class AskMatePromptModal extends Modal {
 		this.close();
 	}
 }
+
+const DIFF_ROW_LABELS: Readonly<Record<string, string>> = {
+	added: "Added line",
+	removed: "Removed line",
+	context: "Unchanged line",
+	omitted: "Skipped lines"
+};
 
 export class AskMateDiffConfirmModal extends Modal {
 	private readonly options: DiffConfirmOptions;
@@ -140,7 +156,8 @@ export class AskMateDiffConfirmModal extends Modal {
 					? "Replace this heading section with AskMate output?"
 					: "Replace the full note with AskMate output?";
 		this.setTitle(title);
-		contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
+		const targetEl = contentEl.createDiv({ cls: "askmate-diff-summary", text: this.options.targetLabel });
+		applyDialogSemantics(this, targetEl);
 		contentEl.createDiv({
 			cls: "askmate-diff-summary",
 			text: `Before: ${this.options.before.split(/\r?\n/).length} lines, ${this.options.before.length.toLocaleString()} chars. After: ${this.options.after.split(/\r?\n/).length} lines, ${this.options.after.length.toLocaleString()} chars.`
@@ -153,21 +170,27 @@ export class AskMateDiffConfirmModal extends Modal {
 		if (this.options.warning) {
 			contentEl.createDiv({ cls: "askmate-diff-warning", text: this.options.warning });
 		}
-		const diffEl = contentEl.createDiv({ cls: "askmate-diff-view" });
-		for (const line of buildMarkdownLineDiff(this.options.before, this.options.after)) {
-			const row = diffEl.createDiv({ cls: `askmate-diff-line askmate-diff-line-${line.kind}` });
-			row.createSpan({ cls: "askmate-diff-line-number", text: line.oldLineNumber === null ? "" : String(line.oldLineNumber) });
-			row.createSpan({ cls: "askmate-diff-line-number", text: line.newLineNumber === null ? "" : String(line.newLineNumber) });
-			const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : line.kind === "omitted" ? "…" : " ";
-			row.createSpan({ text: `${marker} ${line.text}` });
+		const rows = buildMarkdownLineDiff(this.options.before, this.options.after).map((line) => ({ line, marked: markInvisibleCharacters(line.text) }));
+		const flaggedCount = rows.filter((row) => row.marked.flagged).length;
+		if (flaggedCount > 0) {
+			contentEl.createDiv({
+				cls: "askmate-diff-warning",
+				text: `${flaggedCount.toLocaleString()} ${flaggedCount === 1 ? "line holds" : "lines hold"} characters you cannot normally see, such as zero-width or text direction controls. They are shown in square brackets, for example [U+200B].`
+			});
 		}
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const cancelButton = actions.createEl("button", { text: "Cancel" });
-		cancelButton.type = "button";
-		cancelButton.addEventListener("click", () => this.finish(false));
-		const applyButton = actions.createEl("button", { cls: "mod-cta", text: "Apply" });
-		applyButton.type = "button";
-		applyButton.addEventListener("click", () => this.finish(true));
+		// The changes are a labelled region that the keyboard can reach, because the view can be long and scrolls.
+		const diffEl = contentEl.createDiv({ cls: "askmate-diff-view", attr: { role: "region", tabindex: "0", "aria-label": "Changes" } });
+		for (const { line, marked } of rows) {
+			const row = diffEl.createDiv({ cls: `askmate-diff-line askmate-diff-line-${line.kind}${marked.flagged ? " is-flagged" : ""}` });
+			row.createSpan({ cls: "askmate-visually-hidden", text: `${DIFF_ROW_LABELS[line.kind] ?? "Line"}${marked.flagged ? " with hidden characters" : ""}: ` });
+			row.createSpan({ cls: "askmate-diff-line-number", text: line.oldLineNumber === null ? "" : String(line.oldLineNumber), attr: { "aria-hidden": "true" } });
+			row.createSpan({ cls: "askmate-diff-line-number", text: line.newLineNumber === null ? "" : String(line.newLineNumber), attr: { "aria-hidden": "true" } });
+			const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : line.kind === "omitted" ? "…" : " ";
+			row.createSpan({ text: `${marker} ${marked.text}` });
+		}
+		const actions = createButtonRow(contentEl);
+		addModalButton(actions, "Cancel", { onClick: () => this.finish(false) }).focus();
+		addModalButton(actions, "Apply", { cta: true, onClick: () => this.finish(true) });
 	}
 
 	onClose(): void {
@@ -200,16 +223,15 @@ export class AskMateTextViewerModal extends Modal {
 		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-prompt-inspector");
 		this.setTitle(this.title);
+		applyDialogSemantics(this);
 		const textarea = contentEl.createEl("textarea", { cls: "askmate-prompt-inspector-textarea" });
 		textarea.setAttribute("aria-label", this.title);
 		textarea.value = this.value;
 		textarea.readOnly = true;
 		textarea.rows = 14;
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
-		closeButton.type = "button";
-		closeButton.addEventListener("click", () => this.close());
-		closeButton.focus();
+		const actions = createButtonRow(contentEl);
+		addModalButton(actions, "Copy", { onClick: () => void copyWithNotice(this.value, "the text") });
+		addModalButton(actions, "Close", { cta: true, onClick: () => this.close() }).focus();
 	}
 }
 
@@ -227,10 +249,11 @@ export class AskMatePromptInspectorModal extends Modal {
 		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-prompt-inspector");
 		this.setTitle("Final prompt inspector");
-		contentEl.createDiv({
+		const metaEl = contentEl.createDiv({
 			cls: "askmate-prompt-inspector-meta",
 			text: `${this.inspection.providerName}: ${this.inspection.model} · about ${formatTokenCount(this.inspection.estimatedInputTokens)} input tokens · ${formatRequestIntent(this.inspection.request.metadata.intentKind)}`
 		});
+		applyDialogSemantics(this, metaEl);
 		if (this.inspection.blockers.length > 0) {
 			contentEl.createDiv({ cls: "askmate-budget-warning askmate-budget-blocker", text: this.inspection.blockers.join(" ") });
 		}
@@ -242,10 +265,9 @@ export class AskMatePromptInspectorModal extends Modal {
 		if (this.inspection.secondaryInput.trim()) {
 			this.renderTextarea(contentEl, "Secondary image prompt", this.inspection.secondaryInput);
 		}
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
-		closeButton.type = "button";
-		closeButton.addEventListener("click", () => this.close());
+		const actions = createButtonRow(contentEl);
+		addModalButton(actions, "Copy final prompt", { onClick: () => void copyWithNotice(this.inspection.input, "the final prompt") });
+		addModalButton(actions, "Close", { cta: true, onClick: () => this.close() }).focus();
 	}
 
 	private renderTextarea(parent: HTMLElement, label: string, value: string): void {
@@ -280,7 +302,8 @@ export class AskMateNoteHistoryModal extends Modal {
 		this.modalEl.addClass("askmate-modal-wide");
 		contentEl.addClass("askmate-note-history");
 		this.setTitle("AskMate note history");
-		contentEl.createDiv({ cls: "askmate-note-history-meta", text: this.sourcePath || "No active note" });
+		const metaEl = contentEl.createDiv({ cls: "askmate-note-history-meta", text: this.sourcePath || "No active note" });
+		applyDialogSemantics(this, metaEl);
 		const turns = this.plugin.getNoteHistoryForPath(this.sourcePath).slice().reverse();
 		if (turns.length === 0) {
 			contentEl.createDiv({ cls: "askmate-usage-empty", text: "No AskMate history for this note yet." });
@@ -291,31 +314,34 @@ export class AskMateNoteHistoryModal extends Modal {
 				card.createEl("strong", { text: turn.title });
 				card.createEl("p", { text: truncateLabel(turn.question, 220) });
 				card.createEl("p", { text: truncateLabel(turn.answer, 300) });
-				const actions = card.createDiv({ cls: "askmate-note-history-actions" });
-				const showQuestion = actions.createEl("button", { text: "Show question" });
+				const turnActions = card.createDiv({ cls: "askmate-note-history-actions" });
+				const showQuestion = turnActions.createEl("button", { text: "Show question" });
 				showQuestion.type = "button";
 				showQuestion.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate question", turn.question).open());
-				const showAnswer = actions.createEl("button", { text: "Show answer" });
+				const showAnswer = turnActions.createEl("button", { text: "Show answer" });
 				showAnswer.type = "button";
 				showAnswer.addEventListener("click", () => new AskMateTextViewerModal(this.app, "AskMate answer", turn.answer).open());
 			}
 		}
-		const actions = contentEl.createDiv({ cls: "askmate-modal-actions" });
-		const clearButton = actions.createEl("button", { cls: "mod-warning", text: "Clear note history" });
-		clearButton.type = "button";
-		clearButton.disabled = turns.length === 0;
-		clearButton.addEventListener("click", () => {
-			void askMateConfirm(this.app, `Clear stored AskMate history for "${this.sourcePath}"?`).then(async (confirmed) => {
-				if (!confirmed) {
-					return;
-				}
-				await this.plugin.clearNoteHistoryForPath(this.sourcePath);
-				this.render();
-			}).catch((error) => new Notice(this.plugin.getErrorMessage(error)));
+		const actions = createButtonRow(contentEl);
+		const clearButton = addModalButton(actions, "Clear note history", {
+			warning: true,
+			onClick: () => {
+				void askMateConfirm(this.app, `Clear the stored AskMate history for "${this.sourcePath}"? The conversations you saved in the sidebar are not affected.`, {
+					title: "Clear note history",
+					confirmLabel: "Clear history",
+					destructive: true
+				}).then(async (confirmed) => {
+					if (!confirmed) {
+						return;
+					}
+					await this.plugin.clearNoteHistoryForPath(this.sourcePath);
+					this.render();
+				}).catch((error) => new Notice(this.plugin.getErrorMessage(error)));
+			}
 		});
-		const closeButton = actions.createEl("button", { cls: "mod-cta", text: "Close" });
-		closeButton.type = "button";
-		closeButton.addEventListener("click", () => this.close());
+		clearButton.disabled = turns.length === 0;
+		addModalButton(actions, "Close", { cta: true, onClick: () => this.close() });
 	}
 }
 
@@ -325,9 +351,13 @@ export function askMateDiffConfirm(app: App, options: Omit<DiffConfirmOptions, "
 	});
 }
 
-export function askMateConfirm(app: App, message: string): Promise<boolean> {
+/**
+ * Asks a yes or no question. Cancel keeps the focus, and Escape or closing the dialog answers no. Pass `title`, `confirmLabel`
+ * and `destructive` so the button says what it will do instead of "Confirm".
+ */
+export function askMateConfirm(app: App, message: string, options: ConfirmOptions = {}): Promise<boolean> {
 	return new Promise((resolve) => {
-		new AskMateConfirmModal(app, message, resolve).open();
+		new AskMateConfirmModal(app, message, options, resolve).open();
 	});
 }
 

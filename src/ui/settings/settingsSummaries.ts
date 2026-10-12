@@ -125,3 +125,130 @@ export function getUsageGuardrailStatus(settings: AskMateSettings, todayTokens: 
 	const monthlyExceeded = settings.usageMonthlyTokenBudget > 0 && monthTokens >= settings.usageMonthlyTokenBudget;
 	return dailyExceeded || monthlyExceeded ? "warning" : null;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The six pages
+// ---------------------------------------------------------------------------------------------------------------------
+
+export type SettingsPageId = "connection" | "sidebar-output" | "privacy-memory" | "skills-tools" | "instructions" | "advanced";
+
+export interface SettingsPageInfo {
+	id: SettingsPageId;
+	/** Names the page and heads it. It never contains the plugin name or the word "settings". */
+	name: string;
+	/** One sentence, shown on the entry. */
+	desc: string;
+}
+
+/** Pages in the order they are listed. A new user needs only the first one. */
+export const SETTINGS_PAGES: readonly SettingsPageInfo[] = [
+	{ id: "connection", name: "Connection", desc: "Choose a provider, add your API key, and check that it works." },
+	{ id: "sidebar-output", name: "Sidebar and output", desc: "How the sidebar looks, where answers go, and when notes change." },
+	{ id: "privacy-memory", name: "Privacy and memory", desc: "What is sent with each question and what is kept on this device." },
+	{ id: "skills-tools", name: "Skills and tools", desc: "Reusable instructions, diagram defaults, and tool servers." },
+	{ id: "instructions", name: "Instructions", desc: "Tell AskMate how to answer you, with optional rules for folders." },
+	{ id: "advanced", name: "Advanced", desc: "Context sources, templates, workflows, batch runs, and usage limits." }
+];
+
+export function getSettingsPage(id: SettingsPageId): SettingsPageInfo {
+	const page = SETTINGS_PAGES.find((candidate) => candidate.id === id);
+	if (!page) {
+		throw new Error(`AskMate has no settings page named "${id}".`);
+	}
+	return page;
+}
+
+/** The sentence at the top of the Advanced page. */
+export const ADVANCED_REASSURANCE = "You do not need anything here to use AskMate.";
+
+function parseVersion(value: string | null | undefined): [number, number, number] | null {
+	const match = /^(\d+)\.(\d+)\.(\d+)/.exec((value ?? "").trim());
+	return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+/** Negative when `left` is older than `right`, zero when equal, positive when newer. Null when either is not a version. */
+export function compareVersions(left: string | null | undefined, right: string | null | undefined): number | null {
+	const a = parseVersion(left);
+	const b = parseVersion(right);
+	if (!a || !b) {
+		return null;
+	}
+	return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Page entries gained displayValue and status in Obsidian 1.13.1, and AskMate still runs on 1.13.0. */
+export const PAGE_SUMMARY_MIN_VERSION = "1.13.1";
+
+/** True when this Obsidian shows a page's value and warning on its entry. An unknown version counts as no. */
+export function supportsPageSummaries(apiVersion: string | null | undefined): boolean {
+	const order = compareVersions(apiVersion, PAGE_SUMMARY_MIN_VERSION);
+	return order !== null && order >= 0;
+}
+
+export interface PageSummaryFields {
+	desc: string;
+	displayValue?: () => string;
+	status?: () => SettingsPageStatus;
+}
+
+/**
+ * The fields of a page entry that show a live summary. A new enough Obsidian gets `displayValue` and `status`; an older one
+ * ignores both silently, so the summary is folded into the description instead and the warning is spelt out in words.
+ */
+export function pageSummaryFields(
+	supported: boolean,
+	desc: string,
+	summary: (() => string) | null,
+	status: (() => SettingsPageStatus) | null = null
+): PageSummaryFields {
+	if (summary === null) {
+		return { desc };
+	}
+	if (supported) {
+		return { desc, displayValue: summary, ...(status ? { status } : {}) };
+	}
+	const current = summary().trim();
+	// A summary that already says what is wrong ("setup needed", "2 need review", "over budget") needs no second warning.
+	const alreadySaid = /setup needed|needs? (?:setup|review|attention)|over budget/i.test(current);
+	const warning = status?.() === "warning" && !alreadySaid ? " Needs attention." : "";
+	return { desc: current ? `${desc} Now: ${current}.${warning}` : desc };
+}
+
+export function summarizeSidebarOutput(settings: AskMateSettings, pendingReviewCount: number): string {
+	const parts = [
+		`${COMPOSER_LAYOUT_LABELS[settings.composerLayout]} layout`,
+		OUTPUT_MODE_LABELS[settings.outputMode],
+		pendingReviewCount > 0 ? pluralise(pendingReviewCount, "pending review") : null
+	].filter((part): part is string => part !== null);
+	return parts.join(" · ");
+}
+
+export function summarizePrivacyMemory(settings: AskMateSettings): string {
+	return [
+		settings.requestPrivacyDefaults.includeNoteContext ? "Note sent" : "Note not sent",
+		settings.saveConversations ? "Conversations saved" : "Conversations not saved"
+	].join(" · ");
+}
+
+export interface SkillsAndToolsInput {
+	skillsEnabled: boolean;
+	skills: { total: number; needsReview: number; invalid: number };
+	mcpEnabled: boolean;
+	servers: { total: number; ready: number; attention: number };
+}
+
+export function summarizeSkillsAndTools(input: SkillsAndToolsInput): { displayValue: string; status: SettingsPageStatus } {
+	const skills = !input.skillsEnabled
+		? "Skills off"
+		: [
+			pluralise(input.skills.total, "skill"),
+			input.skills.needsReview > 0 ? `${input.skills.needsReview.toLocaleString("en-GB")} need review` : null
+		].filter((part): part is string => part !== null).join(", ");
+	const tools = !input.mcpEnabled
+		? "Tools off"
+		: input.servers.total === 0
+			? "No servers"
+			: `${pluralise(input.servers.total, "server")}${input.servers.attention > 0 ? `, ${input.servers.attention.toLocaleString("en-GB")} need attention` : ""}`;
+	const needsAttention = (input.skillsEnabled && input.skills.needsReview > 0) || (input.mcpEnabled && input.servers.attention > 0);
+	return { displayValue: `${skills} · ${tools}`, status: needsAttention ? "warning" : null };
+}
