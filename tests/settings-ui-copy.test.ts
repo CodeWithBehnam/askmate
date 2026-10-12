@@ -228,7 +228,7 @@ describe("skills and the prompt inspector", () => {
 });
 
 describe("the changelog for 1.12.0", () => {
-	const section = read("CHANGELOG.md").split("\n## [")[1] ?? "";
+	const section = read("CHANGELOG.md").split("\n## [").find((part) => part.startsWith("1.12.0]")) ?? "";
 
 	test("lists the security, hardening and sync changes of the final fixes", () => {
 		expect(section.startsWith("1.12.0]")).toBe(true);
