@@ -75,7 +75,7 @@ The Model Context Protocol lets AskMate use tools outside Obsidian. On the `Skil
 
 - Off until you turn on `Allow tools`. Nothing starts at load.
 - You review the exact command or address and trust it on each device. Any change needs trust again.
-- Each call shows the server, the tool and the full arguments. `Ask before every call` (the default) offers Allow once or Deny and remembers nothing. `Ask once for each tool in a chat` also offers Allow for this chat, and that tool then runs without asking again in that conversation. Tools are used for questions in the sidebar's Chat mode, and a reply that uses them arrives in one piece.
+- Each call shows the server, the tool and the full arguments. `Ask before every call` (the default) offers Allow once or Deny and remembers nothing. `Ask once for each tool in a chat` also offers Allow for this chat, and that tool then runs without asking again in that conversation. Tools are used for questions in the sidebar's Chat mode, and a reply that uses them streams too: any text written before a tool call is cleared when the tool runs.
 - `Tool rounds per answer` (5 by default, up to 12) gives the model that many turns of tool calls plus one last turn without tools to write the answer, and an answer makes at most 12 calls. `Longest tool result` (20,000 characters by default) cuts each result at exactly that length. AskMate applies both as set.
 - A tool that changes its description after you approved it is flagged and asks again.
 - Tool descriptions and results are untrusted text. They are cleaned, capped and kept out of the instructions.

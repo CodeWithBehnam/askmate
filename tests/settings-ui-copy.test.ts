@@ -116,11 +116,13 @@ describe("tool limits", () => {
 		expect(readme).toContain("cuts each result at exactly that length");
 	});
 
-	test("tool replies arrive in one piece until the sidebar passes onTextReset, and the documents say so", () => {
-		// RequestRunner streams a tool run only for a caller that supplies onTextReset. When the sidebar does, these sentences must change.
+	test("the documents describe tool replies the way the sidebar delivers them", () => {
+		// RequestRunner streams a tool run only for a caller that supplies onTextReset, and clears progress text through it.
 		const wired = read("src/ui/sidebar/AskMateView.ts").includes("onTextReset");
 		for (const path of ["README.md", "docs/mcp.md", "docs/commands.md", "CHANGELOG.md"]) {
-			expect(read(path).includes("arrives in one piece")).toBe(!wired);
+			const doc = read(path);
+			expect(doc.includes("arrives in one piece")).toBe(!wired);
+			expect(doc.includes("cleared when the tool runs")).toBe(wired);
 		}
 	});
 
