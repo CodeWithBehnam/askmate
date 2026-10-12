@@ -295,6 +295,12 @@ describe("validateMermaidSource: reasons", () => {
 		expect(codeFor("flowchart TD\n A@{ img: \"x\" }")).toContain("shape-data");
 		expect(codeFor("flowchart TD\n A --> B\n style A fill:url(x)")).toContain("css-function");
 		expect(codeFor("flowchart TD\n A --> B\n style A behavior:x")).toContain("style-statement");
+		// GHSA-6x64-9x62-f2gx: Obsidian's Mermaid 11.13.0 lets CSS after a style statement escape the diagram's scope.
+		expect(codeFor("flowchart LR\n a --> b\n style a fill:#f00,stroke:#000;}*{color:red")).toContain("style-statement");
+		expect(codeFor("flowchart LR\n a --> b\n classDef x fill:#fff;}body{display:none")).toContain("style-statement");
+		expect(codeFor("stateDiagram-v2\n A --> B\n style A fill:#fff; } .mermaid{color:red")).toContain("style-statement");
+		expect(validateMermaidSource("flowchart LR\n a --> b\n style a fill:#f00,stroke:#000;").ok).toBe(true);
+		expect(validateMermaidSource("flowchart LR\n a --> b\n style a fill:#f00; style b fill:#0f0").ok).toBe(true);
 		expect(codeFor("flowchart TD\n A[\"`bold`\"]")).toContain("markdown-string");
 		expect(codeFor("flowchart TD\n A@{ shape: rect")).toContain("unterminated");
 		expect(codeFor("flowchart-elk TD\n A-->B")).toContain("unknown-header");

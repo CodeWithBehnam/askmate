@@ -282,11 +282,22 @@ function maskStyleStatements(line: string, family: DiagramFamily, lineNumber: nu
 	if (family === "other" || family === "sequence" || !/(?:^|;)\s*(?:style|classDef|linkStyle|todayMarker)\b/i.test(line)) {
 		return line;
 	}
+	let afterStyle = false;
 	return splitStatements(line)
 		.map((piece) => {
 			const statement = piece.trim();
 			const keyword = /^(style|classDef|linkStyle|todayMarker)(?=\s|$)/i.exec(statement)?.[1].toLowerCase();
-			if (!keyword || !STYLE_KEYWORD_FAMILIES[keyword].has(family)) {
+			// Text after a style statement on the same line is read as more CSS by Mermaid 11.13.0, the version Obsidian
+			// bundles, so "fill:#f00;}*{color:red" escapes the diagram (GHSA-6x64-9x62-f2gx). After the first style
+			// statement, a line may hold only style statements.
+			if (!keyword) {
+				if (afterStyle && statement !== "") {
+					reasons.add("style-statement", lineNumber);
+				}
+				return piece;
+			}
+			afterStyle = true;
+			if (!STYLE_KEYWORD_FAMILIES[keyword].has(family)) {
 				return piece;
 			}
 			if (isValidStyleStatement(keyword, statement.slice(keyword.length).trim())) {
