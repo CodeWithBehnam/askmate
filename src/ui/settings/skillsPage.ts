@@ -260,7 +260,7 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 
 	const newSkillRow: SettingDefinition = {
 		name: "New skill from template",
-		desc: "Type a name, then edit the file that AskMate creates.",
+		desc: "Type a name, then edit the file that AskMate creates. AskMate approves the file as it creates it, so after you edit it, press Review and approve it again before it is used.",
 		visible: skillsOn,
 		render: (setting) => {
 			host.prepareFieldFeedback(setting);
@@ -288,7 +288,7 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 						// A skill made here is text AskMate wrote itself, so it is approved as saved. Any later edit asks for a review.
 						await service.scan();
 						await service.trust(`vault:${template.id}`, await hashSkillText(template.content));
-						host.setFieldFeedback(setting, `Created ${created}.`, "success");
+						host.setFieldFeedback(setting, `Created ${created}. It needs your review again once you edit it.`, "success");
 						if (created) {
 							await app.workspace.openLinkText(created, "", "tab");
 						}

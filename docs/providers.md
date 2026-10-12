@@ -14,7 +14,7 @@ AskMate has no account and no server. It calls the provider you choose with your
 | Google Gemini | Yes | No | Yes | Default `gemini-2.5-pro`; `gemini-2.5-flash` is also offered. |
 | Local or self-hosted | Yes | No | Optional | Any OpenAI-compatible server. Base URL such as `http://localhost:11434/v1`; AskMate adds `/chat/completions` itself, so do not paste the full path. |
 
-Image generation always goes to the OpenAI Images API with `gpt-image-2`, whichever chat provider you use. It needs a paid OpenAI API account with access to that model, and OpenAI may require organisation verification. When your chat provider is not OpenAI, add an OpenAI key under `OpenAI image API key` in the `More options` of the `Connection` page.
+Image generation always goes to the OpenAI Images API with `gpt-image-2`, whichever chat provider you use. It needs a paid OpenAI API account with access to that model, and OpenAI may require organisation verification. When your chat provider is not OpenAI, add an OpenAI key under `OpenAI image API key` in the `Images` group on the `Connection` page.
 
 ## Where to get a key
 
@@ -31,7 +31,7 @@ Image generation always goes to the OpenAI Images API with `gpt-image-2`, whiche
 
 The sidebar Connect card offers OpenAI, Anthropic, Gemini and Local. Choose one, paste the key and press `Connect`. The key is saved with Obsidian SecretStorage, and AskMate runs a connection test straight away. Failures are explained in plain language with one button for the next step, such as `Update key`, `Choose another model` or `Check the address`. Keys are stored per device, so paste the key again on each computer.
 
-Other providers (Azure OpenAI, Azure AI Foundry, OpenRouter) are set up on the `Connection` settings page. Its `Status` row lists what is still missing. `Test connection` checks that the provider answers and lists the selected model; for Azure it sends a short request that may use a few tokens. The refresh button beside the model list (`Refresh models`) lists the models your key can use. If your model is not listed, type its ID under `More options`.
+Other providers (Azure OpenAI, Azure AI Foundry, OpenRouter) are set up on the `Connection` settings page. Its `Status` row lists what is still missing. `Test connection` checks that the provider answers and lists the selected model; for Azure it sends a short request that may use a few tokens. The refresh button beside the model list (`Refresh models`) lists the models your key can use. If your model is not listed, turn on `Show more options` on the `Connection` page and type its ID under `Model ID`.
 
 ## Addresses
 
@@ -53,7 +53,7 @@ An Azure OpenAI address must end with `/openai/v1`. A bare resource address is r
 
 Anthropic model IDs that Anthropic has retired are switched to the current default automatically. That covers Claude 3, 3.5 and 3.7 models, Claude Sonnet 4, Opus 4 and Opus 4.1.
 
-Reasoning effort (`none`, `low`, `medium`, `high`, `xhigh`) is checked against the model each time you switch. It is set with `/effort`, the composer, or `Reasoning effort` under `More options` for OpenAI. A text request waits up to two minutes for an answer by default. OpenAI reasoning models wait up to five minutes at medium effort and ten minutes at high or extra high effort. Anthropic waits up to five minutes between stream events, or ten minutes when streaming is off. `Refresh models` and the connection test give up after 10 seconds, except on Azure, whose test sends a real request and waits up to a minute.
+Reasoning effort (`none`, `low`, `medium`, `high`, `xhigh`) is checked against the model each time you switch. It is set with `/effort`, the composer, or `Reasoning effort` under `More options` on the `Connection` page (turn on `Show more options` first) for OpenAI. A text request waits up to two minutes for an answer by default. OpenAI reasoning models wait up to five minutes at medium effort and ten minutes at high or extra high effort. Anthropic waits up to five minutes between stream events, or ten minutes when streaming is off. `Refresh models` and the connection test give up after 10 seconds, except on Azure, whose test sends a real request and waits up to a minute.
 
 ## Tools
 

@@ -1,5 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
 import type { SettingDefinitionList } from "obsidian";
+import * as ts from "typescript";
+import { findSettingReferences, quotedSpans, splitSentences } from "../scripts/roadmap-smoke-tests";
 import type { McpServerStatus, ToolSnapshot, TrustOutcome } from "../src/mcp";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
@@ -476,6 +479,30 @@ describe("the settings tab", () => {
 	});
 });
 
+describe("sidebar and output page", () => {
+	function sidebarRows(): Rendered[] {
+		return draw(pageNamed(makeHarness().tab, "Sidebar and output").items ?? [], getFakeDocument().createElement("div"));
+	}
+
+	test("the layout help says that commands and mentions work in every layout", () => {
+		const desc = String(rowNamed(sidebarRows(), "Sidebar layout").def.desc);
+		expect(desc).toContain("Slash commands and @mentions work in all three");
+		expect(desc).not.toContain("Console is keyboard-first (type /help");
+	});
+
+	test("the layout dropdown lists the three layouts the docs name", () => {
+		const dropdown = dropdownIn(rowNamed(sidebarRows(), "Sidebar layout").setting);
+		expect(Object.values(dropdown.options)).toEqual(["Console", "Compact", "Expanded"]);
+	});
+
+	test("the approval setting is called what the docs call it, with its three choices", () => {
+		const dropdown = dropdownIn(rowNamed(sidebarRows(), "Ask before changing my notes").setting);
+		expect(Object.values(dropdown.options)).toEqual(["Only when replacing the whole note", "When replacing a whole note or a section", "Every time"]);
+		expect(DEFAULT_SETTINGS.applyApprovalMode).toBe("manual");
+		expect(dropdown.options.manual).toBe("Every time");
+	});
+});
+
 describe("privacy and memory", () => {
 	function privacyRows(harness: Harness): Rendered[] {
 		return draw(pageNamed(harness.tab, "Privacy and memory").items ?? [], getFakeDocument().createElement("div"));
@@ -852,15 +879,58 @@ describe("connection page", () => {
 	test("the extra rows stay closed until More options is switched on", () => {
 		const harness = makeHarness();
 		const rows = connectionRows(harness);
-		const extra = ["Model ID", "Use a saved key", "Reasoning effort", "OpenAI image API key", "Improve image prompts with"];
+		const extra = ["Model ID", "Use a saved key", "Reasoning effort", "Improve image prompts with"];
 		for (const name of ["Model ID", "Use a saved key", "Improve image prompts with"]) {
 			expect(isVisible(rowNamed(rows, name).def)).toBe(false);
 		}
-		expect(extra.every((name) => rows.some((row) => row.def.name === name) || name === "OpenAI image API key")).toBe(true);
+		expect(extra.every((name) => rows.some((row) => row.def.name === name))).toBe(true);
 		toggleIn(rowNamed(rows, "Show more options").setting).simulateChange(true);
 		for (const name of ["Model ID", "Use a saved key", "Improve image prompts with"]) {
 			expect(isVisible(rowNamed(rows, name).def)).toBe(true);
 		}
+	});
+
+	describe("the OpenAI image API key", () => {
+		const groupHeadings = (harness: Harness): string[] =>
+			(pageNamed(harness.tab, "Connection").items ?? []).flatMap((item) => ("type" in item && item.type === "group" ? [item.heading ?? ""] : []));
+		const rowsOfGroup = (harness: Harness, heading: string): Definition[] => {
+			const group = (pageNamed(harness.tab, "Connection").items ?? []).find((item) => "type" in item && item.type === "group" && item.heading === heading);
+			return ((group as { items?: Definition[] } | undefined)?.items ?? []);
+		};
+
+		test.each(["anthropic", "google-gemini", "azure-openai", "azure-ai", "openrouter", "openai-compatible"] as const)("is on the page for %s, without opening More options", (providerId) => {
+			const harness = makeHarness();
+			harness.settings.providerRoles.chatProviderId = providerId;
+			harness.settings.selectedTextProvider = providerId;
+			expect(groupHeadings(harness)).toEqual(["Provider", "Images", "More options"]);
+			const key = rowsOfGroup(harness, "Images").find((def) => def.name === "OpenAI image API key");
+			expect(key).toBeDefined();
+			expect(isVisible(key as Definition)).toBe(true);
+			expect(rowsOfGroup(harness, "More options").some((def) => def.name === "OpenAI image API key")).toBe(false);
+			expect(harness.tab.connection.showMoreOptions).toBe(false);
+		});
+
+		test("is not offered a second time, and is left out when OpenAI answers chat, because that key is the API key", () => {
+			const other = makeHarness();
+			other.settings.providerRoles.chatProviderId = "anthropic";
+			other.settings.selectedTextProvider = "anthropic";
+			expect(connectionRows(other).filter((row) => row.def.name === "OpenAI image API key")).toHaveLength(1);
+			const openai = makeHarness();
+			expect(groupHeadings(openai)).toEqual(["Provider", "More options"]);
+			expect(connectionRows(openai).some((row) => row.def.name === "OpenAI image API key")).toBe(false);
+		});
+
+		test("saves the picked key under the OpenAI provider", async () => {
+			const harness = makeHarness();
+			harness.settings.providerRoles.chatProviderId = "anthropic";
+			harness.settings.selectedTextProvider = "anthropic";
+			const row = rowNamed(connectionRows(harness), "OpenAI image API key");
+			const picker = row.setting.components[0] as unknown as { simulateChange: (value: string) => unknown };
+			await picker.simulateChange("askmate-openai-key");
+			await tick();
+			expect(harness.settings.providers.openai.apiKeySecretName).toBe("askmate-openai-key");
+			expect(harness.settings.providers.anthropic.apiKeySecretName).not.toBe("askmate-openai-key");
+		});
 	});
 
 	test("the reasoning row follows both the switch and OpenAI being in use", () => {
@@ -1042,6 +1112,27 @@ describe("skills page", () => {
 		expect(content).toContain("name: weekly-notes");
 		expect(harness.trusted["vault:weekly-notes"]).toBe(await hashSkillText(content ?? ""));
 		expect(harness.fake.workspace.openedLinks.map((link) => link.linktext)).toEqual([path]);
+		// The page says what happens next, so a person who edits the file is not surprised by Needs review.
+		expect(row.def.desc).toContain("press Review and approve it again");
+		expect(feedbackOf(row.setting)).toContain("needs your review again once you edit it");
+	});
+
+	test("a skill made from the template needs a review again as soon as it is edited", async () => {
+		const harness = skillHarness();
+		await harness.service.scan();
+		const row = rowNamed(skillRows(harness), "New skill from template");
+		textIn(row.setting).simulateChange("Weekly notes");
+		buttonIn(row.setting, "Create skill").click();
+		await tick();
+		const path = "AskMate/Skills/weekly-notes/SKILL.md";
+		const statusOfWeekly = (): string | undefined => {
+			const skill = harness.service.list().find((candidate) => candidate.name === "weekly-notes");
+			return skill ? harness.service.statusOf(skill) : undefined;
+		};
+		expect(statusOfWeekly()).toBe("ready");
+		harness.fake.vault.contents.set(path, `${harness.fake.vault.contents.get(path) ?? ""}\nAlways list owners.\n`);
+		await harness.service.scan();
+		expect(statusOfWeekly()).toBe("needs-review");
 	});
 
 	test("a new skill refuses a name that is already taken", async () => {
@@ -1192,13 +1283,19 @@ const clickDialog = async (label: string): Promise<void> => {
 };
 
 describe("tools page", () => {
-	test("tools are off by default and the section links to the README", () => {
+	test("tools are off by default and the section links to the tools guide", () => {
 		const harness = mcpHarness();
 		const rows = toolsRows(harness);
 		expect(harness.settings.mcp.enabled).toBe(false);
 		const about = rowNamed(rows, "About tools");
-		expect(about.setting.descEl.querySelector("a")?.getAttribute("href")).toContain("github.com/CodeWithBehnam/askmate");
+		expect(about.setting.descEl.querySelector("a")?.getAttribute("href")).toBe("https://github.com/CodeWithBehnam/askmate/blob/main/docs/mcp.md");
 		expect(isVisible(rowNamed(rows, "Tool rounds per answer").def)).toBe(false);
+	});
+
+	test("the limit rows name the real bounds and what happens at the limit", () => {
+		const rows = toolsRows(mcpHarness());
+		expect(rowNamed(rows, "Tool rounds per answer").def.desc).toBe("The most rounds of tool calls the model may make while writing one answer (1 to 12). After the last round it answers with what it has.");
+		expect(rowNamed(rows, "Longest tool result").def.desc).toBe("Characters of one tool result that the model sees (1,000 to 200,000). Longer results are cut.");
 	});
 
 	test("turning tools on asks first, and Cancel leaves them off", async () => {
@@ -1509,7 +1606,8 @@ describe("server page", () => {
 		await tick();
 		expect(harness.settings.mcp.servers[0]?.enabled).toBe(false);
 		expect(switchEl.getAttribute("aria-checked")).toBe("false");
-		expect(Notice.messages.at(-1)).toContain("plain HTTP is only allowed on your own network");
+		expect(Notice.messages.at(-1)).toContain("plain HTTP is only allowed for localhost, 127.0.0.1 and [::1]");
+		expect(Notice.messages.at(-1)).not.toContain("network");
 	});
 
 	test("editing the arguments saves one per line", async () => {
@@ -1708,6 +1806,150 @@ describe("batch workflow selection", () => {
 		const select = page.containerEl.querySelector("select") as HTMLSelectElement;
 		expect(select).not.toBeNull();
 		expect(harness.settings.batchWorkflowId).toBe("study-summary");
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The documentation names what the settings show
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("documentation names match the settings", () => {
+	interface PageContents {
+		/** Rows, group headings and inline pages anywhere on the page. */
+		names: Set<string>;
+		/** The groups that sit directly on the page, in order. */
+		groups: string[];
+		/** The labels of every dropdown on the page. */
+		options: Set<string>;
+	}
+
+	/** Every settings page as it is drawn, with a provider other than OpenAI answering chat so that the Images group is on Connection. */
+	function pageContents(): Map<string, PageContents> {
+		const { tab, settings } = makeHarness();
+		settings.providerRoles.chatProviderId = "anthropic";
+		settings.selectedTextProvider = "anthropic";
+		const contents = new Map<string, PageContents>();
+		for (const page of tab.getSettingDefinitions()) {
+			if (!("type" in page) || page.type !== "page") {
+				continue;
+			}
+			const names = new Set<string>();
+			const visit = (items: readonly Item[]): void => {
+				for (const item of items) {
+					if ("type" in item && (item.type === "group" || item.type === "list")) {
+						names.add(item.heading ?? "");
+						visit((item.items ?? []) as Item[]);
+					} else if ("type" in item && item.type === "page") {
+						names.add(item.name);
+						visit((item.items ?? []) as Item[]);
+					}
+				}
+			};
+			visit(page.items ?? []);
+			const rows = draw(page.items ?? [], getFakeDocument().createElement("div"));
+			rows.forEach((row) => names.add(row.def.name));
+			const options = new Set(rows.flatMap((row) => {
+				const dropdown = row.setting.component(DropdownComponent);
+				return dropdown ? Object.values(dropdown.options) : [];
+			}));
+			const groups = (page.items ?? []).flatMap((item) => ("type" in item && (item.type === "group" || item.type === "list") && item.heading ? [item.heading] : []));
+			names.delete("");
+			contents.set(page.name, { names, groups, options });
+		}
+		return contents;
+	}
+
+	/** Every string the settings and their dialogs are written with, for the controls on pages that are drawn by hand. */
+	function interfaceStrings(): Set<string> {
+		const strings = new Set<string>();
+		const read = (dir: string): void => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = `${dir}/${entry.name}`;
+				if (entry.isDirectory()) {
+					read(path);
+				} else if (entry.name.endsWith(".ts")) {
+					const file = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+					const walk = (node: ts.Node): void => {
+						if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+							strings.add(node.text);
+						}
+						ts.forEachChild(node, walk);
+					};
+					walk(file);
+				}
+			}
+		};
+		read("src/ui/settings");
+		read("src/ui/modals");
+		return strings;
+	}
+
+	const documents = (): Array<[string, string]> =>
+		["README.md", ...readdirSync("docs").filter((name) => name.endsWith(".md")).map((name) => `docs/${name}`)].map((path) => [path, readFileSync(path, "utf8")]);
+
+	test("docs/README.md lists the groups that each page really has", () => {
+		const contents = pageContents();
+		const table = readFileSync("docs/README.md", "utf8").split("\n").filter((line) => /^\| `[^`]+` \|/.test(line));
+		const documented = new Map(table.map((line) => {
+			const cells = line.split("|").map((cell) => cell.trim());
+			return [quotedSpans(cells[1] ?? "")[0] ?? "", quotedSpans(cells[2] ?? "")] as const;
+		}));
+		expect([...documented.keys()]).toEqual(["Connection", "Sidebar and output", "Privacy and memory", "Skills and tools", "Instructions", "Advanced"]);
+		for (const [page, groups] of documented) {
+			if (page === "Instructions") {
+				// Drawn by hand: its two parts are the two strings below.
+				expect(groups).toEqual(["Instructions for every request", "Folder instructions"]);
+				const strings = interfaceStrings();
+				groups.forEach((group) => expect(strings.has(group)).toBe(true));
+				continue;
+			}
+			expect({ page, groups }).toEqual({ page, groups: contents.get(page)?.groups ?? [] });
+		}
+	});
+
+	test("every name the documentation gives to a setting, group or page exists", () => {
+		const contents = pageContents();
+		const known = new Set<string>([...contents.keys(), ...interfaceStrings()]);
+		for (const page of contents.values()) {
+			page.names.forEach((name) => known.add(name));
+			page.options.forEach((option) => known.add(option));
+		}
+		const unknown = documents().flatMap(([path, text]) => findSettingReferences(text).filter((name) => !known.has(name)).map((name) => `${path}: "${name}"`));
+		expect(unknown).toEqual([]);
+	});
+
+	test("a setting is documented on the page that has it", () => {
+		const contents = pageContents();
+		const wrong: string[] = [];
+		for (const [path, text] of documents()) {
+			if (path === "docs/README.md") {
+				continue;
+			}
+			for (const sentence of splitSentences(text)) {
+				const pages = [...contents.keys()].filter((page) => new RegExp(`on the \`${page}\`|\`${page}\`(?: settings)? page\\b`).test(sentence));
+				if (pages.length !== 1) {
+					continue;
+				}
+				const page = pages[0] as string;
+				for (const token of quotedSpans(sentence)) {
+					const homes = [...contents].filter(([, other]) => other.names.has(token)).map(([name]) => name);
+					if (homes.length > 0 && !homes.includes(page)) {
+						wrong.push(`${path}: "${token}" is on ${homes.join(" and ")}, but the sentence says ${page}`);
+					}
+				}
+			}
+		}
+		expect(wrong).toEqual([]);
+	});
+
+	test("the checks would have caught the names that were wrong before", () => {
+		const contents = pageContents();
+		const known = new Set<string>([...contents.keys(), ...interfaceStrings()]);
+		for (const page of contents.values()) {
+			page.names.forEach((name) => known.add(name));
+		}
+		const old = "Turn saving off with `Save conversations` on the `Privacy and memory` page. The `Apply approval mode` setting is on the `Sidebar and output` page, under `Responses`. Open `Workflows and automation`.";
+		expect(findSettingReferences(old).filter((name) => !known.has(name)).sort()).toEqual(["Apply approval mode", "Responses", "Save conversations", "Workflows and automation"]);
 	});
 });
 

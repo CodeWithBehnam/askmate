@@ -652,24 +652,6 @@ export function buildConnectionItems(host: SettingsPageHost): SettingDefinitionI
 		Object.fromEntries(REASONING_EFFORT_OPTIONS.map((option) => [option.value, option.label])),
 		{ visible: () => usesOpenAIReasoning(plugin) }
 	));
-	if (providerId !== "openai") {
-		moreItems.push({
-			name: "OpenAI image API key",
-			desc: "Add an OpenAI key to use the Image button or the /image command. Images are always made with OpenAI.",
-			render: (setting) => {
-				setting.addComponent((el) => {
-					const picker = new SecretComponent(app, el)
-						.setValue(plugin.getProviderSettings("openai").apiKeySecretName)
-						.onChange(async (value) => {
-							plugin.getProviderSettings("openai").apiKeySecretName = value;
-							await host.runSettingAction(() => host.saveUiSetting());
-						});
-					nameSecretButton(el, "OpenAI image API key from the keychain");
-					return picker;
-				});
-			}
-		});
-	}
 	moreItems.push(host.dropdownDefinition(
 		"imagePromptPlanningProviderId",
 		"Improve image prompts with",
@@ -680,18 +662,40 @@ export function buildConnectionItems(host: SettingsPageHost): SettingDefinitionI
 		}
 	));
 
+	// Images are always made with OpenAI, so a person whose chat provider is another one needs an OpenAI key for the Image button
+	// and /image. The sidebar sends them to this page when it is missing, so the row sits on the page and not behind the switch,
+	// where neither the page nor settings search would show it.
+	const imageKeyRow: SettingDefinition = {
+		name: "OpenAI image API key",
+		desc: "Add an OpenAI key to use the Image button or the /image command. Images are always made with OpenAI.",
+		aliases: ["image", "images", "gpt-image-2", "openai"],
+		render: (setting) => {
+			setting.addComponent((el) => {
+				const picker = new SecretComponent(app, el)
+					.setValue(plugin.getProviderSettings("openai").apiKeySecretName)
+					.onChange(async (value) => {
+						plugin.getProviderSettings("openai").apiKeySecretName = value;
+						await host.runSettingAction(() => host.saveUiSetting());
+					});
+				nameSecretButton(el, "OpenAI image API key from the keychain");
+				return picker;
+			});
+		}
+	};
+
 	// The extra rows follow the switch one by one, because a row's own visibility is re-evaluated in place without redrawing the page.
 	const showMore = (): boolean => host.connection.showMoreOptions;
 	return [
 		statusRow,
 		{ type: "group", heading: "Provider", items: [...providerItems, modelRow, ...(isAzureOpenAI ? [manualModelRow] : []), testRow] },
+		...(providerId === "openai" ? [] : [{ type: "group" as const, heading: "Images", items: [imageKeyRow] }]),
 		{
 			type: "group",
 			heading: "More options",
 			items: [
 				{
 					name: "Show more options",
-					desc: "Manual model name, reasoning effort, saved keys, and image settings.",
+					desc: "Manual model name, reasoning effort, saved keys, and image prompt settings.",
 					searchable: false,
 					render: (setting) => {
 						setting.addToggle((toggle) => {

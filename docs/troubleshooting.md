@@ -15,6 +15,7 @@ Start with `/test` in the sidebar or the `Test provider connection` command. It 
 | The address must use https | A remote provider address was entered with `http://`. | Use `https://`, or a local network address. See [providers](providers.md) for the accepted forms. MCP server addresses are stricter, see [MCP tools](mcp.md). |
 | My model is not listed | The list is cached from the last refresh. | Press `Refresh models` after adding a key, or type the model ID. |
 | Image generation fails | `gpt-image-2` needs an OpenAI API account with access, and OpenAI may require organisation verification. | Check the OpenAI dashboard and try again. |
+| AskMate asks for an OpenAI key when I press the Image button | Images are always made with OpenAI, so a chat provider such as Anthropic does not cover them. | Open the `Connection` page and pick a key under `OpenAI image API key`, in the `Images` group. |
 | The key is missing on another computer | Keys are stored per device in Obsidian SecretStorage and do not sync. | Paste the key again on that computer. |
 | A new host needs approval | A stored key is about to go to a Local or Azure AI Foundry address it has not been sent to from this device. | Check that the address is yours, then approve it. |
 
@@ -56,6 +57,8 @@ See [diagrams](diagrams.md).
 | A server needs trust | It is new on this device, or its command, arguments, environment, address or headers changed. | Open the server in settings, review the exact command and press `Trust and test`. |
 | Command not found (`npx`, `uvx`, `node`) | Obsidian was started from the Dock or Start menu and has a shorter `PATH` than your terminal. | AskMate also looks in the usual install folders. If it still fails, enter the full path to the program. |
 | A tool shows a Changed badge | The server changed that tool's definition since you approved it. | Read the new description and arguments before you allow it. |
+| A tool asks again on every call | The server's `Approval` setting is `Ask before every call` (the default), which asks every time and never reuses a chat grant. | If you want Allow for this chat to cover later calls of the same tool, set `Approval` to `Ask once for each tool in a chat` on the server's page. |
+| The answer stopped before the tool finished its job | The answer used up `Tool rounds per answer`, so the model wrote its reply from what it had, or a result was cut at `Longest tool result`. | Raise the limit on the `Skills and tools` page, under `Tools`, or ask a narrower question. |
 | A remote server fails | The address, token or protocol is wrong. The old HTTP+SSE transport is not supported. | Use the server's Streamable HTTP address and check the bearer token. |
 | A server says Needs a token | It answered 401, so the token is missing or no longer accepted. | Save a fresh bearer token on the server's page. |
 | The server address is refused (`Use an https:// URL`) | It uses `http://` for a host other than `localhost`, or it holds a username, password or `#fragment`. | Use `https://`, or `http://` with `localhost`, `127.0.0.1` or `[::1]` only. Move credentials into a bearer token. |

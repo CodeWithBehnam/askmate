@@ -33,7 +33,7 @@ import { pluralise } from "./settingsSummaries";
 // Pure helpers
 // ---------------------------------------------------------------------------------------------------------------------
 
-export const README_TOOLS_URL = "https://github.com/CodeWithBehnam/askmate#readme";
+export const MCP_DOCS_URL = "https://github.com/CodeWithBehnam/askmate/blob/main/docs/mcp.md";
 
 /** How long a notice stays that names something the person has to act on. */
 const LONG_NOTICE_MS = 15000;
@@ -45,10 +45,17 @@ export const APPROVAL_LABELS: Readonly<Record<McpApprovalMode, string>> = {
 };
 
 export const APPROVAL_HELP: Readonly<Record<McpApprovalMode, string>> = {
-	"always-ask": "Every call shows its arguments and waits for you. This is the safest choice.",
-	"ask-once-per-chat": "After you allow a tool for a chat, it runs without asking again in that chat.",
+	"always-ask": "Every call shows its arguments and waits for you, even if you chose Allow for this chat earlier. This is the safest choice.",
+	"ask-once-per-chat": "The first call of each tool in a chat waits for you. After you choose Allow for this chat, later calls of that tool in the same conversation run without asking.",
 	"trusted-read-only": "Tools that the server says only read data run without asking. AskMate cannot check that claim, so use it only for servers you trust."
 };
+
+/** The only hosts a remote server may reach over plain HTTP. Every other address needs HTTPS. */
+export const PLAIN_HTTP_HOSTS_TEXT = "localhost, 127.0.0.1 and [::1]";
+
+export const ADDRESS_HELP = `The HTTPS address of the server. Plain HTTP is accepted only for ${PLAIN_HTTP_HOSTS_TEXT}; a server elsewhere on your network needs HTTPS.`;
+
+export const PLAIN_HTTP_KEPT_OFF_NOTICE = `AskMate kept this server off: plain HTTP is only allowed for ${PLAIN_HTTP_HOSTS_TEXT}, so use an HTTPS address.`;
 
 export function transportLabel(transport: McpServerConfig["transport"]): string {
 	return transport === "stdio" ? "Local program" : "Remote server";
@@ -206,6 +213,16 @@ export function ownedSecretIds(server: McpServerConfig): string[] {
 		...(server.transport === "http" && server.bearerSecretId ? [server.bearerSecretId] : [])
 	];
 	return ids.filter((id) => id.startsWith(`${MCP_SECRET_PREFIX}${server.id}-`));
+}
+
+/**
+ * What to tell the person after a token was saved. Trust covers the name of the secret, never its value, so pasting a new token
+ * under the name AskMate already uses leaves the server trusted, and only a different name asks for trust again.
+ */
+export function describeTokenSaved(previousSecretId: string | null, savedSecretId: string): string {
+	return previousSecretId === savedSecretId
+		? "Token replaced on this device. The server stays trusted because the token's name did not change."
+		: "Token saved on this device. The server asks for trust again because its settings changed.";
 }
 
 export const TRUST_REVOKED_TEXT = "Trust revoked. The server is stopped and asks again before it starts.";
@@ -392,7 +409,7 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 		name: "About tools",
 		desc: linkFragment([
 			"Tools let the model use programs and services that you connect, through the Model Context Protocol. They are off until you turn them on, and AskMate asks before every call. ",
-			{ text: "Read how tools work", href: README_TOOLS_URL },
+			{ text: "Read how tools work", href: MCP_DOCS_URL },
 			"."
 		]),
 		searchable: false
@@ -427,7 +444,7 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 	};
 
 	const limitRows: SettingDefinition[] = [
-		host.integerDefinition("Tool rounds per answer", `The most times the model may call tools while writing one answer (${MCP_TOOL_ROUNDS_BOUNDS.min} to ${MCP_TOOL_ROUNDS_BOUNDS.max}).`, {
+		host.integerDefinition("Tool rounds per answer", `The most rounds of tool calls the model may make while writing one answer (${MCP_TOOL_ROUNDS_BOUNDS.min} to ${MCP_TOOL_ROUNDS_BOUNDS.max}). After the last round it answers with what it has.`, {
 			bounds: { min: MCP_TOOL_ROUNDS_BOUNDS.min, max: MCP_TOOL_ROUNDS_BOUNDS.max },
 			getValue: () => settings.mcp.maxToolRoundsPerTurn,
 			setValue: (value) => {
@@ -656,7 +673,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 				await host.runSettingAction(() => changeServer(host, serverId, (server) => ({ ...server, enabled: value })));
 				// The settings loader keeps a remote server on plain http switched off, so the switch shows what was actually kept.
 				if (value && currentServer(host, serverId)?.enabled === false) {
-					new Notice("AskMate kept this server off: plain HTTP is only allowed on your own network, so use an HTTPS address.");
+					new Notice(PLAIN_HTTP_KEPT_OFF_NOTICE);
 				}
 				paintStatus();
 			});
@@ -751,7 +768,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 	} else {
 		connection.addSetting((setting) => {
 			host.prepareFieldFeedback(setting);
-			setting.setName("Address").setDesc("The HTTPS address of the server. Plain HTTP is only accepted for a server on your own computer or network.").addText((text) => {
+			setting.setName("Address").setDesc(ADDRESS_HELP).addText((text) => {
 				host.labelControl(text.inputEl, "Server address");
 				text.setPlaceholder("Server address").setValue(first.url);
 				host.bindCommitOnBlurOrEnter(text.inputEl, async () => {
@@ -795,13 +812,14 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 							host.setFieldFeedback(setting, "Paste the token first.");
 							return;
 						}
-						const id = chooseServerSecretId(serverId, "token", bearerIdOf(currentServer(host, serverId)) ?? undefined);
+						const previousId = bearerIdOf(currentServer(host, serverId));
+						const id = chooseServerSecretId(serverId, "token", previousId ?? undefined);
 						writeSecret(app, id, value);
 						await changeServer(host, serverId, (server) => server.transport === "http" ? { ...server, bearerSecretId: id } : server);
 						if (input) {
 							input.value = "";
 						}
-						host.setFieldFeedback(setting, "Token saved on this device. The server asks for trust again because its settings changed.", "success");
+						host.setFieldFeedback(setting, describeTokenSaved(previousId, id), "success");
 						paintStatus();
 					});
 				});

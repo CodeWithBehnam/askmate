@@ -4,15 +4,15 @@ AskMate never edits a note on its own. An answer reaches your vault only when yo
 
 ## Output modes
 
-Choose a mode with the three buttons beside the composer before you send, or cycle it by clicking the mode in the Console status bar. `Default output` on the `Sidebar and output` page sets the starting mode.
+Choose a mode with the three buttons beside the composer before you send, or cycle it by clicking the mode in the Console status bar. `Default output` in the `Answers` group on the `Sidebar and output` page sets the starting mode. Its choices are `Show in the sidebar`, `Create a new note` and `Edit my note (asks before changing it)`.
 
 | Mode | What happens |
 | --- | --- |
 | `Chat` | The answer stays in the sidebar. Nothing is written. |
-| `New note` | AskMate creates a Markdown result note, placed near the source note by a naming template. |
+| `Note` | AskMate creates a Markdown result note, placed near the source note by a naming template. |
 | `Apply` | AskMate writes the generated text back into the captured source note after the safety checks. |
 
-A `New note` or `Apply` choice covers the next answer only, and AskMate then goes back to `Chat`, so a later question never writes to your vault by surprise. A badge shows the mode whenever it is not `Chat`.
+A `Note` or `Apply` choice covers the next answer only, and AskMate then goes back to `Chat`, so a later question never writes to your vault by surprise. A badge shows the mode whenever it is not `Chat`.
 
 ## Reply actions
 
@@ -27,34 +27,34 @@ Apply targets the note that was captured when the request was built, not whichev
 - With selected text, it replaces exactly that text, and stops if it can no longer find it.
 - With no selection, default Apply appends generated output to the captured note instead of overwriting anything.
 - A heading section can be replaced, and a full-note replacement must be explicit and confirmed.
-- Frontmatter can be preserved, confirmed or replaced during an explicit full-note Apply (`Frontmatter Apply handling` on the `Advanced` page), and line endings (LF or CRLF) are kept.
+- Frontmatter can be preserved, confirmed or replaced during an explicit full-note Apply (`Frontmatter Apply handling` in the `Changing notes` group on the `Advanced` page), and line endings (LF or CRLF) are kept.
 - A suggested change can be queued for later review instead of applied.
 
-Before it replaces text, AskMate checks that the note did not change while you were looking at the preview, and refuses if it did. An append goes to the end of the note as it is when you confirm. `Default partial Apply scope` on the `Advanced` page sets what a plain Apply does: `Auto` replaces selected text or else appends.
+Before it replaces text, AskMate checks that the note did not change while you were looking at the preview, and refuses if it did. An append goes to the end of the note as it is when you confirm. `Default partial Apply scope` in the `Changing notes` group on the `Advanced` page sets what a plain Apply does: `Auto` replaces selected text or else appends.
 
 ## Apply approval mode
 
-The `Apply approval mode` setting decides how often you see a diff before a text write. On the `Sidebar and output` page it is called `Ask before changing my notes`.
+The Apply approval mode decides how often you see a diff before a text write. It is the `Ask before changing my notes` setting, in the `Answers` group on the `Sidebar and output` page.
 
-| Mode | Setting text | Behaviour |
-| --- | --- | --- |
-| `Manual` (default) | Every time | Asks with a diff before every text Apply write. |
-| `Full` | When replacing a whole note or a section | Asks with a diff for full-note and heading-section replacements, and skips selected-text and append previews. |
-| `Auto approve` | Only when replacing the whole note | Skips the diff for selected-text, append and heading-section writes. Full-note replacement is still confirmed. |
+| Choice | Behaviour |
+| --- | --- |
+| `Every time` (default) | Asks with a diff before every text Apply write. |
+| `When replacing a whole note or a section` | Asks with a diff for full-note and heading-section replacements, and skips selected-text and append previews. |
+| `Only when replacing the whole note` | Skips the diff for selected-text, append and heading-section writes. Full-note replacement is still confirmed. |
 
 An unknown or damaged value is treated as the strictest mode, not the loosest. No mode switches off captured-note targeting, exact selected-text matching, the explicit full-note confirmation, the truncated-context confirmation or the frontmatter safeguards.
 
-Two things override the mode. A reply that was written from tool results (MCP) always opens the diff, and it cannot be queued for later review. When AskMate had to change the reply to make it safe, or the text it adds holds something active such as a script block, a remote image, a template tag or hidden characters, the write stops with a confirmation that names the problem, even in `Auto approve`. The diff modal makes invisible and bidirectional characters visible.
+Two things override the mode. A reply that was written from tool results (MCP) always opens the diff, and it cannot be queued for later review. When AskMate had to change the reply to make it safe, or the text it adds holds something active such as a script block, a remote image, a template tag or hidden characters, the write stops with a confirmation that names the problem, even with `Only when replacing the whole note`. The diff modal makes invisible and bidirectional characters visible.
 
 ## When AskMate refuses to replace text
 
 - The reply is incomplete: it hit the token limit, was filtered, was refused or the stream broke. An incomplete reply can still be appended or inserted, with a warning.
 - The note or selection was cut short by the context budget. AskMate asks for confirmation before any replacement.
-- `Send note and attached context` was off for the request, so the model never saw the text. AskMate offers append instead. The same applies when image references were withheld and the text being replaced contains images.
+- Note context was off for the request (`Send the current note with each question` on the `Privacy and memory` page, or `Send note and attached context` in the request preview), so the model never saw the text. AskMate offers append instead. The same applies when image references were withheld and the text being replaced contains images.
 
 ## Review queue
 
-`Queue for review` keeps every pending suggestion until you apply or dismiss it. Review them on the `Pending reviews` page under `Review queue` on the `Advanced` page. The `Review queue max items` limit never drops a pending item: when pending items reach it, AskMate refuses to queue more until you review some. Applied and dismissed items keep only metadata (note path, title and question), not the note text. Queued items and note history follow a note when you rename it and are removed when you delete it.
+`Queue for review` keeps every pending suggestion until you apply or dismiss it. Review them on the `Pending reviews` page under `Review queue` on the `Advanced` page. The `Review queue max items` limit in that group never drops a pending item: when pending items reach it, AskMate refuses to queue more until you review some. Applied and dismissed items keep only metadata (note path, title and question), not the note text. Queued items and note history follow a note when you rename it and are removed when you delete it.
 
 ## What the sanitiser does on the way in
 
@@ -71,4 +71,4 @@ When you rewrite a note, constructs that were already in your note are left alon
 
 ## Diagrams
 
-A Mermaid diagram reaches a note through the same checks. `Insert` on a diagram card appends the diagram the way Apply does, `New note` creates a result note, and a diagram that failed validation cannot be inserted or saved as a note. See [diagrams](diagrams.md).
+A Mermaid diagram reaches a note through the same checks. `Insert` on a diagram card appends the diagram the way Apply does, `New note` creates a result note, and a diagram that failed validation cannot be inserted, applied or saved as a note. Only a reply that holds a diagram which failed blocks writes: when the model answers a diagram request in words, with no diagram, the reply is ordinary text and Insert, Apply and the save actions work as for any other reply. See [diagrams](diagrams.md).

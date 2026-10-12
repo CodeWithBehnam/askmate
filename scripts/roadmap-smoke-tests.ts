@@ -9,8 +9,8 @@
  * - safety wiring inside Obsidian glue code (plugin and sidebar view) that cannot be loaded in bun;
  * - CSS selectors that no source file uses any more, and CSS features the review scan flags;
  * - GitHub workflow and issue-form YAML that would be rejected (GitHub silently drops a broken issue form);
- * - documentation that Obsidian's developer policies or the project's Apply contract require, and that the README links resolve;
- * - documentation claims that code decides and that have drifted before: the diagram example phrases, plain-http MCP addresses and what Insert does to a selection.
+ * - documentation that Obsidian's developer policies or the project's Apply contract require, and that every link and image in the README and docs resolves;
+ * - documentation claims that code decides and that have drifted before: the diagram example phrases, plain-http MCP addresses, what Insert does to a selection and setting names the settings never had.
  *
  * `bun run scripts/roadmap-smoke-tests.ts --bundle` instead inspects the built main.js (run it after `bun run build`).
  */
@@ -21,12 +21,12 @@ import { join, posix } from "node:path";
 import { validateServerUrl } from "../src/mcp/httpTransport";
 import { detectDiagramIntent, shouldGenerateImage } from "../src/shared/imageIntent";
 
-/** Release metadata and README asset rules apply from the release that introduced them. 1.11.1 already shipped without them. */
+/** The manifest description rule applies from the release that introduced it. 1.11.1 already shipped without it. */
 const RELEASE_GATE_VERSION = "1.12.0";
 /** The release bundle has no runtime dependencies. A bundled Mermaid or MCP SDK would be several times this size. */
-const MAX_BUNDLE_BYTES = 800 * 1024; // TODO(lead): re-measure after the wave 2 merge and set this about 15% above main.js.
+const MAX_BUNDLE_BYTES = 1000 * 1024; // main.js was about 794 KiB when this was set: room to grow, but not for a bundled library.
 /** The README is the first thing people read. It stays short; reference material belongs in docs/. */
-const MAX_README_WORDS = 2000;
+const MAX_README_WORDS = 1900;
 /** Files that call window.fetch on purpose: the streaming transport, which requestUrl cannot provide. */
 const WINDOW_FETCH_ALLOWED = new Set([join("src", "plugin", "AskMatePlugin.ts"), join("src", "providers", "sseTransport.ts")]);
 /** The only module allowed to import child_process, behind Platform.isDesktopApp. */
@@ -142,18 +142,71 @@ export function findUntaggedFences(markdown: string): number[] {
 	return found;
 }
 
-/** Relative file targets of Markdown links and images and of src, srcset and href attributes. Web, mail and anchor links are skipped. */
-export function findRelativeTargets(markdown: string): string[] {
-	const withoutCode = markdown.replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n {0,3}\1[ \t]*$/gm, "").replace(/`[^`\n]*`/g, "");
-	const withoutComments = withoutCode.replace(/<!--[\s\S]*?-->/g, "");
-	const targets = [
-		...Array.from(withoutComments.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g), (match) => match[1]),
-		...Array.from(withoutComments.matchAll(/\b(?:src|srcset|href)\s*=\s*"([^"\s]+)"/g), (match) => match[1])
-	];
+/** Markdown with fenced code blocks and HTML comments removed. Inline code stays, because that is where names are quoted. */
+function withoutFencesAndComments(markdown: string): string {
+	return markdown.replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n {0,3}\1[ \t]*$/gm, "").replace(/<!--[\s\S]*?-->/g, "");
+}
+
+/** Markdown with all code and HTML comments removed, so only prose and real links remain. */
+function withoutCodeAndComments(markdown: string): string {
+	return withoutFencesAndComments(markdown).replace(/`[^`\n]*`/g, "");
+}
+
+/** File targets only: web, mail and anchor links are dropped, and the anchor and query of the rest are cut off. */
+function toFileTargets(targets: readonly string[]): string[] {
 	return Array.from(new Set(targets
 		.filter((target) => !/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(target))
 		.map((target) => target.split("#")[0].split("?")[0])
 		.filter((target) => target !== "")));
+}
+
+/** Relative file targets of Markdown links and images and of src, srcset and href attributes. Web, mail and anchor links are skipped. */
+export function findRelativeTargets(markdown: string): string[] {
+	const text = withoutCodeAndComments(markdown);
+	return toFileTargets([
+		...Array.from(text.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g), (match) => match[1]),
+		...Array.from(text.matchAll(/\b(?:src|srcset|href)\s*=\s*"([^"\s]+)"/g), (match) => match[1])
+	]);
+}
+
+/** Relative file targets of images only: Markdown images, and the src or srcset of img and source tags. */
+export function findImageTargets(markdown: string): string[] {
+	const text = withoutCodeAndComments(markdown);
+	const tagged = Array.from(text.matchAll(/<(?:img|source)\b[^>]*>/gi), (tag) => Array.from(tag[0].matchAll(/\b(?:src|srcset)\s*=\s*"([^"\s]+)"/g), (match) => match[1])).flat();
+	return toFileTargets([
+		...Array.from(text.matchAll(/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g), (match) => match[1]),
+		...tagged
+	]);
+}
+
+/** What is quoted in backticks, one entry per span. */
+export function quotedSpans(sentence: string): string[] {
+	return Array.from(sentence.matchAll(/`([^`\n]+)`/g), (match) => match[1]);
+}
+
+/**
+ * Names that documentation ties to the settings: a name before "page" or after "on the", "under", "turn on", "open" or "go to", the
+ * name of a setting or group, and the setting in front of "on the `Page` page". The settings tests check each one against the real
+ * settings, so a name the documentation invents or misspells is caught.
+ */
+export function findSettingReferences(markdown: string): string[] {
+	const patterns: RegExp[] = [
+		/`([^`\n]+)`(?: settings)? page\b/g,
+		/\bon the `([^`\n]+)`/g,
+		/\bunder `([^`\n]+)`/g,
+		/\bin the `([^`\n]+)` (?:group|of the)\b/g,
+		/\b(?:turn|turns|turning) (?:on|off) `([^`\n]+)`/gi,
+		/\b(?:open|go to) `([^`\n]+)`/gi,
+		/`([^`\n]+)` setting\b/g,
+		/\bsetting `([^`\n]+)`/g,
+		/\bset `([^`\n]+)` to `([^`\n]+)`/g,
+		/`([^`\n]+)`(?: and `([^`\n]+)`)?(?: in the `[^`\n]+` group)? on the `[^`\n]+`/g
+	];
+	const names = splitSentences(withoutFencesAndComments(markdown)).flatMap((sentence) =>
+		patterns.flatMap((pattern) => Array.from(sentence.matchAll(pattern), (match) => match.slice(1).filter((name): name is string => name !== undefined)).flat())
+	);
+	// Labels in the settings start with a capital letter. A path, a command or a file name quoted in the same sentence is not one.
+	return Array.from(new Set(names.filter((name) => /^[A-Z]/.test(name))));
 }
 
 /** Sentences of a Markdown document with HTML comments removed. A backticked span is never split, so `data.json` or `127.0.0.1` stay whole. */
@@ -488,20 +541,43 @@ function runRepoGuards(): void {
 		check(findRelativeTargets(section).length === 0, `CHANGELOG.md entry for ${version} has relative links, which do not resolve in a GitHub release body; use absolute URLs`);
 	}
 
-	// Every relative link and image resolves to a committable file. Assets are only required once the release gate is active,
-	// because the screenshots are captured from a real Obsidian vault shortly before the release is cut.
+	// Every relative link and image resolves to a committable file, assets included. The README does not need screenshots: it opens
+	// with the Mate Mark hero artwork, and any other image it references has to exist.
 	const committable = listCommittableFiles();
 	for (const [path, text] of docText) {
 		for (const target of findRelativeTargets(text)) {
 			const resolved = posix.normalize(posix.join(posix.dirname(path), decodeURI(target)));
-			if (resolved.startsWith("assets/") && !releaseGatesActive) {
-				continue;
-			}
 			const isDirectory = existsSync(resolved) && statSync(resolved).isDirectory();
 			check(existsSync(resolved), `${path} links to ${target}, which does not exist`);
 			if (committable && existsSync(resolved) && !isDirectory) {
 				check(committable.has(resolved), `${path} links to ${target}, which exists but is ignored by git`);
 			}
+		}
+	}
+	// The loop above has already checked that each image the README shows exists and ships. Here the README only has to show the hero.
+	const readmeImages = findImageTargets(readme);
+	for (const hero of ["assets/hero-light.svg", "assets/hero-dark.svg"]) {
+		check(readmeImages.includes(hero), `README.md must show ${hero}, the Mate Mark hero artwork for one theme`);
+	}
+	check(
+		findImageTargets("![A screenshot](assets/screenshots/a.png)\n\n<picture><source srcset=\"assets/dark.svg\"><img src=\"assets/light.svg\"></picture>\n\n`![in code](nope.png)`").join("|") === "assets/screenshots/a.png|assets/dark.svg|assets/light.svg",
+		"findImageTargets does not return the Markdown, img and source images of a document, and only those"
+	);
+
+	// Setting names that the documentation used and the settings never had. The settings tests check the names that are still in use.
+	const staleSettingNames: Array<[RegExp, string]> = [
+		[/\bSave conversations\b/, "`Remember conversations`"],
+		[/`Apply approval mode`|`Auto approve`/, "`Ask before changing my notes` and its three choices"],
+		[/`Remote URL`|`Local command`|\bturn on MCP\b/, "`Allow tools`, `Remote server` and `Local program`"],
+		[/\bFinish setup\b/, "the `Status` row on the `Connection` page"],
+		[/\bWorkflows and automation\b|\bunder request defaults\b|\bunder `?Responses`?/, "the real groups: `Workflows in the sidebar`, `Workflow defaults`, `Automation`, `Sidebar` and `Answers`"]
+	];
+	for (const [path, text] of docText) {
+		if (path === "CHANGELOG.md") {
+			continue;
+		}
+		for (const [pattern, instead] of staleSettingNames) {
+			check(!pattern.test(text), `${path} uses a setting name that the settings do not have (${pattern.source}); use ${instead}`);
 		}
 	}
 

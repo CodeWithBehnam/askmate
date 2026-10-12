@@ -2,7 +2,7 @@
 
 The Model Context Protocol (MCP) lets AskMate call tools that live outside Obsidian: search a database, read a ticket, fetch a page. AskMate is an MCP client for tools. Every call needs your approval by default, and AskMate never writes tool output into your vault.
 
-MCP is off until you turn it on. Nothing starts or connects by default.
+MCP is off until you turn on `Allow tools`. Nothing starts or connects by default.
 
 ## What is supported
 
@@ -58,23 +58,23 @@ Press `Trust and test` on the server's page. Before AskMate starts a local serve
 When the model wants a tool, AskMate shows a card in the reply with the server, the tool and the full, untruncated JSON arguments. You choose:
 
 - **Allow once.**
-- **Allow for this chat.** Lasts for the conversation, in memory only.
+- **Allow for this chat.** Covers later calls of the same tool in the same conversation, held in memory only. Whether a later call reuses it depends on the server's `Approval` setting, below.
 - **Deny.** Stopping the run also denies.
 
-Each server has an `Approval` setting:
+Each server has an `Approval` setting in the `Permissions` group on its page:
 
-| Setting | Behaviour |
+| Choice | Behaviour |
 | --- | --- |
-| Ask before every call (default) | Asks before every call. Choosing Allow for this chat on a card covers that tool for the rest of the chat. |
-| Ask once for each tool in a chat | Asks the first time each tool is used and says so on the card. Allow for this chat covers the rest of the chat. In this version it behaves like the first setting and differs only in the wording on the card. |
-| Ask unless the tool only reads | Lets tools through that the server itself marks read-only, but only when `Believe the server's read-only labels` is on for that server. The mark is the server's claim and AskMate does not verify it. Every other tool still asks. |
+| `Ask before every call` (default) | Asks before every call. An earlier Allow for this chat is never reused. |
+| `Ask once for each tool in a chat` | Asks the first time each tool is used in a conversation. After you choose Allow for this chat, later calls of that tool in the same conversation run without asking. A new conversation asks again. |
+| `Ask unless the tool only reads` | Lets tools through that the server itself marks read-only, but only when `Believe the server's read-only labels` is on for that server. The mark is the server's claim and AskMate does not verify it. Every other tool still asks. |
 
 Each tool definition (name, description, input schema, annotations) is fingerprinted with SHA-256. If a server changes a tool you approved, the tool gets a `Changed` badge and needs a fresh approval. A run keeps the tool list it started with, and a call to a tool that changed mid-run is not made. On a server's page you can switch off individual tools, and they never reach the model.
 
 ## How tools are used
 
 - Tools are offered on questions you ask in the sidebar in `Chat` output mode, when at least one trusted server is ready or waiting to start and the model supports tool calls. They are not used for diagrams, images, `Note` or `Apply` output, batch runs, or workflows started from the command palette or the editor menu. When the model cannot take tools, AskMate says so and answers without them.
-- A run stops after a set number of tool rounds and at most 12 calls. `Tool rounds per answer` sets the rounds (default 5), but a run never goes beyond 7 rounds in this version. A result is cut before the model sees it: `Longest tool result` sets the limit (default 20,000 characters), but the model never receives more than 12,000 characters of one result in this version. A call that takes too long is stopped, and AskMate tells the model not to retry it.
+- A run stops after `Tool rounds per answer` rounds of tool calls (5 by default, from 1 to 12) and after at most 12 calls in all. A result is cut at `Longest tool result` characters (20,000 by default, from 1,000 to 200,000) before the model sees it. AskMate applies both settings as you set them. Both are in the `Tools` group on the `Skills and tools` page. A call that takes too long is stopped, and AskMate tells the model not to retry it.
 - A tool result is plain text to the model, wrapped as untrusted data, never placed in its instructions. Images are dropped.
 - If you Apply a reply that was written from tool results, AskMate always shows the diff, whatever your approval setting. Such a reply cannot be queued for later review.
 - Stop cancels the run. A call that was stopped is not sent.

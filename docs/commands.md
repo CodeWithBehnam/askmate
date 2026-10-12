@@ -1,6 +1,6 @@
 # Commands, layouts and mentions
 
-AskMate has three sidebar layouts and a command line that works in all of them.
+AskMate has three sidebar layouts. Slash commands and `@` mentions work in all of them.
 
 ## Layouts
 

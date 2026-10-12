@@ -38,7 +38,7 @@ Sections in order: Summary, Decisions, Action items, Open questions.
 
 Limits: a vault skill body is at most 10,000 characters, a file at most 64 KB, a scan reads up to 200 skill files, and the folder is rescanned shortly after you change a file. A `README.md` in the skills folder is not read as a skill.
 
-Two buttons on the `Skills and tools` page create files for you. `New skill from template` asks for a name and writes a skill you can edit; AskMate approves that first version because it wrote it. `Install examples` adds five starter skills you can edit: Meeting minutes, Anki flashcards, Weekly review, Cornell notes and Translate and keep format. Examples need your review like any other vault skill, and existing files are never overwritten.
+Two buttons on the `Skills and tools` page create files for you. `New skill from template` asks for a name, and `Create skill` writes a skill you can edit. AskMate approves that first version because it wrote it, but approval covers the exact text, so as soon as you edit the file the skill shows `Needs review` until you press `Review` and approve it again. `Install examples` adds five starter skills you can edit: Meeting minutes, Anki flashcards, Weekly review, Cornell notes and Translate and keep format. Examples need your review like any other vault skill, and existing files are never overwritten.
 
 ## Trust
 

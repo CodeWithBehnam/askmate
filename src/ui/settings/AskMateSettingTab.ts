@@ -635,7 +635,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 					this.dropdownDefinition(
 						"composerLayout",
 						"Sidebar layout",
-						"Console is keyboard-first (type /help for commands), Compact is denser, and Expanded gives the composer more room.",
+						"Console is keyboard-first, Compact is denser, and Expanded gives the composer more room. Slash commands and @mentions work in all three; type /help to see them.",
 						{ console: "Console", compact: "Compact", expanded: "Expanded" },
 						{ aliases: ["console", "compact", "expanded", "composer"] }
 					),

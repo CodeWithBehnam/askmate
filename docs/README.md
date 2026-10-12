@@ -16,4 +16,13 @@ The [README](../README.md) covers install and the first minute. These pages hold
 
 ## Settings pages
 
-AskMate settings have six pages: `Connection`, `Sidebar and output`, `Privacy and memory`, `Skills and tools`, `Instructions` and `Advanced`. A new user needs only the first. These pages name each setting as it appears there.
+AskMate settings have six pages: `Connection`, `Sidebar and output`, `Privacy and memory`, `Skills and tools`, `Instructions` and `Advanced`. A new user needs only the first. These docs name each setting, group and page exactly as it appears there.
+
+| Page | Groups on it |
+| --- | --- |
+| `Connection` | `Provider`, `Images` (only when a provider other than OpenAI answers chat), `More options` |
+| `Sidebar and output` | `Sidebar`, `Answers` |
+| `Privacy and memory` | `Sent with each question`, `Kept on this device`, `Delete` |
+| `Skills and tools` | `Skills`, `Your skills`, `Diagrams`, `Tools`, `Tool servers` |
+| `Instructions` | `Instructions for every request`, `Folder instructions` |
+| `Advanced` | `Extra notes and folders`, `Attachments`, `Evidence`, `Pinned notes`, `Result notes`, `Image output`, `Changing notes`, `Review queue`, `Workflows in the sidebar`, `Workflow defaults`, `Automation`, `Usage limits`, `Usage history`, `Help and reset` |

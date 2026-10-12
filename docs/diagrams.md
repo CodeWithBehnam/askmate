@@ -50,6 +50,8 @@ The model writes only the diagram body. AskMate adds the header and the colour c
 4. If something still fails, AskMate asks the model once to repair it, sending only the first lines of the error and the failing line. This costs one extra request. You can turn the repair turn off with `Fix diagrams that do not draw`.
 5. If it still fails, the card shows the source and the reason, and `Insert` and `New note` are disabled for that reply. Nothing is written.
 
+Only a reply that holds a diagram which failed blocks writes. When the model answers a diagram request in words and draws no diagram, for example because the note holds nothing to draw, the reply is shown as ordinary text, and Insert, Apply and the save actions work as they do for any other reply.
+
 While a reply is streaming, an unfinished diagram shows `Drawing the diagram...` and is drawn once, after the fence closes.
 
 ## The preview card

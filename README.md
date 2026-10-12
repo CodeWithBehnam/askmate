@@ -20,8 +20,6 @@ AskMate is an AI sidebar for Obsidian. It answers questions about the note you a
 
 <p align="center">No telemetry · No AskMate server · Keys stay in Obsidian SecretStorage · Nothing in your notes changes until you approve · MIT licence · Desktop, Obsidian 1.13.0 or newer</p>
 
-![AskMate answering a question about the open note in the Obsidian sidebar](assets/screenshots/sidebar-answer.png)
-
 ## What you get
 
 | Feature | What you get |
@@ -41,8 +39,6 @@ AskMate is an AI sidebar for Obsidian. It answers questions about the note you a
 2. **Connect.** In the AskMate sidebar choose OpenAI, Anthropic, Gemini or Local, paste your API key and press Connect. The key goes into Obsidian SecretStorage, a test runs, and a failure is explained in plain words.
 3. **Ask.** Open a note and press a starter chip: Summarise this note, Make a diagram or Find gaps.
 
-![The AskMate Connect card with four provider chips and a key field](assets/screenshots/setup-card.png)
-
 AskMate is free. You pay your provider directly under its own pricing, or run a local model at no charge. Image generation needs a paid OpenAI API account. Your provider's billing page is the authority on what you are charged.
 
 Try these in the composer:
@@ -54,13 +50,13 @@ Draw this as a diagram.
 /polish keep it short
 ```
 
+Slash commands and `@` mentions work in every sidebar layout (Compact, Expanded and Console). Type `/help` to list them.
+
 ## Mermaid Diagram Studio
 
 Say `Draw this as a diagram`, type `/diagram`, or press Make a diagram. AskMate chooses a type that fits your note, from flowcharts and sequences to Gantt, timelines, mind maps, architecture and more, and uses only what is in the note. Eight looks (Blueprint, Sketchbook, Editorial Ink, Sunrise, Lagoon, Grape Soda, Slate and Terminal) use colours checked for contrast, and Another look draws it again in the next one.
 
 Every diagram is parsed and rendered with the Mermaid that ships in Obsidian before you see it. If it fails, AskMate repairs it once, and if it still fails it shows the source and disables Insert and New note for that reply. Diagram requests never go to paid image generation. See [diagrams](docs/diagrams.md).
-
-![A Mermaid diagram preview card in the AskMate sidebar, drawn in one of the eight looks, above the buttons Insert, New note, Copy source and Another look](assets/screenshots/diagram-studio.png)
 
 ## Apply changes safely
 
@@ -75,15 +71,14 @@ See [apply](docs/apply.md).
 
 ## Connect tools with MCP
 
-The Model Context Protocol lets AskMate use tools outside Obsidian. Add a Streamable HTTP server, or on desktop a local command, in settings. Paste the `mcpServers` JSON from Claude Desktop, Cursor or VS Code to import.
+The Model Context Protocol lets AskMate use tools outside Obsidian. On the `Skills and tools` settings page, add a remote Streamable HTTP server or, on desktop, a local program. You can also paste the `mcpServers` JSON from Claude Desktop, Cursor or VS Code to import.
 
 - Off until you turn on `Allow tools`. Nothing starts at load.
 - You review the exact command or address and trust it on each device. Any change needs trust again.
-- Each call shows the server, the tool and the full arguments. Allow once, allow for this chat, or deny. Tools are used for questions in the sidebar's Chat mode.
+- Each call shows the server, the tool and the full arguments. Choose Allow once, Allow for this chat or Deny. `Ask before every call` (the default) never reuses an Allow for this chat, while `Ask once for each tool in a chat` does for later calls of the same tool in that conversation. Tools are used for questions in the sidebar's Chat mode.
+- `Tool rounds per answer` (5 by default, up to 12) and `Longest tool result` (20,000 characters by default) are the limits, and AskMate applies them as set.
 - A tool that changes its description after you approved it is flagged and asks again.
 - Tool descriptions and results are untrusted text. They are cleaned, capped and kept out of the instructions.
-
-![The MCP approval card in a sidebar reply, showing the server, the tool name and the full JSON arguments above the buttons Allow once, Allow for this chat and Deny](assets/screenshots/mcp-approval.png)
 
 A local server is a child process with your user's permissions, so add only commands you would run yourself. See [MCP tools](docs/mcp.md) and [skills](docs/skills.md).
 
@@ -93,7 +88,7 @@ A local server is a child process with your user's permissions, so add only comm
 | --- | --- |
 | Network | Your AI provider, MCP servers you add, and nothing else. No analytics. Requests go out only when you send a question, test a connection, refresh models or test an MCP server. A trusted MCP server is contacted when a question could use its tools. |
 | Notes it reads | The selection or the open note. Other notes only through `@` mentions or context sources you turn on. `/context` shows what the next request holds. |
-| Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode setting (Auto approve, Full or Manual, shown as `Ask before changing my notes`; Manual is the default) sets how often you see a diff, and replacing the whole note always asks. |
+| Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode is the `Ask before changing my notes` setting: `Every time` (the default), `When replacing a whole note or a section`, or `Only when replacing the whole note`. It sets how often you see a diff, and replacing the whole note always asks. |
 | Clipboard | Write only, when you press Copy. |
 | Secrets | API keys and MCP tokens in Obsidian SecretStorage. Settings keep only names. |
 | Local data | `data.json` in the plugin folder: settings, approved skill hashes, MCP definitions, saved conversations (50 threads), note history (12 turns per note, 200 turns across all notes), the review queue and token counts. It syncs if you sync your configuration folder. |
@@ -121,7 +116,7 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](h
 <details>
 <summary>Does AskMate send my whole vault?</summary>
 
-No. A request holds your prompt and the context you chose: by default the selection or the open note. Other notes are added only by an `@` mention or a context source you enabled. `/context` lists exactly what would go, and turning off `Send note and attached context` withholds all of it.
+No. A request holds your prompt and the context you chose: by default the selection or the open note. Other notes are added only by an `@` mention or a context source you enabled. `/context` lists exactly what would go, and turning off `Send the current note with each question` on the `Privacy and memory` page keeps the note's text, path and title out of requests.
 
 </details>
 
@@ -135,7 +130,7 @@ Yes. Choose Local or self-hosted and set an OpenAI-compatible address such as `h
 <details>
 <summary>Does image generation need OpenAI?</summary>
 
-Yes. Images always use OpenAI `gpt-image-2`, whichever chat provider you choose, and need an OpenAI API key with access to that model.
+Yes. Images always use OpenAI `gpt-image-2`, whichever chat provider you choose, and need an OpenAI API key with access to that model. When another provider answers chat, add the key under `OpenAI image API key` on the `Connection` page.
 
 </details>
 
