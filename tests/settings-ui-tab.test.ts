@@ -32,6 +32,9 @@ import {
 const restoreGlobals = installDomGlobals();
 afterAll(restoreGlobals);
 
+/** A deletion cannot be told apart from a record that a synced device never had, so every delete control says to repeat it. */
+const SYNC_DELETION_SENTENCE = "If this vault's plugin data syncs between devices, repeat the deletion on each device. A device that still holds a conversation or a queued review puts it back.";
+
 // This file adds behaviour to the shared fakes (below). The fakes are shared by every test file in the run, so each change is
 // recorded here first and undone when this file is finished.
 const PATCHED: ReadonlyArray<readonly [object, string]> = [
@@ -497,9 +500,25 @@ describe("sidebar and output page", () => {
 
 	test("the approval setting is called what the docs call it, with its three choices", () => {
 		const dropdown = dropdownIn(rowNamed(sidebarRows(), "Ask before changing my notes").setting);
-		expect(Object.values(dropdown.options)).toEqual(["Only when replacing the whole note", "When replacing a whole note or a section", "Every time"]);
+		expect(Object.values(dropdown.options)).toEqual(["Yes or no, only when replacing the whole note", "When replacing a whole note or a section", "Every time"]);
 		expect(DEFAULT_SETTINGS.applyApprovalMode).toBe("manual");
 		expect(dropdown.options.manual).toBe("Every time");
+	});
+
+	test("the loosest approval choice says it asks yes or no, with no diff, and the help agrees with what the plugin does", () => {
+		const row = rowNamed(sidebarRows(), "Ask before changing my notes");
+		expect(dropdownIn(row.setting).options["auto-approve"]).toContain("Yes or no");
+		const help = String(row.def.desc);
+		expect(help).toContain("shows no diff");
+		expect(help).toContain("asks yes or no before a whole note is replaced");
+		expect(help).toContain("Safety stops apply in every mode");
+	});
+
+	test("Default output says that a new note or an edit covers one answer only", () => {
+		const help = String(rowNamed(sidebarRows(), "Default output").def.desc);
+		expect(help).toContain("covers one answer only");
+		expect(help).toContain("goes back to the sidebar");
+		expect(help).not.toContain("by default");
 	});
 });
 
@@ -530,10 +549,16 @@ describe("privacy and memory", () => {
 		await tick();
 		const dialog = Modal.opened.at(-1) as Modal;
 		expect(dialog.titleEl.textContent).toBe("Delete saved conversations");
+		expect(dialog.contentEl.textContent).toContain(SYNC_DELETION_SENTENCE);
 		(Array.from(dialog.contentEl.querySelectorAll("button")).find((b) => b.textContent === "Delete conversations") as HTMLButtonElement).click();
 		await tick();
 		expect(Notice.messages).toEqual(["AskMate could not delete the saved conversations. Try again."]);
 		expect(feedbackOf(setting)).toContain("could not be deleted");
+	});
+
+	test("Delete all stored text warns that a synced device puts deleted text back", () => {
+		const description = String(rowNamed(privacyRows(makeHarness()), "Delete all stored text").def.desc);
+		expect(description).toContain(SYNC_DELETION_SENTENCE);
 	});
 
 	test("delete saved conversations reports success only when the store says so", async () => {
@@ -576,6 +601,7 @@ describe("privacy and memory", () => {
 		await tick();
 		const dialog = Modal.opened.at(-1) as Modal;
 		expect(dialog.contentEl.textContent).toContain("note history");
+		expect(dialog.contentEl.textContent).toContain(SYNC_DELETION_SENTENCE);
 		(Array.from(dialog.contentEl.querySelectorAll("button")).find((b) => b.textContent === "Delete everything") as HTMLButtonElement).click();
 		await tick();
 		expect(cleared).toBe(1);
@@ -1294,8 +1320,8 @@ describe("tools page", () => {
 
 	test("the limit rows name the real bounds and what happens at the limit", () => {
 		const rows = toolsRows(mcpHarness());
-		expect(rowNamed(rows, "Tool rounds per answer").def.desc).toBe("The most rounds of tool calls the model may make while writing one answer (1 to 12). After the last round it answers with what it has.");
-		expect(rowNamed(rows, "Longest tool result").def.desc).toBe("Characters of one tool result that the model sees (1,000 to 200,000). Longer results are cut.");
+		expect(rowNamed(rows, "Tool rounds per answer").def.desc).toBe("The model may call tools in this many turns (1 to 12). It then gets one more turn, without tools, to write the answer.");
+		expect(rowNamed(rows, "Longest tool result").def.desc).toBe("A tool result is cut at exactly this many characters before the model sees it (1,000 to 200,000), and a short note tells the model it was cut.");
 	});
 
 	test("turning tools on asks first, and Cancel leaves them off", async () => {

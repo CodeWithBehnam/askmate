@@ -35,7 +35,7 @@ Other providers (Azure OpenAI, Azure AI Foundry, OpenRouter) are set up on the `
 
 ## Addresses
 
-OpenAI, Anthropic, Google Gemini and OpenRouter always use the vendor's own address. A different address saved in `data.json` is reset, so a settings file from elsewhere cannot send your key to another host. To use a proxy or gateway, choose Local or self-hosted and set its address. For Azure AI Foundry and for Local or self-hosted addresses that are not on this computer, AskMate also asks you once per device to approve the host before it first sends the stored key there.
+OpenAI, Anthropic, Google Gemini and OpenRouter always use the vendor's own address. A different address saved in `data.json` is reset, so a settings file from elsewhere cannot send your key to another host. To use a proxy or gateway, choose Local or self-hosted and set its address. For Azure OpenAI, Azure AI Foundry and Local or self-hosted addresses that are not on this computer, AskMate also asks you once per device to approve the host before it first sends the stored key there. Azure OpenAI is on that list because anyone can create a resource under an Azure domain. If you already use Azure OpenAI, you see the question on your first request after upgrading.
 
 Remote addresses must use `https://`. Plain `http://` is accepted only when the traffic stays on your machine or network, because the key travels in a request header. These forms are accepted:
 

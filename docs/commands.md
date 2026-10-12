@@ -56,7 +56,7 @@ Type `/` in the composer. Press `Tab` or `Enter` to complete, so `/pol` becomes 
 | `/images [on\|off]` | | Turn image previews of linked pictures on or off. |
 | `/effort <level>` | `/reasoning` | Reasoning effort: `none`, `low`, `medium`, `high`, `xhigh`. |
 | `/context` | `/ctx` | Show what the next request would send. |
-| `/inspect [question]` | `/prompt` | Open the final prompt before sending. |
+| `/inspect [question]` | `/prompt` | Open the final prompt before sending. A diagram request adds its diagram brief, and an answer that can use MCP tools adds a short tools section, when the request is sent. The dialog says so and counts an allowance for both in the token estimate. |
 | `/history` | | Show AskMate history for this note. |
 | `/clear` | `/cls` | Start a new conversation. The old one stays saved. |
 | `/layout <layout>` | | Switch layout. |
@@ -100,14 +100,14 @@ Add mentions anywhere in the line to choose what is sent.
 
 `@tag:` ignores case, the `#` is optional, and `@tag:project` also matches `#project/alpha`. Each of `@links`, `@backlinks`, `@tag:` and `@recent` attaches at most 10 notes, which count against your context budget and per-note size limits. `/context` lists which notes were included and which were left out. A note, folder or tag that finds nothing is reported instead of skipped. Mentions can sit next to punctuation (`Summarise @note.`). A backslash (`\@word`) sends the word as text, and mentions inside code spans or code blocks are never read.
 
-Keys: `Tab` or `Enter` accepts the highlighted suggestion, the up arrow recalls earlier input, and `Esc` closes suggestions or stops a running request.
+Keys in every layout: the up and down arrows move through the suggestions, `Tab` or `Enter` accepts the highlighted one, and `Esc` closes the list. The Console layout adds two more: the up arrow recalls earlier input when the line is empty, and `Esc` stops a running request.
 
 ## Conversations
 
 AskMate keeps your sidebar chat as a named thread that survives restarts. Titles default to your first question. `/export` writes the conversation to a Markdown note in your AskMate result folder, with your questions and the replies as separate sections, links to the notes each question was asked about, and incomplete replies marked. The same actions sit in the sidebar header, next to the request context and note history buttons.
 
-AskMate keeps up to 50 threads of 200 messages each. Turn saving off, or delete every saved thread, with `Remember conversations` and `Delete saved conversations` on the `Privacy and memory` page. With saving off, a conversation you leave with `/new` or `/clear` is not kept. See [privacy](privacy.md) for what a thread contains.
+AskMate keeps up to 50 threads of 200 messages each, within 2 MiB in all. A thread past 200 messages loses its oldest messages. When the total is too large, whole threads go oldest first and the open one is kept. A saved reply is cut at 50,000 characters and says so. When loading cuts anything, AskMate shows a notice and keeps a copy of the file named `data.json.before-trim-` plus the UTC time in the plugin folder. Turn saving off, or delete every saved thread, with `Remember conversations` and `Delete saved conversations` on the `Privacy and memory` page. With saving off, a conversation you leave with `/new` or `/clear` is not kept. If the plugin data syncs between devices, delete on each device, because a device that still holds a thread puts it back. See [privacy](privacy.md) for what a thread contains.
 
 ## Streaming
 
-Text replies appear as the provider generates them. Stop cancels the HTTP request itself. `Note` and `Apply` output modes still write only after the reply has finished. A reply that uses MCP tools arrives in one piece. If the stream cannot be opened (a local server, an Azure resource or a proxy that refuses requests from Obsidian), AskMate falls back to one buffered response. HTTP errors such as 401 or 429 are reported as they are and are not retried. If a stream breaks part-way, AskMate keeps the partial text, marks it incomplete and will not use it to replace note text. `Stream replies` is under `Answers` on the `Sidebar and output` page and is on by default.
+Text replies appear as the provider generates them. Stop cancels the HTTP request itself. `Note` and `Apply` output modes still write only after the reply has finished. A reply that uses MCP tools arrives in one piece, not as it is written. If the stream cannot be opened (a local server, an Azure resource or a proxy that refuses requests from Obsidian), AskMate falls back to one buffered response. HTTP errors such as 401 or 429 are reported as they are and are not retried. If a stream breaks part-way, AskMate keeps the partial text, marks it incomplete and will not use it to replace note text. `Stream replies` is under `Answers` on the `Sidebar and output` page and is on by default.

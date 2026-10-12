@@ -45,9 +45,9 @@ export const APPROVAL_LABELS: Readonly<Record<McpApprovalMode, string>> = {
 };
 
 export const APPROVAL_HELP: Readonly<Record<McpApprovalMode, string>> = {
-	"always-ask": "Every call shows its arguments and waits for you, even if you chose Allow for this chat earlier. This is the safest choice.",
-	"ask-once-per-chat": "The first call of each tool in a chat waits for you. After you choose Allow for this chat, later calls of that tool in the same conversation run without asking.",
-	"trusted-read-only": "Tools that the server says only read data run without asking. AskMate cannot check that claim, so use it only for servers you trust."
+	"always-ask": "Every call shows its arguments and waits for you, and nothing is remembered: the card offers only Allow once and Deny. This is the safest choice.",
+	"ask-once-per-chat": "The first call of each tool in a chat waits for you. The card then offers Allow for this chat, and once you choose it that tool runs without asking again in that conversation.",
+	"trusted-read-only": "Tools that the server says only read data run without asking, once you turn on Believe the server's read-only labels. AskMate cannot check that claim, so use it only for servers you trust. Every other tool asks, and its card offers Allow for this chat."
 };
 
 /** The only hosts a remote server may reach over plain HTTP. Every other address needs HTTPS. */
@@ -444,14 +444,14 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 	};
 
 	const limitRows: SettingDefinition[] = [
-		host.integerDefinition("Tool rounds per answer", `The most rounds of tool calls the model may make while writing one answer (${MCP_TOOL_ROUNDS_BOUNDS.min} to ${MCP_TOOL_ROUNDS_BOUNDS.max}). After the last round it answers with what it has.`, {
+		host.integerDefinition("Tool rounds per answer", `The model may call tools in this many turns (${MCP_TOOL_ROUNDS_BOUNDS.min} to ${MCP_TOOL_ROUNDS_BOUNDS.max}). It then gets one more turn, without tools, to write the answer.`, {
 			bounds: { min: MCP_TOOL_ROUNDS_BOUNDS.min, max: MCP_TOOL_ROUNDS_BOUNDS.max },
 			getValue: () => settings.mcp.maxToolRoundsPerTurn,
 			setValue: (value) => {
 				settings.mcp = { ...settings.mcp, maxToolRoundsPerTurn: value };
 			}
 		}, { visible: toolsOn }),
-		host.integerDefinition("Longest tool result", `Characters of one tool result that the model sees (${MCP_OUTPUT_CHARS_BOUNDS.min.toLocaleString("en-GB")} to ${MCP_OUTPUT_CHARS_BOUNDS.max.toLocaleString("en-GB")}). Longer results are cut.`, {
+		host.integerDefinition("Longest tool result", `A tool result is cut at exactly this many characters before the model sees it (${MCP_OUTPUT_CHARS_BOUNDS.min.toLocaleString("en-GB")} to ${MCP_OUTPUT_CHARS_BOUNDS.max.toLocaleString("en-GB")}), and a short note tells the model it was cut.`, {
 			bounds: { min: MCP_OUTPUT_CHARS_BOUNDS.min, max: MCP_OUTPUT_CHARS_BOUNDS.max },
 			getValue: () => settings.mcp.maxOutputChars,
 			setValue: (value) => {

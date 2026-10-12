@@ -4,7 +4,7 @@ AskMate never edits a note on its own. An answer reaches your vault only when yo
 
 ## Output modes
 
-Choose a mode with the three buttons beside the composer before you send, or cycle it by clicking the mode in the Console status bar. `Default output` in the `Answers` group on the `Sidebar and output` page sets the starting mode. Its choices are `Show in the sidebar`, `Create a new note` and `Edit my note (asks before changing it)`.
+Choose a mode with the three buttons beside the composer before you send, or cycle it by clicking the mode in the Console status bar. `Default output` in the `Answers` group on the `Sidebar and output` page sets the starting mode, and a `Note` or `Apply` choice there is spent by the next answer like one made with the buttons. Its choices are `Show in the sidebar`, `Create a new note` and `Edit my note (asks before changing it)`.
 
 | Mode | What happens |
 | --- | --- |
@@ -34,17 +34,17 @@ Before it replaces text, AskMate checks that the note did not change while you w
 
 ## Apply approval mode
 
-The Apply approval mode decides how often you see a diff before a text write. It is the `Ask before changing my notes` setting, in the `Answers` group on the `Sidebar and output` page.
+The Apply approval mode decides whether you see a diff, or only a yes or no, before a text write. It is the `Ask before changing my notes` setting, in the `Answers` group on the `Sidebar and output` page.
 
 | Choice | Behaviour |
 | --- | --- |
 | `Every time` (default) | Asks with a diff before every text Apply write. |
 | `When replacing a whole note or a section` | Asks with a diff for full-note and heading-section replacements, and skips selected-text and append previews. |
-| `Only when replacing the whole note` | Skips the diff for selected-text, append and heading-section writes. Full-note replacement is still confirmed. |
+| `Yes or no, only when replacing the whole note` | Shows no diff. Asks a plain yes or no before a whole note is replaced, and writes selected-text, append and heading-section edits without asking. |
 
 An unknown or damaged value is treated as the strictest mode, not the loosest. No mode switches off captured-note targeting, exact selected-text matching, the explicit full-note confirmation, the truncated-context confirmation or the frontmatter safeguards.
 
-Two things override the mode. A reply that was written from tool results (MCP) always opens the diff, and it cannot be queued for later review. When AskMate had to change the reply to make it safe, or the text it adds holds something active such as a script block, a remote image, a template tag or hidden characters, the write stops with a confirmation that names the problem, even with `Only when replacing the whole note`. The diff modal makes invisible and bidirectional characters visible.
+Two things override the mode. A reply that was written from tool results (MCP) always opens the diff, and it cannot be queued for later review. When AskMate had to change the reply to make it safe, or the text it adds holds something active such as a script block, a remote image, a template tag or hidden characters, the write stops with a confirmation that names the problem, even with `Yes or no, only when replacing the whole note`. The diff modal makes invisible and bidirectional characters visible.
 
 ## When AskMate refuses to replace text
 

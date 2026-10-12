@@ -56,7 +56,7 @@ Slash commands and `@` mentions work in every sidebar layout (Compact, Expanded 
 
 Say `Draw this as a diagram`, type `/diagram`, or press Make a diagram. AskMate chooses a type that fits your note, from flowcharts and sequences to Gantt, timelines, mind maps, architecture and more, and uses only what is in the note. Eight looks (Blueprint, Sketchbook, Editorial Ink, Sunrise, Lagoon, Grape Soda, Slate and Terminal) use colours checked for contrast, and Another look draws it again in the next one.
 
-Every diagram is parsed and rendered with the Mermaid that ships in Obsidian before you see it. If it fails, AskMate repairs it once, and if it still fails it shows the source and disables Insert and New note for that reply. Diagram requests never go to paid image generation. See [diagrams](docs/diagrams.md).
+Every diagram is parsed and rendered with the Mermaid that ships in Obsidian before you see it. If it fails, AskMate repairs it once, and if it still fails it shows the source and disables Insert and New note for that reply. If the model answers in words and draws nothing, that reply is ordinary text and nothing is blocked. Diagram requests never go to paid image generation. See [diagrams](docs/diagrams.md).
 
 ## Apply changes safely
 
@@ -75,8 +75,8 @@ The Model Context Protocol lets AskMate use tools outside Obsidian. On the `Skil
 
 - Off until you turn on `Allow tools`. Nothing starts at load.
 - You review the exact command or address and trust it on each device. Any change needs trust again.
-- Each call shows the server, the tool and the full arguments. Choose Allow once, Allow for this chat or Deny. `Ask before every call` (the default) never reuses an Allow for this chat, while `Ask once for each tool in a chat` does for later calls of the same tool in that conversation. Tools are used for questions in the sidebar's Chat mode.
-- `Tool rounds per answer` (5 by default, up to 12) and `Longest tool result` (20,000 characters by default) are the limits, and AskMate applies them as set.
+- Each call shows the server, the tool and the full arguments. `Ask before every call` (the default) offers Allow once or Deny and remembers nothing. `Ask once for each tool in a chat` also offers Allow for this chat, and that tool then runs without asking again in that conversation. Tools are used for questions in the sidebar's Chat mode, and a reply that uses them arrives in one piece.
+- `Tool rounds per answer` (5 by default, up to 12) gives the model that many turns of tool calls plus one last turn without tools to write the answer, and an answer makes at most 12 calls. `Longest tool result` (20,000 characters by default) cuts each result at exactly that length. AskMate applies both as set.
 - A tool that changes its description after you approved it is flagged and asks again.
 - Tool descriptions and results are untrusted text. They are cleaned, capped and kept out of the instructions.
 
@@ -87,11 +87,11 @@ A local server is a child process with your user's permissions, so add only comm
 | Area | Behaviour |
 | --- | --- |
 | Network | Your AI provider, MCP servers you add, and nothing else. No analytics. Requests go out only when you send a question, test a connection, refresh models or test an MCP server. A trusted MCP server is contacted when a question could use its tools. |
-| Notes it reads | The selection or the open note. Other notes only through `@` mentions or context sources you turn on. `/context` shows what the next request holds. |
-| Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode is the `Ask before changing my notes` setting: `Every time` (the default), `When replacing a whole note or a section`, or `Only when replacing the whole note`. It sets how often you see a diff, and replacing the whole note always asks. |
+| Notes it reads | The selection or the open note. Other notes only through `@` mentions or context sources you turn on. `/context` shows what the next request holds. Skill files in your skills folder (`AskMate/Skills` by default) are read on your device, and a skill's text is sent to the model only when that skill is used. |
+| Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode is the `Ask before changing my notes` setting: `Every time` (the default), `When replacing a whole note or a section`, or `Yes or no, only when replacing the whole note`. The first always shows a diff, the second shows one for a whole note or a section, and the last asks only yes or no before a whole note is replaced and writes smaller edits without asking. Replacing the whole note always asks. |
 | Clipboard | Write only, when you press Copy. |
 | Secrets | API keys and MCP tokens in Obsidian SecretStorage. Settings keep only names. |
-| Local data | `data.json` in the plugin folder: settings, approved skill hashes, MCP definitions, saved conversations (50 threads), note history (12 turns per note, 200 turns across all notes), the review queue and token counts. It syncs if you sync your configuration folder. |
+| Local data | `data.json` in the plugin folder: settings, approved skill hashes, MCP definitions, saved conversations (up to 50 threads of 200 messages, 2 MiB in all with the oldest first, and a saved reply cut at 50,000 characters; when a load has to cut anything, AskMate shows a notice and keeps a `data.json.before-trim-` copy), note history (12 turns per note, 200 turns across all notes), the review queue and token counts. It syncs if you sync your configuration folder, and then you repeat a deletion on each device. |
 | Cost | Billed by your provider. Usage budgets can warn or block large requests, and AskMate always asks before sending one estimated at 150,000 input tokens or more. |
 | MCP and child processes | Local servers run as a child process on desktop only, after you trust them, with your account's permissions: they can read and write any file you can, including your vault. Remote servers see the arguments of calls you approve. |
 

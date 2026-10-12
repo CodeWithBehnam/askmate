@@ -664,14 +664,14 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 					this.dropdownDefinition(
 						"outputMode",
 						"Default output",
-						"Where answers go by default: the sidebar, a new note, or an edit to your note.",
+						"Where the next answer goes: the sidebar, a new note, or an edit to your note. A new note or an edit covers one answer only, then AskMate goes back to the sidebar.",
 						{ chat: "Show in the sidebar", note: "Create a new note", apply: "Edit my note (asks before changing it)" }
 					),
 					this.dropdownDefinition(
 						"applyApprovalMode",
 						"Ask before changing my notes",
-						"When AskMate shows you a diff before writing into a note; the safety checks apply in every mode.",
-						{ "auto-approve": "Only when replacing the whole note", full: "When replacing a whole note or a section", manual: "Every time" },
+						"When AskMate shows you a diff before writing into a note. The loosest choice shows no diff: it asks yes or no before a whole note is replaced and writes anything smaller without asking. Safety stops apply in every mode.",
+						{ "auto-approve": "Yes or no, only when replacing the whole note", full: "When replacing a whole note or a section", manual: "Every time" },
 						{ aliases: ["preview", "confirm", "diff", "apply"] }
 					),
 					this.toggleDefinition(
@@ -786,7 +786,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 					},
 					{
 						name: "Delete all stored text",
-						desc: "Remove saved conversations, note history and the text of queued reviews from this plugin's data.",
+						desc: "Remove saved conversations, note history and the text of queued reviews from this plugin's data. If this vault's plugin data syncs between devices, repeat the deletion on each device. A device that still holds a conversation or a queued review puts it back.",
 						render: (setting) => {
 							this.prepareFieldFeedback(setting);
 							setting.addButton((button) => {
@@ -806,7 +806,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			title: "Delete saved conversations",
 			confirmLabel: "Delete conversations",
 			destructive: true,
-			details: ["Note history and queued reviews are not affected."]
+			details: ["Note history and queued reviews are not affected.", "If this vault's plugin data syncs between devices, repeat the deletion on each device. A device that still holds a conversation or a queued review puts it back."]
 		});
 		if (!confirmed) {
 			return;
@@ -827,7 +827,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			title: "Delete all stored text",
 			confirmLabel: "Delete everything",
 			destructive: true,
-			details: ["Your notes, settings, skills and tool servers are not touched."]
+			details: ["Your notes, settings, skills and tool servers are not touched.", "If this vault's plugin data syncs between devices, repeat the deletion on each device. A device that still holds a conversation or a queued review puts it back."]
 		});
 		if (!confirmed) {
 			return;

@@ -77,4 +77,4 @@ Newer versions of Obsidian can ask, once per vault, whether to trust Mermaid dia
 
 ## Skill
 
-The built-in `mermaid-diagrams` skill holds the type guidance and syntax rules the model follows. It is always trusted and cannot be shadowed by a vault skill. See [skills](skills.md).
+The built-in `mermaid-diagrams` skill holds the type guidance and syntax rules the model follows. It is always trusted and cannot be shadowed by a vault skill, and diagram requests still use it when `Use skills` is off. See [skills](skills.md).
