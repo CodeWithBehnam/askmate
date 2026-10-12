@@ -37,7 +37,7 @@ export type ThreadServiceHost = {
 
 /**
  * Shell around the pure thread model: debounces writes and persists into plugin data.
- * Nothing is saved while "Save conversations" is off. Every store change goes through one serialised chain, and
+ * Nothing is saved while "Remember conversations" is off. Every store change goes through one serialised chain, and
  * each step snapshots and, on a failed write, reverts only its own change.
  */
 export class ThreadService {

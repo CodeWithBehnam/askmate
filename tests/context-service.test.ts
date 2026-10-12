@@ -369,6 +369,67 @@ describe("attachment truncation (context#5)", () => {
 		expect(attachments[1]?.content).toContain("[AskMate truncated this attachment: showing 30 of 50 characters.");
 	});
 
+	describe("configured note paths with # ^ or | (FIX-A)", () => {
+		/** Obsidian's linkpath lookup takes a path with no heading or block part, so a tail is part of the name it matches. */
+		function useStrictLinkLookup(harness: Harness): void {
+			harness.metadataCache.getFirstLinkpathDest = (link: string) => {
+				const direct = harness.vault.files.get(link) ?? harness.vault.files.get(`${link}.md`);
+				return direct ?? Array.from(harness.vault.files.values()).find((file) => file.basename === link) ?? null;
+			};
+		}
+
+		test("a real file name that holds # or ^ resolves as stored", () => {
+			const harness = createHarness();
+			useStrictLinkLookup(harness);
+			const csharp = harness.vault.add("Projects/C# notes.md", "csharp");
+			const caret = harness.vault.add("Ideas/Top^5.md", "caret");
+			harness.vault.add("Projects/C.md", "decoy");
+
+			expect(harness.service.resolveMarkdownPath("Projects/C# notes.md", "Source.md")).toBe(csharp);
+			expect(harness.service.resolveMarkdownPath("Ideas/Top^5.md", "Source.md")).toBe(caret);
+		});
+
+		test("a bare path with a heading, block or alias tail still finds the note", () => {
+			const harness = createHarness();
+			useStrictLinkLookup(harness);
+			const other = harness.vault.add("Folder/Other.md", "other");
+			const alias = harness.vault.add("Plain note.md", "plain");
+
+			expect(harness.service.resolveMarkdownPath("Folder/Other.md#^block", "Source.md")).toBe(other);
+			expect(harness.service.resolveMarkdownPath("Folder/Other.md#Heading", "Source.md")).toBe(other);
+			expect(harness.service.resolveMarkdownPath("Plain note|shown as", "Source.md")).toBe(alias);
+		});
+
+		test("the full path wins over the shorter one when both name a note", () => {
+			const harness = createHarness();
+			useStrictLinkLookup(harness);
+			const named = harness.vault.add("Projects/C# notes.md", "named");
+			harness.vault.add("Projects/C.md", "decoy");
+
+			expect(harness.service.resolveMarkdownPath("Projects/C# notes.md", "Source.md")).toBe(named);
+		});
+
+		test("additional notes attach both kinds and report what cannot be found or read", async () => {
+			const harness = createHarness();
+			useStrictLinkLookup(harness);
+			harness.vault.add("Projects/C# notes.md", "csharp body");
+			harness.vault.add("Folder/Other.md", "other body");
+			harness.vault.add("Folder/Image.png", "binary");
+
+			const source = harness.vault.add("Source.md", "source body");
+			const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(source), {
+				additionalContextPaths: ["Projects/C# notes.md", "Folder/Other.md#^block", "Missing.md#Heading", "Folder/Image.png#frame"]
+			}, { includeNoteContext: true, includeImageReferences: true });
+
+			expect(detailed.attachments.map((attachment) => attachment.sourcePath)).toEqual(["Projects/C# notes.md", "Folder/Other.md"]);
+			expect(detailed.attachments.map((attachment) => attachment.content)).toEqual(["csharp body", "other body"]);
+			expect(detailed.skipped.map((skip) => `${skip.path}:${skip.reason}`)).toEqual([
+				"Missing.md#Heading:not-found",
+				"Folder/Image.png#frame:not-markdown"
+			]);
+		});
+	});
+
 	test("folder notes are truncated with the notice and respect the folder walk limit", async () => {
 		const harness = createHarness();
 		harness.vault.add("Folder/A.md", "x".repeat(900));

@@ -21,6 +21,7 @@ import {
 	NoteHistoryTurn,
 	normalizeBoundedInteger,
 	normalizeContextPathList,
+	noteLookupCandidates,
 	RequestPrivacyOptions
 } from "../shared/core";
 import { parseMarkdownHeadingSections } from "../output";
@@ -1000,16 +1001,23 @@ export class ContextService {
 			return { kind: "skip", reason: "not-found" };
 		}
 
-		const direct = this.host.app.vault.getAbstractFileByPath(cleanPath);
-		if (direct instanceof TFile && direct.extension === "md") {
-			return { kind: "file", file: direct };
-		}
+		// The path as stored comes first so a real file name such as "C# notes.md" wins; the version without a heading,
+		// block or alias tail is the fallback for a typed "Other.md#^block". A Markdown match on any candidate beats a
+		// non-Markdown one on an earlier candidate.
+		let foundNonMarkdown = false;
+		for (const candidate of noteLookupCandidates(cleanPath)) {
+			const direct = this.host.app.vault.getAbstractFileByPath(candidate);
+			if (direct instanceof TFile && direct.extension === "md") {
+				return { kind: "file", file: direct };
+			}
 
-		const linked = this.host.app.metadataCache.getFirstLinkpathDest(cleanPath, sourcePath);
-		if (linked?.extension === "md") {
-			return { kind: "file", file: linked };
+			const linked = this.host.app.metadataCache.getFirstLinkpathDest(candidate, sourcePath);
+			if (linked?.extension === "md") {
+				return { kind: "file", file: linked };
+			}
+			foundNonMarkdown ||= direct instanceof TFile || Boolean(linked);
 		}
-		return { kind: "skip", reason: direct instanceof TFile || linked ? "not-markdown" : "not-found" };
+		return { kind: "skip", reason: foundNonMarkdown ? "not-markdown" : "not-found" };
 	}
 
 	async buildExcalidrawSummaryAttachments(

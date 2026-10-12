@@ -24,6 +24,7 @@ import type {
 import {
 	ASKMATE_PROMPT_VERSION,
 	GPT_IMAGE_2_MODEL_ID,
+	IMAGE_KEY_MISSING_MESSAGE,
 	IMAGE_MIME_TYPE,
 	estimateTokenCount,
 	getModelCapability,
@@ -434,7 +435,7 @@ export class RequestRunner {
 
 		if (shouldGenerateImage) {
 			if (!(await this.host.getOpenAiApiKey())) {
-				throw new Error("Add an OpenAI API key in AskMate settings before generating an image.");
+				throw new Error(IMAGE_KEY_MISSING_MESSAGE);
 			}
 			const imagePromptPlan = await this.prepareImagePrompt(request, options.abortSignal);
 			return await this.generateOpenAIImage(request, options.abortSignal, imagePromptPlan);
@@ -740,7 +741,7 @@ export class RequestRunner {
 
 		if (!apiKey) {
 			throw new Error(isPlanning
-				? "Add an OpenAI API key in AskMate settings before generating an image."
+				? IMAGE_KEY_MISSING_MESSAGE
 				: "Add an OpenAI API key in AskMate settings before asking a question.");
 		}
 
@@ -946,7 +947,7 @@ export class RequestRunner {
 		const apiKey = await this.host.getOpenAiApiKey();
 
 		if (!apiKey) {
-			throw new Error("Add an OpenAI API key in AskMate settings before generating an image.");
+			throw new Error(IMAGE_KEY_MISSING_MESSAGE);
 		}
 
 		const model = GPT_IMAGE_2_MODEL_ID;

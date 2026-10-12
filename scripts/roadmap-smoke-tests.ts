@@ -101,6 +101,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Calls that no source file may contain. Listing the whole vault is not allowed: skills and folder context read only the
+ * folders they need, through src/plugin/folderFiles.ts. The `vault.` prefix keeps a name such as getBatchWorkflowTargetFiles(
+ * from matching getFiles(.
+ */
+export const FORBIDDEN_SOURCE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+	[/\.innerHTML\b|\.outerHTML\b|insertAdjacentHTML/, "HTML injection sink"],
+	[/\beval\s*\(|new Function\s*\(/, "dynamic code evaluation"],
+	[/(?<![.\w])fetch\s*\(/, "fetch (use Obsidian requestUrl)"],
+	[/console\.log\s*\(/, "console.log"],
+	[/navigator\.clipboard\.read(?:Text)?\b/, "clipboard read"],
+	[/getMarkdownFiles\s*\(/, "vault-wide Markdown enumeration"],
+	[/\bvault\s*\.\s*(?:getFiles|getAllLoadedFiles)\s*\(/, "vault-wide file enumeration"]
+];
+
 /** Removes line comments and block comments that start a line, so rules are checked against code and not against prose. */
 export function stripComments(source: string): string {
 	return source.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, "").replace(/(^|\s)\/\/.*$/gm, "$1");
@@ -328,16 +343,8 @@ function runRepoGuards(): void {
 	}
 
 	// Forbidden APIs: network only through requestUrl, no HTML injection sinks, no vault-wide enumeration, no clipboard reads.
-	const forbidden: Array<[RegExp, string]> = [
-		[/\.innerHTML\b|\.outerHTML\b|insertAdjacentHTML/, "HTML injection sink"],
-		[/\beval\s*\(|new Function\s*\(/, "dynamic code evaluation"],
-		[/(?<![.\w])fetch\s*\(/, "fetch (use Obsidian requestUrl)"],
-		[/console\.log\s*\(/, "console.log"],
-		[/navigator\.clipboard\.read(?:Text)?\b/, "clipboard read"],
-		[/getMarkdownFiles\s*\(/, "vault-wide Markdown enumeration"]
-	];
 	for (const [path, contents] of sources) {
-		for (const [pattern, label] of forbidden) {
+		for (const [pattern, label] of FORBIDDEN_SOURCE_PATTERNS) {
 			check(!pattern.test(contents), `${label} used in ${path}`);
 		}
 	}

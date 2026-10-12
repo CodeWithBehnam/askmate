@@ -33,6 +33,11 @@ export const IMAGE_FILE_EXTENSIONS = new Set(["avif", "bmp", "gif", "jpeg", "jpg
 export const MAX_CONTEXT_IMAGE_PREVIEWS = 4;
 export const DEFAULT_IMAGE_PROMPT = "Create a useful image inspired by the current note.";
 export const IMAGE_WORKFLOW_MESSAGE = "Quick workflows create text Markdown. Use the Image button or /image command for gpt-image-2 image generation.";
+/**
+ * Names the page and both places the key can live, because Obsidian has no way to open a settings page from a notice.
+ * With OpenAI selected the key is the Provider group's API key; with another provider it is the Images group's own row.
+ */
+export const IMAGE_KEY_MISSING_MESSAGE = "Images use OpenAI. In AskMate settings, open Connection and add an OpenAI API key (under Images, if another provider is selected) before generating an image.";
 export const ASKMATE_PROMPT_VERSION = "askmate-2026-10-12-prompt-standard-v4";
 export const LEGACY_PROMPT_VERSION = "legacy-before-workflow-hardening";
 // The built-in model lists below are suggestions. Saved lists win for OpenAI (the default list is used only when none is saved),

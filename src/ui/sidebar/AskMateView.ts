@@ -35,6 +35,7 @@ import {
 	formatOperationStatus,
 	formatOutputMode,
 	IMAGE_FILE_EXTENSIONS,
+	IMAGE_KEY_MISSING_MESSAGE,
 	IMAGE_WORKFLOW_MESSAGE,
 	ImageAskMateResult,
 	isAbortError,
@@ -1467,7 +1468,7 @@ export class AskMateView extends ItemView {
 		}
 		// "/image ..." goes to OpenAI Images whatever chat provider is selected, so check the matching readiness.
 		const isReady = line.forceImage
-			? await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image")
+			? await this.isProviderReadyForSubmit(IMAGE_KEY_MISSING_MESSAGE, () => this.plugin.isImageGenerationConfigured(), "image")
 			: await this.isProviderReadyForSubmit("Connect an AI provider before sending.");
 		if (!isReady) {
 			this.questionEl.focus();
@@ -1489,7 +1490,7 @@ export class AskMateView extends ItemView {
 			return;
 		}
 		// Image generation always uses OpenAI Images, whichever chat provider is selected.
-		if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image"))) {
+		if (!(await this.isProviderReadyForSubmit(IMAGE_KEY_MISSING_MESSAGE, () => this.plugin.isImageGenerationConfigured(), "image"))) {
 			return;
 		}
 
@@ -1841,6 +1842,20 @@ export class AskMateView extends ItemView {
 						this.renderMarkdownSoon(message.body, responseText, sourcePath);
 						this.maybeScrollMessagesToBottom();
 					}
+				},
+				// A tool run streams every turn, and a turn that ends in tool calls wrote progress, not the answer. Clearing it
+				// here keeps that text out of the answer and out of what Stop leaves behind.
+				onTextReset: () => {
+					if (!this.isRunActive(run)) {
+						return;
+					}
+
+					responseText = "";
+					// Without this a repeat of the cleared text would look already drawn and be skipped.
+					this.streamedText.delete(message.body);
+					this.showDrawingNote(message.body, isDiagramRun ? DRAWING_DIAGRAM_TEXT : null);
+					// Also cancels a render that is waiting and makes one that is under way stale.
+					this.renderMarkdownNow(message.body, "", sourcePath);
 				},
 				abortSignal: run.abortController.signal,
 				forceImage: shouldGenerateImage,
@@ -4072,7 +4087,7 @@ export class AskMateView extends ItemView {
 			}
 			case "image": {
 				const options = this.applyConsoleMentions(this.getRequestDraftOptions(true), action.mentions);
-				if (!(await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image"))) {
+				if (!(await this.isProviderReadyForSubmit(IMAGE_KEY_MISSING_MESSAGE, () => this.plugin.isImageGenerationConfigured(), "image"))) {
 					return;
 				}
 				await this.runRequest({ question: action.prompt, title: "AskMate Image", options, displayText: raw, onSent: () => this.clearComposerIf(raw) });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { McpService } from "../src/mcp";
+import { McpService, type McpHttpServerConfig } from "../src/mcp";
 import { McpApprovalRouter } from "../src/plugin/mcpHost";
 import { fetchSse, type FetchLike } from "../src/providers/sseTransport";
 import type { ProviderRequestOptions, ProviderRuntime } from "../src/providers/types";
@@ -96,6 +96,8 @@ interface RigOptions {
 	callText?: string;
 	/** One entry per streamed request: its SSE frames. With any entry the runtime can stream, like Stream replies on. */
 	streams?: (toolName: string) => string[][];
+	/** Changes to the fake server's settings, such as its approval mode. It asks before every call unless this says otherwise. */
+	server?: Partial<McpHttpServerConfig>;
 }
 
 /** A real McpService behind a fake server, a real runner, and a provider that plays back the replies it is given. */
@@ -110,7 +112,7 @@ async function createRig(
 	const http = options.hangToolCall
 		? { ...front, send: ((request) => (String(request.body).includes('"tools/call"') ? new Promise<never>(() => undefined) : front.send(request))) satisfies typeof front.send }
 		: front;
-	const harness = createHarness({ servers: [httpServer("fake")], http: { fake: http } });
+	const harness = createHarness({ servers: [httpServer("fake", options.server)], http: { fake: http } });
 	harness.settings = { ...harness.settings, ...options.mcp };
 	const router = new McpApprovalRouter();
 	const service = new McpService({ ...harness.host, confirmCall: (card, signal) => router.confirm(card, signal) });
@@ -232,6 +234,28 @@ describe("a tool run end to end", () => {
 		expect(String(rig.bodies[1]?.instructions)).not.toContain("ran search");
 		expect(rig.runner.getRunFacts(request).toolDerived).toBe(true);
 		expect(request.metadata.toolsEnabled).toBe(true);
+	});
+
+	test("the approval card offers Allow for this chat only for a server that reuses a chat grant", async () => {
+		async function offered(server: Partial<McpHttpServerConfig>, chatId: string | null): Promise<boolean | undefined> {
+			const rig = await createRig((tool) => [toolCallReply(tool, { q: "x" }), answerReply("Done.")], "gpt-5.5", { server });
+			const cards: Array<Parameters<NonNullable<RunOptions["confirmToolCall"]>>[0]> = [];
+			await rig.runner.runOpenAIRequest(makeRequest(), {
+				toolsEnabled: true,
+				chatId,
+				confirmToolCall: (card) => {
+					cards.push(card);
+					return Promise.resolve<ToolApprovalChoice>("allow-once");
+				}
+			});
+			expect(cards).toHaveLength(1);
+			return cards[0]?.canAllowForChat;
+		}
+
+		expect(await offered({ approval: "always-ask" }, "chat-1")).toBe(false);
+		expect(await offered({ approval: "ask-once-per-chat" }, "chat-1")).toBe(true);
+		// With no conversation there is nothing to scope a grant to, whatever the mode.
+		expect(await offered({ approval: "ask-once-per-chat" }, null)).toBe(false);
 	});
 
 	test("a denied call never reaches the server and the model is told", async () => {

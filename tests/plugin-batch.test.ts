@@ -33,6 +33,7 @@ describe("batch failure policy", () => {
 	test("sorts failures into the kinds that repeat for every note and the ones that do not", () => {
 		expect(classifyBatchFailure("OpenAI authentication failed (HTTP 401).")).toBe("auth");
 		expect(classifyBatchFailure("Add an OpenAI API key in AskMate settings before asking a question.")).toBe("auth");
+		expect(classifyBatchFailure("Images use OpenAI. In AskMate settings, open Connection and add an OpenAI API key (under Images, if another provider is selected) before generating an image.")).toBe("auth");
 		expect(classifyBatchFailure("Daily budget reached. AskMate blocked the request.")).toBe("guardrail");
 		expect(classifyBatchFailure("The note could not be read.")).toBe("other");
 	});

@@ -815,6 +815,106 @@ describe("a question and its answer", () => {
 		const saved = harness.plugin.threads.listThreads()[0];
 		expect(saved?.messages[1]?.tools).toEqual([{ server: "Notes", tool: "search", status: "completed" }]);
 	});
+
+	describe("progress text before a tool call", () => {
+		function answerBody(harness: Harness): string {
+			return harness.root.querySelector(".askmate-message-assistant .askmate-message-body")?.textContent ?? "";
+		}
+
+		test("the run is told it may stream, because the sidebar can clear progress text", async () => {
+			const harness = await start();
+			harness.run.handler = () => Promise.resolve(textResult("Done."));
+			ask(harness, "Search my notes");
+			await send(harness);
+			expect(typeof harness.ran[0]?.options.onTextDelta).toBe("function");
+			expect(typeof harness.ran[0]?.options.onTextReset).toBe("function");
+		});
+
+		test("text written before a tool call is cleared, so the answer starts clean", async () => {
+			const harness = await start();
+			const steps: { reset: (() => void) | null; finish: (() => void) | null } = { reset: null, finish: null };
+			harness.run.handler = (_request, runOptions) => new Promise((resolve) => {
+				runOptions.onTextDelta?.("Checking.");
+				steps.reset = () => runOptions.onTextReset?.();
+				steps.finish = () => {
+					runOptions.onTextDelta?.("We ship on Friday.");
+					resolve(textResult("We ship on Friday."));
+				};
+			});
+			ask(harness, "When do we ship?");
+			harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+			await wait(260);
+			expect(answerBody(harness)).toBe("Checking.");
+
+			// The tool call starts: the narration goes, and nothing of it is left to be glued onto the answer.
+			steps.reset?.();
+			await wait(260);
+			expect(answerBody(harness)).toBe("");
+
+			steps.finish?.();
+			await settle();
+			expect(answerBody(harness)).toBe("We ship on Friday.");
+			expect(harness.plugin.threads.listThreads()[0]?.messages[1]?.text).toBe("We ship on Friday.");
+		});
+
+		test("a render that was waiting for the cleared text never draws it", async () => {
+			const harness = await start();
+			const gate: { release: (() => void) | null } = { release: null };
+			harness.run.handler = (_request, runOptions) => new Promise((resolve) => {
+				runOptions.onTextDelta?.("Checking.");
+				runOptions.onTextReset?.();
+				gate.release = () => resolve(textResult("Done."));
+			});
+			ask(harness, "Look it up");
+			harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+			await wait(260);
+			expect(MarkdownRenderer.calls.some((call) => call.markdown.includes("Checking."))).toBe(false);
+			expect(answerBody(harness)).toBe("");
+			gate.release?.();
+			await settle();
+			expect(answerBody(harness)).toBe("Done.");
+		});
+
+		test("the same words written again after a clear are drawn again", async () => {
+			const harness = await start();
+			const steps: { again: (() => void) | null; finish: (() => void) | null } = { again: null, finish: null };
+			harness.run.handler = (_request, runOptions) => new Promise((resolve) => {
+				runOptions.onTextDelta?.("Checking.");
+				steps.again = () => {
+					runOptions.onTextReset?.();
+					runOptions.onTextDelta?.("Checking.");
+				};
+				steps.finish = () => resolve(textResult("Checking."));
+			});
+			ask(harness, "Look it up");
+			harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+			await wait(260);
+			expect(answerBody(harness)).toBe("Checking.");
+
+			steps.again?.();
+			await wait(260);
+			expect(answerBody(harness)).toBe("Checking.");
+			steps.finish?.();
+			await settle();
+		});
+
+		test("Stop after a tool call began leaves no narration behind", async () => {
+			const harness = await start();
+			harness.run.handler = (_request, runOptions) => new Promise((_resolve, reject) => {
+				runOptions.onTextDelta?.("Checking.");
+				runOptions.onTextReset?.();
+				runOptions.onToolEvent?.({ id: "t1", server: "Notes", tool: "search", status: "running", argumentsJson: "{}" });
+				runOptions.abortSignal?.addEventListener("abort", () => reject(new DOMException("The request was stopped.", "AbortError")));
+			});
+			ask(harness, "Look it up");
+			harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+			await wait(260);
+			harness.root.querySelector<HTMLButtonElement>(".askmate-stop-button")?.click();
+			await settle();
+			expect(answerBody(harness)).toBe("Stopped.");
+			expect(harness.root.textContent).not.toContain("Checking.");
+		});
+	});
 });
 
 describe("Retry", () => {
@@ -2214,6 +2314,21 @@ describe("commands and mentions in every layout", () => {
 		await send(saving);
 		expect(Notice.messages.at(-1)).toBe("No saved conversations yet. Ask a question first.");
 		await lifecycle(saving.view).closeForTest();
+	});
+
+	test("a missing image key points at the Connection page, the Images group and the row", async () => {
+		const expected = "Images use OpenAI. In AskMate settings, open Connection and add an OpenAI API key (under Images, if another provider is selected) before generating an image.";
+		const harness = await start({ layout: "compact" });
+		ask(harness, "/image a red fox");
+		await send(harness);
+		expect(harness.ran).toHaveLength(0);
+		expect(Notice.messages.at(-1)).toBe(expected);
+
+		Notice.clear();
+		harness.root.querySelector<HTMLButtonElement>(".askmate-image-button")?.click();
+		await settle();
+		expect(harness.ran).toHaveLength(0);
+		expect(Notice.messages.at(-1)).toBe(expected);
 	});
 
 	test("the Console layout still reads every line as a command line", async () => {
