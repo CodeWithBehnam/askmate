@@ -253,6 +253,14 @@ const diagramRequests = [
 
 // Explicit picture wording outranks diagram nouns.
 const pictureRequests = [
+	// The request's own command verb is never a topic verb, whatever its object starts with.
+	"create me a flowchart image",
+	"generate us a kanban poster",
+	"produce me a diagram poster",
+	"create two flowchart images",
+	"create 3 state machine pictures",
+	"Could you please create me a state machine image",
+	"create colourful kanban board image",
 	"draw a picture of a roadmap",
 	"Draw an illustration of the workflow",
 	"Generate an image of a state machine",

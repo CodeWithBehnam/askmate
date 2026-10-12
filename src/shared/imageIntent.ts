@@ -191,11 +191,20 @@ function lastClause(words: readonly string[]): readonly string[] {
 	return words.slice(lastBreak + 1);
 }
 
+const LEADING_POLITE_PREFIX = new RegExp(`^${POLITE_PREFIX}`);
+
 function hasTopicVerbBefore(sentence: string): boolean {
-	const words = sentence.replace(/[(){}[\]"\u201c\u201d/]/g, " ").replace(/[,:]/g, " $& ").split(" ");
-	const clause = lastClause(words.filter((word) => word !== ""));
+	const request = sentence.replace(LEADING_POLITE_PREFIX, "");
+	const words = request.replace(/[(){}[\]"\u201c\u201d/]/g, " ").replace(/[,:]/g, " $& ").split(" ").filter((word) => word !== "");
+	const clause = lastClause(words);
+	// In the first clause, word 0 is the request's own command verb ("create me a flowchart image"), never a topic verb.
+	// Later clauses keep the clause-initial rule ("and export the note as a png").
+	const firstWordIsCommand = clause.length === words.length;
 	const opener = clause.findIndex((word) => TOPIC_OPENERS.has(word));
-	return clause.some((word, i) => (word === "to" ? opensInfinitive(clause, i) : isTopicVerbAt(clause, i, opener !== -1 && opener < i)));
+	return clause.some((word, i) => {
+		if (i === 0 && firstWordIsCommand) return false;
+		return word === "to" ? opensInfinitive(clause, i) : isTopicVerbAt(clause, i, opener !== -1 && opener < i);
+	});
 }
 
 // ---------------------------------------------------------------------------
