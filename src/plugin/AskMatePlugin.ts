@@ -61,7 +61,6 @@ import {
 	OpenAITokenUsage,
 	OperationKind,
 	OperationStatus,
-	PromptInspection,
 	ProviderModelRef,
 	ProviderSettings,
 	ReasoningEffort,
@@ -92,13 +91,13 @@ import type { ProviderConnectionTestResult, ProviderRequestOptions, ProviderRunt
 import { fetchSse } from "../providers/sseTransport";
 import { UsageService, getLocalDayKey, sumUsageTotalsForMonth } from "../usage";
 import { HistoryService } from "../history";
-import { ThreadService } from "../threads";
+import { ThreadService, describeThreadStoreTrim, measureThreadStoreTrim } from "../threads";
 import { ContextService, FolderNotFoundError, cleanFolderPath, describeSkippedContext } from "../context";
 import { describeVaultMentionResolutions, rankVaultTags } from "../context/vaultMentions";
 import { RequestRunner, buildFallbackImagePrompt } from "../requests";
 import { buildRequestInput, buildRequestInstructions, APPLY_REFUSAL_PREFIX } from "../requests/requestBuilders";
 import type { ContextReport } from "../requests/RequestRunner";
-import type { DiagramPort, DiagramRuntime, ExtendedBuildOptions, RunFacts, RunOptions, RunResult } from "../requests/runTypes";
+import type { DiagramPort, DiagramRuntime, ExtendedBuildOptions, RunFacts, RunOptions, RunResult, ToolApprovalCard, ToolApprovalChoice } from "../requests/runTypes";
 import {
 	appendWorkflowUserPreferences,
 	applyTextInsertion,
@@ -125,6 +124,8 @@ import {
 import { buildEditorMenuEntries } from "./editorMenu";
 import { syncObjectInPlace } from "../settings/syncInPlace";
 import { shouldGenerateImage } from "../shared/imageIntent";
+import { askMcpTrust } from "../ui/modals/McpTrustModal";
+import { askToolApproval } from "../ui/modals/ToolApprovalModal";
 import { askMateConfirm, askMateDiffConfirm } from "../ui/modals/modals";
 import { AskMateView } from "../ui/sidebar/AskMateView";
 import { registerAnswerCommands } from "./answerCommands";
@@ -137,12 +138,13 @@ import { guardSafetyCheck } from "../requests/diagramRun";
 import { deriveSetupState, mapProviderErrorToSetupCopy, planConnect, shouldShowFirstRunNotice, FIRST_RUN_NOTICE, IDLE_SETUP_TEST, type SetupErrorCopy, type SetupStage, type SetupTestState } from "../setup";
 import { CommandRunRegistry } from "./commandRuns";
 import { INITIAL_BATCH_STATE, batchResultTitle, classifyBatchFailure, describeEmptyBatch, nextBatchDecision } from "./batchPolicy";
-import { classifyStoredData, corruptBackupName, mergeExternalSettings } from "./settingsLoad";
+import { classifyStoredData, corruptBackupName, mergeAddsToIncoming, mergeExternalSettings, predatesSettingsSchema, trimBackupName } from "./settingsLoad";
 import { deriveResultNoteTitle, ensureTemplateKeepsAnswer, withIncompleteCallout } from "./resultNoteModel";
 import { describeActiveContentAdded, describeWriteChanges, joinWarnings, prepareReplyForWrite } from "./writeSafety";
-import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, createMcpHost, createSecretReader, describeTrustRequest, type LaunchModule } from "./mcpHost";
-import { confirmToolCallWithModal } from "./ToolApprovalModal";
+import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, createMcpHost, createSecretReader, toApprovalDialogInput, type LaunchModule } from "./mcpHost";
 import { askMateChoice } from "./choiceModal";
+import { listFolderFiles } from "./folderFiles";
+import { describeAddedAtSend, type InspectedPrompt } from "./promptInspection";
 import { findLeafForFile } from "./leaves";
 import { planEmbedInsertion, type EmbedPlan } from "./imagePlacement";
 import { describeImportConcerns, findImportConcerns, withSafeImportDefaults } from "./importReview";
@@ -203,15 +205,20 @@ export class AskMatePlugin extends Plugin {
 	/** Mermaid and the YAML parser, looked up when used. Replaced by fakes in tests. */
 	obsidianApi: ObsidianApi = createObsidianApi();
 	/**
-	 * How the person is asked to trust an MCP server. The settings page can replace this with its own dialog; until then a
-	 * plain confirmation names the exact command or address.
+	 * How the person is asked to trust an MCP server. The dialog shows the exact command or address in a block of its own
+	 * and spells out characters that cannot be seen, so a look-alike program name cannot pass for the real one.
 	 */
 	readonly mcpPrompts: { confirmTrust: (request: TrustRequest) => Promise<boolean> } = {
-		confirmTrust: async (request) => {
-			const { title, message } = describeTrustRequest(request);
-			return await askMateConfirm(this.app, `${title}\n\n${message}`);
-		}
+		confirmTrust: async (request) => await askMcpTrust(this.app, request)
 	};
+
+	/**
+	 * Asks about one tool call in a dialog, for a run that has no inline approval card of its own. A stopped run closes the
+	 * dialog, which counts as a refusal.
+	 */
+	confirmToolCall(card: ToolApprovalCard, signal?: AbortSignal): Promise<ToolApprovalChoice> {
+		return askToolApproval(this.app, toApprovalDialogInput(card), signal);
+	}
 
 	/**
 	 * The MCP client, or null off the desktop and while MCP is switched off. Nothing starts when it is created: servers are
@@ -328,7 +335,7 @@ export class AskMatePlugin extends Plugin {
 							: null;
 					},
 					registerApproval: (signal, handler) => this.mcpApprovals.register(signal, handler),
-					confirmCall: async (card, signal) => await confirmToolCallWithModal(this.app, card, signal)
+					confirmCall: (card, signal) => this.confirmToolCall(card, signal)
 				}
 			},
 			notify: (message) => {
@@ -358,9 +365,10 @@ export class AskMatePlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.workspace.on("quit", (tasks) => {
-				// Saved conversations are debounced, so a quit inside that window would lose the last turn.
+				// Saved conversations are debounced, so a quit inside that window would lose the last turn. Local MCP servers are
+				// child processes: Obsidian ends without unloading plugins, so they are stopped here or they outlive it.
 				tasks.add(async () => {
-					await this.threads.flush();
+					await this.shutdownServices();
 					await this.settingsSaveChain;
 				});
 			})
@@ -551,8 +559,31 @@ export class AskMatePlugin extends Plugin {
 		// A corrupt file starts from the defaults of an existing install, not from the first-run defaults.
 		const source = stored.kind === "ok" ? stored.data : stored.kind === "corrupt" ? {} : null;
 		const result = normalizeAskMateSettingsWithDiagnostics(source, "load", { locale: getLanguage() });
+		const trim = measureThreadStoreTrim(source?.threadStore, result.settings.threadStore);
+		const trimmed = describeThreadStoreTrim(trim, null) !== null;
+		// The first save would replace the file with the cut version, so the person gets the original beside it first.
+		const trimBackup = trimmed ? await this.copyDataFileAside(trimBackupName(new Date())) : null;
 		this.settings = structuredClone(result.settings);
 		this.reportSettingsDiagnostics(result.diagnostics);
+		const trimNotice = describeThreadStoreTrim(trim, trimBackup);
+		if (trimNotice !== null) {
+			new Notice(trimNotice, 15 * NOTICE_SECONDS);
+		}
+	}
+
+	/** Copies data.json to a file of its own in the plugin folder. Returns the copy's name, or null when none could be made. */
+	private async copyDataFileAside(backupName: string): Promise<string | null> {
+		const folder = this.manifest.dir;
+		if (!folder) {
+			return null;
+		}
+		try {
+			await this.app.vault.adapter.copy(`${folder}/data.json`, `${folder}/${backupName}`);
+			return backupName;
+		} catch (error) {
+			console.warn("AskMate could not copy data.json aside.", error);
+			return null;
+		}
 	}
 
 	/**
@@ -633,13 +664,16 @@ export class AskMatePlugin extends Plugin {
 			return;
 		}
 		const incoming = normalizeAskMateSettingsWithDiagnostics(stored.data, "load", { locale: getLanguage() }).settings;
-		const merged = mergeExternalSettings(this.settings, incoming);
-		syncObjectInPlace(this.settings, merged);
-		this.threads.reload(this.settings.threadStore);
-		this.refreshOpenAskMateViews();
-		this.applySettingsChanges();
+		const merged = mergeExternalSettings(this.settings, incoming, { incomingPredatesSchema: predatesSettingsSchema(stored.data) });
+		// Adopting a file with nothing new for this device would still drop the conversation saves waiting and rebuild the sidebar.
+		if (JSON.stringify(merged) !== JSON.stringify(this.settings)) {
+			syncObjectInPlace(this.settings, merged);
+			this.threads.reload(this.settings.threadStore);
+			this.refreshOpenAskMateViews();
+			this.applySettingsChanges();
+		}
 		// The merge keeps what only this device had. Writing the union back means the other device receives it too.
-		if (JSON.stringify(merged) !== JSON.stringify(incoming)) {
+		if (mergeAddsToIncoming(merged, incoming)) {
 			await this.saveSettings();
 		}
 	}
@@ -900,11 +934,7 @@ export class AskMatePlugin extends Plugin {
 				const skills = this.settings.skills;
 				return { enabled: skills.enabled, folder: skills.folder, matchMode: skills.matching, disabledIds: skills.disabledIds, trusted: skills.trustedHashes };
 			},
-			listFiles: (folder) => Promise.resolve(
-				this.app.vault.getFiles()
-					.filter((file) => file.path.startsWith(`${folder}/`))
-					.map((file) => ({ path: file.path, size: file.stat.size }))
-			),
+			listFiles: (folder) => Promise.resolve(listFolderFiles(this.app.vault.getFolderByPath(folder))),
 			readFile: async (path) => {
 				const file = this.app.vault.getAbstractFileByPath(path);
 				if (!(file instanceof TFile)) {
@@ -1927,16 +1957,32 @@ export class AskMatePlugin extends Plugin {
 		return true;
 	}
 
-	/** Exactly what the run sends, because the same builders produce it: the instructions and the message. */
-	buildPromptInspectionForRequest(request: AskRequest): PromptInspection {
+	/** True when an answer to this request can call MCP tools, which is when the run adds the tools section. */
+	private mayUseToolsFor(request: AskRequest): boolean {
+		const metadata = request.metadata;
+		if (metadata.outputMode !== "chat" || metadata.modelCapability !== "text" || metadata.intentKind === "diagram" || metadata.forceImage || metadata.autoImage) {
+			return false;
+		}
+		return this.mcpService?.status().some((server) => server.state.kind === "ready" || server.state.kind === "idle") ?? false;
+	}
+
+	/**
+	 * What the request builders produce: the instructions and the message. A run adds the diagram brief and the tools section
+	 * after that, and the result says so (addedAtSend) and counts a fixed allowance for them in the estimate.
+	 */
+	buildPromptInspectionForRequest(request: AskRequest): InspectedPrompt {
 		const shouldGenerateImage = request.metadata.forceImage || request.metadata.autoImage || request.metadata.modelCapability === "image";
 		const purpose = shouldGenerateImage ? "image-plan" : "answer";
 		const instructions = buildRequestInstructions(request, { purpose });
 		const input = buildRequestInput(request, { purpose });
 		// Show the capped fallback exactly as RequestRunner would send it if prompt planning fails.
 		const secondaryInput = shouldGenerateImage ? buildFallbackImagePrompt(request) : "";
+		const added = describeAddedAtSend({
+			isDiagram: !shouldGenerateImage && request.metadata.intentKind === "diagram",
+			toolsAvailable: !shouldGenerateImage && this.mayUseToolsFor(request)
+		});
 		// The fallback image prompt is only sent when planning fails, so it is shown but not counted towards the estimate.
-		const estimatedInputTokens = estimateTokenCount([instructions, input].filter(Boolean).join("\n\n"));
+		const estimatedInputTokens = estimateTokenCount([instructions, input].filter(Boolean).join("\n\n")) + added.extraTokens;
 		const guardrails = this.usageService.evaluateUsageGuardrails(request, estimatedInputTokens);
 		// Image generation always goes to OpenAI Images, whichever provider plans the prompt, so the label names both.
 		const planning = shouldGenerateImage ? this.getImagePlanningProviderRef() : null;
@@ -1950,11 +1996,12 @@ export class AskMatePlugin extends Plugin {
 			secondaryInput,
 			estimatedInputTokens,
 			warnings: guardrails.warnings,
-			blockers: guardrails.blockers
+			blockers: guardrails.blockers,
+			addedAtSend: added.notes
 		};
 	}
 
-	async inspectFinalPrompt(question: string, title: string, options: ExtendedBuildOptions = {}): Promise<PromptInspection> {
+	async inspectFinalPrompt(question: string, title: string, options: ExtendedBuildOptions = {}): Promise<InspectedPrompt> {
 		const request = await this.buildRequest(question, title, options);
 		return this.buildPromptInspectionForRequest(request);
 	}

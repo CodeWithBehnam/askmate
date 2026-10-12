@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { ToolApprovalCard as McpApprovalCard, TrustRequest } from "../src/mcp";
-import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, describeTrustRequest } from "../src/plugin/mcpHost";
+import { listFolderFiles } from "../src/plugin/folderFiles";
+import { McpApprovalRouter, createDeviceTrustStore, createHttpRequest, toApprovalDialogInput } from "../src/plugin/mcpHost";
 import AskMatePlugin from "../src/plugin/AskMatePlugin";
 import type { EvidenceSource } from "../src/shared/types";
 import { createFakeApp, FakeEditor, leafFor, type FakeApp, type Position } from "./support/fake-app";
@@ -122,33 +123,69 @@ describe("host adapters", () => {
 		expect(response.text).toBe("{}");
 	});
 
-	test("the trust dialog names the exact command and the stored secrets it would pass on", () => {
+	test("the trust dialog is the dedicated one: it names the exact command and spells out characters nobody can see", async () => {
+		const { plugin } = await loadPlugin();
 		const request: TrustRequest = {
 			transport: "stdio",
 			serverId: "files",
 			label: "Files",
 			reason: "first-use",
-			commandLine: "npx -y some-server --root /tmp",
+			commandLine: `npx${"\u200B"} -y some-server --root /tmp`,
 			command: "npx",
 			args: ["-y", "some-server"],
 			env: [{ name: "TOKEN", value: "", secret: true, secretId: "askmate-mcp-files-token" }, { name: "MODE", value: "read", secret: false, secretId: null }],
 			risks: ["It uses a stored secret that AskMate did not create for MCP."]
 		};
-		const { title, message } = describeTrustRequest(request);
 
-		expect(title).toBe("Trust the local server Files?");
-		expect(message).toContain("Command: npx -y some-server --root /tmp");
-		expect(message).toContain("TOKEN (stored secret askmate-mcp-files-token)");
-		expect(message).toContain("MODE = read");
-		expect(message).toContain("Warning: It uses a stored secret");
+		const answer = plugin.mcpPrompts.confirmTrust(request);
+		const modal = Modal.opened.at(-1);
+		const text = modal?.contentEl.textContent ?? "";
 
-		const http = describeTrustRequest({
+		expect(modal?.titleEl.textContent).toBe("Trust this local server?");
+		expect(text).toContain("npx[U+200B] -y some-server --root /tmp");
+		expect(text).toContain("TOKEN = stored secret \"askmate-mcp-files-token\"");
+		expect(text).toContain("MODE = read");
+		expect(text).toContain("It uses a stored secret");
+		expect(text).toContain("characters you cannot normally see");
+		expect(Array.from(modal?.contentEl.querySelectorAll("button") ?? []).map((button) => button.textContent)).toEqual(["Cancel", "Trust and start"]);
+
+		modal?.contentEl.querySelector<HTMLElement>("button.mod-cta")?.click();
+		expect(await answer).toBe(true);
+	});
+
+	test("closing the trust dialog without choosing answers no", async () => {
+		const { plugin } = await loadPlugin();
+		const answer = plugin.mcpPrompts.confirmTrust({
 			transport: "http", serverId: "w", label: "Web", reason: "changed", url: "https://tools.example.com/mcp", host: "tools.example.com",
 			headerNames: ["X-Key"], hasBearerToken: true, bearerSecretId: "askmate-mcp-web-token", secretHeaders: [], risks: []
 		});
-		expect(http.message).toContain("changed since you last trusted it");
-		expect(http.message).toContain("https://tools.example.com/mcp");
-		expect(http.message).toContain("askmate-mcp-web-token");
+		const modal = Modal.opened.at(-1);
+		expect(modal?.titleEl.textContent).toBe("Trust the changed remote server?");
+		expect(modal?.contentEl.textContent).toContain("askmate-mcp-web-token");
+
+		modal?.close();
+
+		expect(await answer).toBe(false);
+	});
+
+	test("a run without an inline approval card asks in the one approval dialog, with the exact arguments", async () => {
+		const card = { id: "c1", server: "Notes server", tool: "search", title: "Search notes", description: "Looks up notes.", argumentsJson: "{\n  \"q\": \"a\u200Bb\"\n}", changedSinceApproval: false, canAllowForChat: true };
+		expect(toApprovalDialogInput(card)).toEqual({
+			serverLabel: "Notes server", toolName: "search", toolTitle: "Search notes", argumentsText: card.argumentsJson,
+			description: "Looks up notes.", changedSinceApproval: false, canAllowForChat: true
+		});
+		expect(toApprovalDialogInput({ id: "c2", server: "S", tool: "t", argumentsJson: "{}", changedSinceApproval: true })).toEqual({
+			serverLabel: "S", toolName: "t", argumentsText: "{}", changedSinceApproval: true, canAllowForChat: false
+		});
+
+		const { plugin } = await loadPlugin({ mcp: { enabled: true, servers: [] } });
+		const controller = new AbortController();
+		const choice = plugin.confirmToolCall(card, controller.signal);
+		const modal = Modal.opened.at(-1);
+		expect(modal?.titleEl.textContent).toBe("Allow this tool call?");
+		expect(modal?.contentEl.textContent).toContain("a[U+200B]b");
+		controller.abort();
+		expect(await choice).toBe("deny");
 	});
 });
 
@@ -177,6 +214,25 @@ describe("MCP in the plugin", () => {
 		expect(seen.join(" ")).toContain("https://tools.example.com/mcp");
 		expect([...fake.localStorage.keys()].some((key) => key.startsWith("askmate-mcp-trust:"))).toBe(true);
 		expect(JSON.stringify(plugin.storedData)).not.toContain("askmate-mcp-trust");
+	});
+
+	test("quitting Obsidian stops the MCP servers and saves the conversation still waiting to be written", async () => {
+		const { plugin, fake } = await loadPlugin({ mcp: { enabled: true, servers: [WEB_SERVER] } });
+		const service = plugin.mcpService;
+		let stopped = 0;
+		Object.assign(service ?? {}, { shutdown: () => {
+			stopped += 1;
+			return Promise.resolve();
+		} });
+		plugin.threads.scheduleSave({ id: "t1", title: "Waiting", autoTitle: true, createdAt: "2026-10-01T09:00:00.000Z", updatedAt: "2026-10-01T09:00:00.000Z", messages: [{ role: "user", text: "Waiting", createdAt: "2026-10-01T09:00:00.000Z" }] });
+		const tasks: Array<() => Promise<void>> = [];
+
+		fake.workspace.trigger("quit", { add: (task: () => Promise<void>) => tasks.push(task) });
+		expect(tasks).toHaveLength(1);
+		await Promise.all(tasks.map((task) => task()));
+
+		expect(stopped).toBe(1);
+		expect((plugin.storedData as { threadStore: { threads: Array<{ id: string }> } }).threadStore.threads.map((thread) => thread.id)).toEqual(["t1"]);
 	});
 
 	test("with MCP off nothing is created and nothing can start", async () => {
@@ -258,6 +314,37 @@ describe("skills in the plugin", () => {
 		expect(plugin.settings.skills.trustedHashes["vault:note-tidy"]).toBe(skill?.hash ?? "");
 		expect((plugin.storedData as { skills: { trustedHashes: Record<string, string> } }).skills.trustedHashes["vault:note-tidy"]).toBe(skill?.hash ?? "");
 		expect(plugin.skillService.statusOf(skill ?? plugin.skillService.list()[0])).toBe("ready");
+	});
+
+	test("the scan reads the skills folder itself and never lists the vault", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		fake.vault.add("AskMate/Skills/note-tidy/SKILL.md", SKILL);
+		fake.vault.add("AskMate/Skills/note-tidy/refs/deep/example.md", "an example");
+		fake.vault.add("Elsewhere/other.md", "not a skill");
+		const refuse = (): never => {
+			throw new Error("the whole vault was listed");
+		};
+		Object.assign(fake.vault, { getFiles: refuse, getMarkdownFiles: refuse, getAllLoadedFiles: refuse });
+
+		await plugin.skillService.scan();
+
+		expect(plugin.skillService.get("vault:note-tidy")?.valid).toBe(true);
+		expect(plugin.skillService.list().filter((skill) => skill.source === "vault")).toHaveLength(1);
+	});
+
+	test("every file below the folder is listed with its size, however deep, and a missing folder gives nothing", async () => {
+		const { fake } = await loadPlugin({});
+		fake.vault.add("AskMate/Skills/a/SKILL.md", "12345");
+		fake.vault.add("AskMate/Skills/a/refs/deep/x.md", "123");
+		fake.vault.add("AskMate/Skills/b.md", "1");
+		fake.vault.add("AskMate/Other/c.md", "1");
+
+		const listed = listFolderFiles(fake.vault.getFolderByPath("AskMate/Skills"));
+
+		expect(listed.map((file) => file.path).sort()).toEqual(["AskMate/Skills/a/SKILL.md", "AskMate/Skills/a/refs/deep/x.md", "AskMate/Skills/b.md"]);
+		expect(listed.find((file) => file.path.endsWith("x.md"))?.size).toBe(fake.vault.getFileByPath("AskMate/Skills/a/refs/deep/x.md")?.stat.size);
+		expect(listFolderFiles(fake.vault.getFolderByPath("AskMate/Nothing"))).toEqual([]);
+		expect(listFolderFiles(null)).toEqual([]);
 	});
 
 	test("changing the skills folder in settings scans the new folder", async () => {

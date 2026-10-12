@@ -3,6 +3,8 @@
  * that cannot be read as an object is corrupt (and must be backed up before defaults overwrite it), and a file that
  * changed because another device synced is merged with this device's threads, history and queue instead of replacing them.
  */
+import { CURRENT_SETTINGS_VERSION } from "../settings/constants";
+import { normalizeSettingsVersion } from "../settings/normalize";
 import type { AskMateSettings, NoteHistoryTurn, ReviewQueueItem } from "../shared/types";
 import { normalizeThreadStore, type SavedThread } from "../threads/threadModel";
 
@@ -26,9 +28,18 @@ export function classifyStoredData(raw: unknown): StoredData {
 	return { kind: "ok", data: raw };
 }
 
+function backupStamp(now: Date): string {
+	return now.toISOString().replace(/\.\d+Z$/, "Z").replace(/:/g, "-");
+}
+
 /** data.json.corrupt-2026-10-12T09-11-00Z: UTC, and no colons, which Windows does not allow in a file name. */
 export function corruptBackupName(now: Date): string {
-	return `data.json.corrupt-${now.toISOString().replace(/\.\d+Z$/, "Z").replace(/:/g, "-")}`;
+	return `data.json.corrupt-${backupStamp(now)}`;
+}
+
+/** The copy of data.json kept when loading it cut saved conversations. */
+export function trimBackupName(now: Date): string {
+	return `data.json.before-trim-${backupStamp(now)}`;
 }
 
 function newerOf<T extends { updatedAt: string }>(a: T, b: T): T {
@@ -69,17 +80,54 @@ function mergeQueue(local: readonly ReviewQueueItem[], incoming: readonly Review
 	return mergeById<ReviewQueueItem>(local, incoming, newerOf);
 }
 
+export interface ExternalMergeOptions {
+	/**
+	 * The incoming file was saved before settings had a schema version (a 1.11.1 device). It cannot have chosen anything for
+	 * the groups added since, so their absence is not a decision and this device keeps its own.
+	 */
+	incomingPredatesSchema?: boolean;
+}
+
+/** True when a stored file was written before settings were versioned, so it knows nothing of the groups added since. */
+export function predatesSettingsSchema(stored: Partial<AskMateSettings>): boolean {
+	return normalizeSettingsVersion(stored.settingsVersion) < CURRENT_SETTINGS_VERSION;
+}
+
 /**
  * The settings after another device's save arrived. The synced file decides every ordinary setting, because the person
  * changed those on the other device on purpose. The records that grow over time (threads, note history, review queue)
- * keep what only this device has, by id, and the newer copy wins when both have one. Merging twice gives the same
- * result, so two devices that both merge settle on the same file instead of passing it back and forth.
+ * keep what only this device has, by id, and the newer copy wins when both have one. A deletion cannot be told apart from
+ * a record the other device never had, so a record deleted on one device returns from a device that still holds it.
  */
-export function mergeExternalSettings(local: AskMateSettings, incoming: AskMateSettings): AskMateSettings {
-	return {
+export function mergeExternalSettings(local: AskMateSettings, incoming: AskMateSettings, options: ExternalMergeOptions = {}): AskMateSettings {
+	const merged: AskMateSettings = {
 		...incoming,
 		threadStore: mergeThreads(local.threadStore, incoming.threadStore),
 		noteHistoryStore: mergeHistory(local.noteHistoryStore, incoming.noteHistoryStore),
 		reviewQueue: mergeQueue(local.reviewQueue, incoming.reviewQueue)
 	};
+	if (!options.incomingPredatesSchema) {
+		return merged;
+	}
+	return {
+		...merged,
+		skills: local.skills,
+		diagrams: local.diagrams,
+		mcp: local.mcp,
+		firstRunCompletedAt: local.firstRunCompletedAt,
+		lastSeenVersion: local.lastSeenVersion
+	};
+}
+
+function withoutActiveThread(settings: AskMateSettings): AskMateSettings {
+	return { ...settings, threadStore: { ...settings.threadStore, activeId: null } };
+}
+
+/**
+ * True when the merge holds something the incoming file lacks, so writing it back gives the other device the union.
+ * Which conversation is open is per device, so a difference there alone is not news: counting it would make two devices
+ * with different open conversations rewrite the file for each other for as long as both run.
+ */
+export function mergeAddsToIncoming(merged: AskMateSettings, incoming: AskMateSettings): boolean {
+	return JSON.stringify(withoutActiveThread(merged)) !== JSON.stringify(withoutActiveThread(incoming));
 }

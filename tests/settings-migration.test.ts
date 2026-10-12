@@ -13,6 +13,7 @@ import {
 	normalizeComposerLayout,
 	normalizeContextPathList,
 	normalizeCustomWorkflows,
+	noteLookupCandidates,
 	normalizeReviewQueueItems,
 	normalizeTokenUsageStats,
 	normalizeTranslationTargetLanguage,
@@ -790,13 +791,34 @@ describe("load and save round trips", () => {
 });
 
 describe("context path anchors", () => {
-	test("heading and block anchors are stripped because they never resolve to a file", () => {
-		expect(normalizeContextPathList(["[[Note#Heading]]", "Folder/Other.md#^block", "[[Third^abc|alias]]", "Plain.md"])).toEqual(["Note", "Folder/Other.md", "Third", "Plain.md"]);
+	test("a wikilink is reduced to the note it names, because its heading, block and alias never resolve to a file", () => {
+		expect(normalizeContextPathList(["[[Note#Heading]]", "![[Third^abc|alias]]", "<Plain.md>", "Plain.md"])).toEqual(["Note", "Third", "Plain.md"]);
 	});
 
-	test("the style guide and glossary paths use the same normaliser", () => {
+	test("a bare path is kept as typed, so file names that hold #, ^ or | survive a load and a save", () => {
+		const paths = ["Projects/C# notes.md", "Meetings/Meeting #12 - planning.md", "Ideas/Top^5.md", "Folder/Other.md#^block"];
+		expect(normalizeContextPathList(paths)).toEqual(paths);
+		const settings = load({ additionalContextPaths: paths });
+		expect(settings.additionalContextPaths).toEqual(paths);
+		expect(normalizeAskMateSettings(settings, "save").additionalContextPaths).toEqual(paths);
+	});
+
+	test("a lookup tries the path as stored first and then without its tail", () => {
+		expect(noteLookupCandidates("Projects/C# notes.md")).toEqual(["Projects/C# notes.md", "Projects/C"]);
+		expect(noteLookupCandidates("Folder/Other.md#^block")).toEqual(["Folder/Other.md#^block", "Folder/Other.md"]);
+		expect(noteLookupCandidates("Other note|alias")).toEqual(["Other note|alias", "Other note"]);
+		expect(noteLookupCandidates("Plain.md")).toEqual(["Plain.md"]);
+		expect(noteLookupCandidates("#heading-only")).toEqual(["#heading-only"]);
+	});
+
+	test("the style guide and glossary paths follow the same rule and report nothing", () => {
 		const settings = load({ styleGuideContextPath: "[[Style guide#Tone]]", glossaryContextPath: " Terms.md#^t1 " });
 		expect(settings.styleGuideContextPath).toBe("Style guide");
-		expect(settings.glossaryContextPath).toBe("Terms.md");
+		expect(settings.glossaryContextPath).toBe("Terms.md#^t1");
+		const named = load({ styleGuideContextPath: "Style/C# conventions.md", glossaryContextPath: "Glossary/Terms ^ Abbreviations.md" });
+		expect(named.styleGuideContextPath).toBe("Style/C# conventions.md");
+		expect(named.glossaryContextPath).toBe("Glossary/Terms ^ Abbreviations.md");
+		const result = normalizeAskMateSettingsWithDiagnostics({ styleGuideContextPath: "Style/C# conventions.md", additionalContextPaths: ["Ideas/Top^5.md"] }, "load");
+		expect(result.diagnostics).toEqual([]);
 	});
 });

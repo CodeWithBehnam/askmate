@@ -1,5 +1,6 @@
 import { App, Modal, Notice } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
+import type { InspectedPrompt } from "../../plugin/promptInspection";
 import {
 	buildMarkdownLineDiff,
 	formatOutputMode,
@@ -236,9 +237,9 @@ export class AskMateTextViewerModal extends Modal {
 }
 
 export class AskMatePromptInspectorModal extends Modal {
-	private readonly inspection: PromptInspection;
+	private readonly inspection: PromptInspection & Partial<Pick<InspectedPrompt, "addedAtSend">>;
 
-	constructor(app: App, inspection: PromptInspection) {
+	constructor(app: App, inspection: PromptInspection & Partial<Pick<InspectedPrompt, "addedAtSend">>) {
 		super(app);
 		this.inspection = inspection;
 	}
@@ -259,6 +260,10 @@ export class AskMatePromptInspectorModal extends Modal {
 		}
 		if (this.inspection.warnings.length > 0) {
 			contentEl.createDiv({ cls: "askmate-budget-warning", text: this.inspection.warnings.join(" ") });
+		}
+		// What a run adds after this text is not built until it starts, so it is named rather than left out silently.
+		for (const note of this.inspection.addedAtSend ?? []) {
+			contentEl.createEl("p", { cls: "askmate-settings-note", text: note });
 		}
 		this.renderTextarea(contentEl, "Instructions", this.inspection.instructions);
 		this.renderTextarea(contentEl, "Final prompt", this.inspection.input);

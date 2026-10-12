@@ -158,23 +158,35 @@ export function normalizeBoundedInteger(value: unknown, fallback: number, min: n
 	return Math.max(min, Math.min(max, Math.round(numeric)));
 }
 
+/** A link's target without its alias ("|") and its heading or block part ("#", "^"). */
+export function stripNoteSubpath(value: string): string {
+	const [beforeAlias = ""] = value.split("|");
+	const [beforeAnchor = ""] = beforeAlias.split(/[#^]/);
+	return beforeAnchor.trim();
+}
+
 /**
- * Reduces a typed note reference to a vault path: "[[Note#Heading|alias]]" and "Note.md#^block" both become the note itself.
- * Obsidian does not allow "#", "^" or "|" in file names, so everything from the first one onwards is a subpath or alias
- * and would stop the note from resolving.
+ * Reduces a typed note reference to what is stored. A wikilink such as "[[Note#Heading|alias]]" becomes the note it names,
+ * because inside a link everything from the first "#", "^" or "|" is a heading, block or alias. A bare path is kept as typed:
+ * Obsidian accepts "#" and "^" in file names ("Meeting #12.md"), so cutting at them here would silently rename the note.
  */
 export function normalizeNotePath(value: unknown): string {
 	if (typeof value !== "string") {
 		return "";
 	}
-	return stripNullCharacters(value)
-		.trim()
-		.replace(/^!?\[\[([^\]]+)\]\]$/, "$1")
-		.replace(/^<(.+)>$/, "$1")
-		.split("|")[0]
-		.split(/[#^]/)[0]
-		.trim()
-		.slice(0, MAX_CONTEXT_PATH_LENGTH);
+	const text = stripNullCharacters(value).trim();
+	const wikilink = /^!?\[\[([^\]]+)\]\]$/.exec(text);
+	const path = wikilink?.[1] !== undefined ? stripNoteSubpath(wikilink[1]) : text.replace(/^<(.+)>$/, "$1");
+	return path.trim().slice(0, MAX_CONTEXT_PATH_LENGTH);
+}
+
+/**
+ * Paths to try, in order, when looking a stored note path up: the path as stored, then without a heading, block or alias
+ * tail for a value such as "Folder/Other.md#^block". The tail only matters when the full path names no file.
+ */
+export function noteLookupCandidates(path: string): string[] {
+	const stripped = stripNoteSubpath(path);
+	return stripped && stripped !== path ? [path, stripped] : [path];
 }
 
 export function normalizeContextPathList(value: unknown): string[] {

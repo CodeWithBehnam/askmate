@@ -9,6 +9,7 @@ import type { LaunchRequest } from "../mcp/spawnPlan";
 import type { ChildLike } from "../mcp/stdioTransport";
 import { toUiApprovalCard } from "../requests/toolRun";
 import type { ToolApprovalCard as UiApprovalCard, ToolApprovalChoice } from "../requests/runTypes";
+import type { ToolApprovalModalInput } from "../ui/modals/ToolApprovalModal";
 
 /** What launch.ts provides. Loaded on demand, and only on desktop. */
 export interface LaunchModule {
@@ -104,34 +105,19 @@ export class McpApprovalRouter {
 	}
 }
 
-/** The words of the fallback trust dialog. Names the exact command or address, so the person sees what will run or be contacted. */
-export function describeTrustRequest(request: TrustRequest): { title: string; message: string } {
-	const why = request.reason === "changed" ? "This server's definition changed since you last trusted it." : "This is the first time this server would run on this device.";
-	if (request.transport === "stdio") {
-		const env = request.env.map((entry) => `  ${entry.name}${entry.secret ? ` (stored secret ${entry.secretId ?? "unknown"})` : ` = ${entry.value}`}`);
-		return {
-			title: `Trust the local server ${request.label}?`,
-			message: [
-				why,
-				"",
-				"AskMate would start this program on your computer. It can read and change your files, so trust it only if you know what it does.",
-				"",
-				`Command: ${request.commandLine}`,
-				...(env.length > 0 ? ["", "Environment variables:", ...env] : []),
-				...(request.risks.length > 0 ? ["", ...request.risks.map((risk) => `Warning: ${risk}`)] : [])
-			].join("\n")
-		};
-	}
+/**
+ * The approval card of a run that brings no inline card of its own, as the approval dialog takes it. The arguments stay the full
+ * JSON the server will receive. A card that does not say it may be granted for the chat offers only "Allow once".
+ */
+export function toApprovalDialogInput(card: UiApprovalCard): ToolApprovalModalInput {
 	return {
-		title: `Trust the server ${request.label}?`,
-		message: [
-			why,
-			"",
-			`AskMate would contact ${request.url} (host ${request.host}).`,
-			...(request.headerNames.length > 0 ? ["", `Headers sent: ${request.headerNames.join(", ")}`] : []),
-			...(request.bearerSecretId ? ["", `A bearer token from the stored secret ${request.bearerSecretId} is sent to ${request.host}.`] : []),
-			...(request.risks.length > 0 ? ["", ...request.risks.map((risk) => `Warning: ${risk}`)] : [])
-		].join("\n")
+		serverLabel: card.server,
+		toolName: card.tool,
+		...(card.title ? { toolTitle: card.title } : {}),
+		argumentsText: card.argumentsJson,
+		...(card.description ? { description: card.description } : {}),
+		changedSinceApproval: card.changedSinceApproval,
+		canAllowForChat: card.canAllowForChat === true
 	};
 }
 

@@ -493,6 +493,21 @@ describe("workflow presets", () => {
 		expect(dialogs.messages.join(" ")).toContain("Fetcher");
 	});
 
+	test("a preset whose note template holds code another plugin runs is named before it is added", async () => {
+		const { plugin } = await loadPlugin();
+		const template = "# {{title}}\n\n```dataviewjs\nconst fs = require('fs')\n```\n\nTotal: `$= dv.pages().length`\n\n{{response}}";
+		const preset = JSON.stringify({ workflows: [{ name: "Tidy summary", prompt: "Summarise the note.", resultNoteTemplate: template }] });
+		const dialogs = answerDialogs();
+
+		const imported = await plugin.importCustomWorkflowPresets(preset);
+		dialogs.stop();
+
+		expect(imported).toBe(1);
+		expect(dialogs.messages.join(" ")).toContain("Tidy summary");
+		expect(dialogs.messages.join(" ")).toContain("a code block that another plugin could run");
+		expect(dialogs.messages.join(" ")).toContain("an inline Dataview query");
+	});
+
 	test("declining the review adds nothing", async () => {
 		const { plugin } = await loadPlugin();
 		const dialogs = answerDialogs((modal) => Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Cancel") ?? null);
@@ -550,6 +565,12 @@ describe("pure write rules", () => {
 		expect(withSafeImportDefaults({ name: "x" })).toEqual({ name: "x", outputKind: "new-content" });
 		expect(withSafeImportDefaults({ name: "x", outputKind: "note-edit" })).toEqual({ name: "x", outputKind: "note-edit" });
 		expect(findImportConcerns([{ name: "A", prompt: "plain", resultNoteTemplate: "" }, { name: "B", prompt: "see <% tp %>", resultNoteTemplate: "" }]).map((concern) => concern.name)).toEqual(["B"]);
+		expect(findImportConcerns([
+			{ name: "Plain", prompt: "plain", resultNoteTemplate: "# {{title}}\n\n{{response}}" },
+			{ name: "Fence", prompt: "plain", resultNoteTemplate: "```js-engine\nreturn 1\n```" },
+			{ name: "Inline", prompt: "plain", resultNoteTemplate: "Pages: `$= dv.pages().length`" },
+			{ name: "Html", prompt: "plain", resultNoteTemplate: "<iframe src=\"x\"></iframe>" }
+		]).map((concern) => concern.name)).toEqual(["Fence", "Inline", "Html"]);
 
 		const base = { firstPartyProviders: ["openai", "anthropic"] as const, secretName: "my-key" };
 		expect(needsKeyApproval({ ...base, providerId: "openai", baseUrl: "https://evil.test/v1", approvedHost: null })).toBe(false);
@@ -607,5 +628,46 @@ describe("keys for custom endpoints", () => {
 		expect(plugin.hasSecret(secretName)).toBe(true);
 		expect(plugin.hasSecret("askmate-missing")).toBe(false);
 		expect(plugin.getSetupState().kind).toBe("needs-key");
+	});
+});
+
+describe("keys for Azure OpenAI", () => {
+	const base = { firstPartyProviders: ["openai", "anthropic"] as const, secretName: "my-key" };
+
+	test("a key is held back from every Azure OpenAI address this device has not approved, look-alike hosts included", () => {
+		for (const baseUrl of [
+			"https://attacker.example/openai/v1",
+			"https://x.openai.azure.com.evil.com/openai/v1",
+			"https://evil.com/.openai.azure.com/openai/v1",
+			"https://x.openai.azure.com@evil.com/openai/v1",
+			"https://mine.openai.azure.com/openai/v1"
+		]) {
+			expect(needsKeyApproval({ ...base, providerId: "azure-openai", baseUrl, approvedHost: null })).toBe(true);
+		}
+		expect(needsKeyApproval({ ...base, providerId: "azure-openai", baseUrl: "https://mine.openai.azure.com/openai/v1", approvedHost: "mine.openai.azure.com" })).toBe(false);
+		expect(needsKeyApproval({ ...base, providerId: "azure-openai", baseUrl: "https://other.openai.azure.com/openai/v1", approvedHost: "mine.openai.azure.com" })).toBe(true);
+	});
+
+	test("a synced file that points Azure OpenAI at another host cannot send the stored key without a question", async () => {
+		const { plugin, fake } = await loadPlugin();
+		fake.secretStorage.setSecret("victim-secret", "sk-victim");
+		Object.assign(plugin.settings.providers["azure-openai"], { baseUrl: "https://attacker.example/openai/v1", apiKeySecretName: "victim-secret" });
+		const dialogs = answerDialogs((modal) => Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Cancel") ?? null);
+
+		await expect(plugin.getProviderApiKey("azure-openai")).rejects.toThrow(/did not send the key to attacker\.example/);
+		dialogs.stop();
+		expect(dialogs.messages.join(" ")).toContain("attacker.example");
+	});
+
+	test("an Azure OpenAI address typed in settings is approved when the key is saved, so the first request does not ask", async () => {
+		const { plugin, fake } = await loadPlugin();
+		Object.assign(plugin.settings.providers["azure-openai"], { baseUrl: "https://mine.openai.azure.com/openai/v1" });
+
+		await plugin.saveProviderApiKey("azure-openai", "sk-typed-by-the-user");
+
+		const secretName = plugin.settings.providers["azure-openai"].apiKeySecretName;
+		expect(fake.secretStorage.getSecret(secretName)).toBe("sk-typed-by-the-user");
+		expect(await plugin.getProviderApiKey("azure-openai")).toBe("sk-typed-by-the-user");
+		expect(Modal.opened).toHaveLength(0);
 	});
 });
