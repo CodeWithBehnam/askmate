@@ -180,3 +180,121 @@ describe("fetchSse", () => {
 		await expect(run).rejects.toThrow("handler failed");
 	});
 });
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A body that sends its headers and then goes silent until the request is aborted, like a stalled gateway. */
+function stallingFetch(status: number, contentType: string): FetchLike {
+	return async (_url, init) => {
+		const body = new ReadableStream<Uint8Array>({
+			start(stream) {
+				init.signal.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")));
+			}
+		});
+		return new Response(body, { status, headers: { "content-type": contentType } });
+	};
+}
+
+describe("fetchSse non-stream bodies", () => {
+	test("a body that stalls after an error status is an idle error, not a user stop", async () => {
+		const run = fetchSse(stallingFetch(502, "text/plain"), "https://example.test", { idleTimeoutMs: 30 }, () => undefined);
+		const error = await rejectionOf(run);
+		expect(error).toBeInstanceOf(StreamIdleError);
+		expect(isAbortError(error)).toBe(false);
+	});
+
+	test("a JSON body that stalls is an idle error too", async () => {
+		const run = fetchSse(stallingFetch(200, "application/json"), "https://example.test", { idleTimeoutMs: 30 }, () => undefined);
+		await expect(run).rejects.toBeInstanceOf(StreamIdleError);
+	});
+
+	test("a user abort while the body is stalled is still reported as a stop", async () => {
+		const controller = new AbortController();
+		const run = fetchSse(stallingFetch(502, "text/plain"), "https://example.test", { abortSignal: controller.signal, idleTimeoutMs: 5000 }, () => undefined);
+		setTimeout(() => controller.abort(), 20);
+		expect(isAbortError(await rejectionOf(run))).toBe(true);
+	});
+
+	test("the idle window restarts when the headers arrive, so a slow start is not a stall", async () => {
+		const fetchFn: FetchLike = async (_url, init) => {
+			await wait(60);
+			const body = new ReadableStream<Uint8Array>({
+				start(stream) {
+					init.signal.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")));
+					setTimeout(() => {
+						if (!init.signal.aborted) {
+							stream.enqueue(new TextEncoder().encode('{"ok":true}'));
+							stream.close();
+						}
+					}, 60);
+				}
+			});
+			return new Response(body, { headers: { "content-type": "application/json" } });
+		};
+		// 60 ms to the headers plus 60 ms to the body is more than the 100 ms limit, but neither wait alone is.
+		const outcome = await fetchSse(fetchFn, "https://example.test", { idleTimeoutMs: 100 }, () => undefined);
+		expect(outcome).toEqual({ kind: "response", status: 200, ok: true, text: '{"ok":true}' });
+	});
+});
+
+describe("fetchSse stream detection", () => {
+	const sse = "data: one\n\ndata: two\n\n";
+
+	test.each([
+		["application/json"],
+		["text/plain"],
+		["application/octet-stream"]
+	])("SSE bytes labelled %s are still read as a stream", async (contentType: string) => {
+		const seen: string[] = [];
+		const outcome = await fetchSse(fetchReturning(new Response(sse, { headers: { "content-type": contentType } })), "https://example.test", {}, (event) => seen.push(event.data));
+		expect(outcome).toEqual({ kind: "streamed" });
+		expect(seen).toEqual(["one", "two"]);
+	});
+
+	test("SSE bytes sent with no Content-Type at all are read as a stream", async () => {
+		const bytes = new TextEncoder().encode(sse);
+		const seen: string[] = [];
+		const outcome = await fetchSse(fetchReturning(new Response(streamOf([bytes]))), "https://example.test", {}, (event) => seen.push(event.data));
+		expect(outcome.kind).toBe("streamed");
+		expect(seen).toEqual(["one", "two"]);
+	});
+
+	test("an SSE comment line is enough to sniff a stream", async () => {
+		const seen: string[] = [];
+		await fetchSse(fetchReturning(new Response(": ping\n\ndata: x\n\n", { headers: { "content-type": "application/json" } })), "https://example.test", {}, (event) => seen.push(event.data));
+		expect(seen).toEqual(["x"]);
+	});
+
+	test("a JSON body with a missing or odd Content-Type is a response, never fed to the SSE parser", async () => {
+		const seen: string[] = [];
+		const outcome = await fetchSse(fetchReturning(new Response('{"choices":[]}', { headers: { "content-type": "text/plain" } })), "https://example.test", {}, (event) => seen.push(event.data));
+		expect(outcome).toEqual({ kind: "response", status: 200, ok: true, text: '{"choices":[]}' });
+		expect(seen).toEqual([]);
+	});
+
+	test("a JSON reply labelled as an event stream comes back as a response", async () => {
+		const seen: string[] = [];
+		const body = '{\n  "choices": [{ "message": { "content": "Hi" } }]\n}\n';
+		const outcome = await fetchSse(fetchReturning(new Response(body, { headers: sseHeaders })), "https://example.test", {}, (event) => seen.push(event.data));
+		expect(outcome).toEqual({ kind: "response", status: 200, ok: true, text: body });
+		expect(seen).toEqual([]);
+	});
+
+	test("an event stream that sent only comments is still a streamed outcome with no events", async () => {
+		const outcome = await fetchSse(fetchReturning(new Response(": hello\n\n", { headers: sseHeaders })), "https://example.test", {}, () => undefined);
+		expect(outcome).toEqual({ kind: "streamed" });
+	});
+
+	test("an HTML page is a response, even with a 200 status", async () => {
+		const page = "<!doctype html><html><body>Sign in to the network</body></html>";
+		const outcome = await fetchSse(fetchReturning(new Response(page, { headers: { "content-type": "text/html" } })), "https://example.test", {}, () => undefined);
+		expect(outcome).toEqual({ kind: "response", status: 200, ok: true, text: page });
+	});
+
+	test("only a network TypeError means unavailable; any other fetch failure is thrown so the prompt is not sent twice", async () => {
+		const network = await fetchSse(async () => { throw new TypeError("Failed to fetch"); }, "https://example.test", {}, () => undefined);
+		expect(network.kind).toBe("unavailable");
+		const other = fetchSse(async () => { throw new Error("socket hang up"); }, "https://example.test", {}, () => undefined);
+		await expect(other).rejects.toThrow("socket hang up");
+	});
+});

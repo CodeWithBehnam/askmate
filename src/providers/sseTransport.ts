@@ -11,9 +11,13 @@ export interface SseRequestInit {
 }
 
 export type SseTransportOutcome =
-	/** fetch failed before any response arrived (network, CORS, TLS); the caller can safely use the buffered path. */
+	/**
+	 * fetch failed before any response arrived (a network error, CORS or TLS). The request may or may not have reached
+	 * the server, and a browser reports both the same way, so a caller that retries on the buffered path accepts a small
+	 * risk of the same prompt being sent twice. That trade keeps endpoints without CORS support working.
+	 */
 	| { kind: "unavailable"; reason: string }
-	/** The server answered with an error status or a plain JSON body instead of a stream. */
+	/** The server answered with an error status, a plain JSON body or a page instead of a stream. */
 	| { kind: "response"; status: number; ok: boolean; text: string }
 	| { kind: "streamed" };
 
@@ -31,10 +35,34 @@ export class StreamIdleError extends Error {
 	}
 }
 
-function isStreamBody(response: Response): boolean {
-	// A server that ignores `stream: true` answers with JSON; that body is parsed by the buffered path instead.
-	const contentType = response.headers.get("content-type") ?? "";
-	return response.ok && Boolean(response.body) && !/json/i.test(contentType);
+/** Only a body labelled text/event-stream is read live. Anything else is read whole and then looked at. */
+function isEventStream(response: Response): boolean {
+	return response.ok && Boolean(response.body) && /text\/event-stream/i.test(response.headers.get("content-type") ?? "");
+}
+
+/** A body that starts like SSE (a data or event field, or a comment) is a stream whatever its Content-Type says. */
+export function looksLikeSse(text: string): boolean {
+	return /^\s*(?:data:|event:|:)/.test(text);
+}
+
+function looksLikeJsonObject(text: string): boolean {
+	const trimmed = text.trim();
+
+	if (!trimmed.startsWith("{")) {
+		return false;
+	}
+
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		return Boolean(parsed) && typeof parsed === "object" && !Array.isArray(parsed);
+	} catch {
+		return false;
+	}
+}
+
+/** Realm-safe: a TypeError raised in a popout window is not an instance of this window's TypeError. */
+function isNetworkFailure(error: unknown): boolean {
+	return error instanceof Error && error.name === "TypeError";
 }
 
 /**
@@ -77,6 +105,44 @@ export async function fetchSse(
 		return error instanceof Error ? error : new Error(String(error));
 	};
 
+	/**
+	 * Reads the body chunk by chunk. The idle timer restarts before every read, so silence is measured from the last
+	 * byte (or, for the first read, from the response headers) and not from when the request was sent.
+	 */
+	const readBody = async (response: Response, onText: (text: string) => void): Promise<void> => {
+		if (!response.body) {
+			try {
+				onText(await response.text());
+			} catch (error) {
+				throw classify(error);
+			}
+			return;
+		}
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder("utf-8");
+
+		try {
+			for (;;) {
+				// A handler may abort between chunks; do not rely on the stream erroring promptly.
+				if (init.abortSignal?.aborted) {
+					throw createAbortError();
+				}
+				armIdleTimer();
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+				onText(decoder.decode(value, { stream: true }));
+			}
+			// The final decode flushes bytes of a multi-byte character the server cut off.
+			onText(decoder.decode());
+		} catch (error) {
+			await reader.cancel().catch(() => undefined);
+			throw classify(error);
+		}
+	};
+
 	try {
 		armIdleTimer();
 		let response: Response;
@@ -91,40 +157,59 @@ export async function fetchSse(
 			if (init.abortSignal?.aborted || idleFired) {
 				throw classify(error);
 			}
-			return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+			// Only a network-level failure means no answer arrived. Anything else is a real error, and retrying it
+			// on the buffered path could send the prompt a second time for nothing.
+			if (isNetworkFailure(error)) {
+				return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+			}
+			throw classify(error);
 		}
 
-		if (!isStreamBody(response)) {
-			const text = await response.text();
+		if (!isEventStream(response)) {
+			// Error statuses, JSON bodies and pages are read whole, with the same idle and abort handling as a stream.
+			let text = "";
+			await readBody(response, (chunk) => {
+				text += chunk;
+			});
+
+			// A gateway that labels its SSE bytes as JSON (or sends no type at all) is still a stream.
+			if (response.ok && looksLikeSse(text)) {
+				let sniffed = INITIAL_SSE_STATE;
+				const fed = feedSse(sniffed, text);
+				sniffed = fed.state;
+				fed.events.forEach(onEvent);
+				flushSse(sniffed).forEach(onEvent);
+				return { kind: "streamed" };
+			}
+
 			return { kind: "response", status: response.status, ok: response.ok, text };
 		}
 
-		const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-		const decoder = new TextDecoder("utf-8");
 		let state = INITIAL_SSE_STATE;
+		let eventCount = 0;
+		// Kept only until the first event arrives, so a real stream never accumulates its whole body.
+		let rawHead = "";
+		const dispatch = (events: SseEvent[]): void => {
+			eventCount += events.length;
+			events.forEach(onEvent);
+		};
 
-		try {
-			for (;;) {
-				// A handler may abort between chunks; do not rely on the stream erroring promptly.
-				if (init.abortSignal?.aborted) {
-					throw createAbortError();
-				}
-				armIdleTimer();
-				const { done, value } = await reader.read();
-				if (done) {
-					break;
-				}
-				const fed = feedSse(state, decoder.decode(value, { stream: true }));
-				state = fed.state;
-				fed.events.forEach(onEvent);
+		await readBody(response, (chunk) => {
+			if (eventCount === 0) {
+				rawHead += chunk;
 			}
-			// The final decode flushes bytes of a multi-byte character the server cut off.
-			const last = feedSse(state, decoder.decode());
-			last.events.forEach(onEvent);
-			flushSse(last.state).forEach(onEvent);
-		} catch (error) {
-			await reader.cancel().catch(() => undefined);
-			throw classify(error);
+			const fed = feedSse(state, chunk);
+			state = fed.state;
+			dispatch(fed.events);
+			if (eventCount > 0) {
+				rawHead = "";
+			}
+		});
+		dispatch(flushSse(state));
+
+		// A server that labels a plain JSON reply as an event stream sent no events. That reply is read as JSON.
+		if (eventCount === 0 && looksLikeJsonObject(rawHead)) {
+			return { kind: "response", status: response.status, ok: response.ok, text: rawHead };
 		}
 
 		return { kind: "streamed" };

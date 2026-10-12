@@ -11,13 +11,89 @@ import {
 } from "../shared/core";
 import type { ProviderRuntime } from "./types";
 
-export function extractProviderError(body: Record<string, unknown> | null, fallback: string): string {
+// Order matters: the specific causes come before the generic "Failed to fetch".
+const TRANSPORT_FAILURES: ReadonlyArray<readonly [RegExp, (host: string) => string]> = [
+	[/ERR_CONNECTION_REFUSED|ECONNREFUSED/i, (host) => `Could not connect to ${host}. Check that the server is running and that the base URL is right.`],
+	[/ERR_NAME_NOT_RESOLVED|ENOTFOUND|EAI_AGAIN/i, (host) => `Could not find ${host}. Check the spelling of the base URL and your network.`],
+	[/ERR_CERT|CERT_[A-Z_]+|self[- ]signed|UNABLE_TO_VERIFY|SSL_ERROR|ERR_SSL/i, (host) => `${host} uses a certificate Obsidian does not trust. Use a trusted certificate, or http for a server on this machine.`],
+	[/ERR_INTERNET_DISCONNECTED|ENETUNREACH|EHOSTUNREACH|ERR_NETWORK_CHANGED/i, (host) => `There is no network connection to ${host}. Check your internet connection.`],
+	[/ERR_CONNECTION_TIMED_OUT|ERR_TIMED_OUT|ETIMEDOUT/i, (host) => `${host} did not answer in time. Check that it is reachable, then try again.`],
+	[/ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ECONNRESET|socket hang up/i, (host) => `${host} closed the connection. Try again.`],
+	[/Failed to fetch|NetworkError when attempting|Load failed/i, (host) => `Could not reach ${host}. The server may be down, or it may not allow requests from Obsidian.`]
+];
+
+/**
+ * One plain sentence for a request that never got an answer, naming only the host, never the path or query (which can hold
+ * a key). Null when the error is not a recognised transport failure, so the caller keeps the original message.
+ */
+export function describeTransportError(error: unknown, url: string): string | null {
+	const raw = error instanceof Error ? error.message : String(error);
+	const failure = TRANSPORT_FAILURES.find(([pattern]) => pattern.test(raw));
+
+	if (!failure) {
+		return null;
+	}
+
+	let host = "the server";
+	try {
+		host = new URL(url).host || host;
+	} catch {
+		// A malformed URL is reported without a host.
+	}
+
+	return failure[1](host);
+}
+
+/** Reads a timeout back to the user in the unit they think in, so a message always states the limit that was applied. */
+export function formatTimeoutDuration(ms: number): string {
+	const seconds = Math.round(ms / 1000);
+	const minutes = seconds / 60;
+
+	if (seconds >= 60 && Number.isInteger(minutes)) {
+		return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+	}
+
+	return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+/**
+ * Test connection sends a real generation request, and a reasoning or cold-started deployment can need far longer than
+ * a model list call. The limit is generous and the message does not blame the user's setup for being slow.
+ */
+export const PROVIDER_TEST_TIMEOUT_MS = 60000;
+
+export function describeTestTimeout(providerName: string): string {
+	return `${providerName} test request timed out after ${formatTimeoutDuration(PROVIDER_TEST_TIMEOUT_MS)}. A slow deployment is not necessarily misconfigured: reasoning models and cold starts can take this long. Try again, or ask a question to see whether it answers.`;
+}
+
+/** The OpenAI shape, `{ error: { message } }`. This is the only shape trusted inside a 200 body. */
+function extractErrorObjectMessage(body: Record<string, unknown> | null): string {
 	const error = body?.error;
 
 	if (error && typeof error === "object") {
 		const message = (error as { message?: unknown }).message;
 		if (typeof message === "string" && message.trim()) {
 			return message.trim();
+		}
+	}
+
+	return "";
+}
+
+/**
+ * Reads the message out of an HTTP error body. Local servers and gateways do not all use the OpenAI shape: LM Studio
+ * sends `{ error: "text" }`, some send a top-level `message`, and FastAPI-based servers send `{ detail: "text" }`.
+ */
+export function extractProviderError(body: Record<string, unknown> | null, fallback: string): string {
+	const nested = extractErrorObjectMessage(body);
+
+	if (nested) {
+		return nested;
+	}
+
+	for (const candidate of [body?.error, body?.message, body?.detail]) {
+		if (typeof candidate === "string" && candidate.trim()) {
+			return candidate.trim();
 		}
 	}
 
@@ -126,7 +202,8 @@ const CHAT_COMPLETION_INCOMPLETE_REASONS = new Set(["length", "content_filter", 
 
 /** Some gateways report upstream failures inside an HTTP 200 body, either at the top level or on a choice. */
 export function extractChatCompletionBodyError(body: Record<string, unknown> | null): string {
-	const topLevel = extractProviderError(body, "");
+	// Only the strict OpenAI shape counts here: a successful body may legitimately carry a top-level message or detail.
+	const topLevel = extractErrorObjectMessage(body);
 	if (topLevel) {
 		return topLevel;
 	}
@@ -134,7 +211,7 @@ export function extractChatCompletionBodyError(body: Record<string, unknown> | n
 	const choices = Array.isArray(body?.choices) ? body.choices : [];
 	for (const choice of choices) {
 		if (choice && typeof choice === "object") {
-			const message = extractProviderError(choice as Record<string, unknown>, "");
+			const message = extractErrorObjectMessage(choice as Record<string, unknown>);
 			if (message) {
 				return message;
 			}
@@ -175,23 +252,40 @@ function extractChatCompletionRefusal(body: Record<string, unknown> | null): str
 	return "";
 }
 
+// Stop reasons that mean the provider ran out of output budget, in the vocabulary of each API.
+const OUTPUT_LIMIT_REASONS = new Set(["max_tokens", "length", "MAX_TOKENS", "max_output_tokens", "model_context_window_exceeded"]);
+
+export function isOutputLimitReason(reason: string | null): boolean {
+	return reason !== null && OUTPUT_LIMIT_REASONS.has(reason);
+}
+
+/** What the user can do about a reply that hit the output limit. Empty for any other stop reason. */
+export function describeOutputLimitHint(reason: string | null): string {
+	return isOutputLimitReason(reason) ? " The output limit was reached: ask for a shorter result, or split the note into parts and ask again." : "";
+}
+
 /** An early stop with no text would otherwise surface as a vague "no output" error that hides the provider's reason. */
 export function assertProviderTextPresent(providerName: string, text: string, incompleteReason: string | null): void {
 	if (!text && incompleteReason) {
 		throw new Error(
-			`${providerName} returned no text. The response stopped with reason "${incompleteReason}", which usually means a refusal, a safety block or the output token limit.`
+			`${providerName} returned no text. The response stopped with reason "${incompleteReason}", which usually means a refusal, a safety block or the output token limit.${describeOutputLimitHint(incompleteReason)}`
 		);
 	}
 }
 
+/**
+ * `secrets` are the values this request sent as credentials. Pattern redaction cannot know every key format (a 32 digit
+ * hex Azure key looks like any identifier), so an error a provider echoes back is cleaned with the exact keys as well.
+ */
 export function buildChatCompletionsResult(
 	providerName: string,
 	model: string,
-	body: Record<string, unknown> | null
+	body: Record<string, unknown> | null,
+	secrets: string[] = []
 ): ProviderTextResult {
 	const bodyError = extractChatCompletionBodyError(body);
 	if (bodyError) {
-		throw new Error(`${providerName} reported an error in its response. Provider message: ${redactSecrets(bodyError)}`);
+		throw new Error(`${providerName} reported an error in its response. Provider message: ${redactSecrets(bodyError, secrets)}`);
 	}
 
 	const text = extractChatCompletionText(body);
@@ -278,7 +372,7 @@ export async function completeChatCompletionsText(
 		throw new Error(formatProviderHttpError(providerRef.providerName, response.status, describeProviderErrorBody(response, getSecretHeaderValues(headers))));
 	}
 
-	return buildChatCompletionsResult(providerRef.providerName, providerRef.model, body);
+	return buildChatCompletionsResult(providerRef.providerName, providerRef.model, body, getSecretHeaderValues(headers));
 }
 
 export async function fetchModelList(
@@ -315,6 +409,51 @@ export async function fetchModelList(
 	}
 
 	return body.data.map((model) => model.id ?? "").filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+function editDistance(a: string, b: string): number {
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+
+	for (let i = 1; i <= a.length; i += 1) {
+		const row = [i];
+		for (let j = 1; j <= b.length; j += 1) {
+			row.push(Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+		}
+		previous = row;
+	}
+
+	return previous[b.length];
+}
+
+/** Dated snapshots such as claude-sonnet-4-5-20250929 or gpt-5.5-2026-04-23 are what an alias like claude-sonnet-4-5 resolves to. */
+function isSnapshotOf(model: string, listed: string): boolean {
+	return listed.startsWith(`${model}-`) && /^\d{4}-?\d{2}-?\d{2}$/.test(listed.slice(model.length + 1));
+}
+
+export interface ListedModelMatch {
+	found: boolean;
+	/** The listed model nearest in spelling to the requested one, or null when the list is empty. Null when found. */
+	closest: string | null;
+}
+
+/**
+ * Checks a configured model against the ids a provider lists. Ids are compared exactly, because the API itself does, with
+ * the two aliases providers resolve for the caller: a dated snapshot and Ollama's implicit :latest tag.
+ */
+export function matchListedModel(model: string, listed: readonly string[]): ListedModelMatch {
+	const wanted = model.trim();
+
+	if (listed.some((id) => id === wanted || id === `${wanted}:latest` || isSnapshotOf(wanted, id))) {
+		return { found: true, closest: null };
+	}
+
+	const lowered = wanted.toLowerCase();
+	const closest = listed.reduce<{ id: string; distance: number } | null>((best, id) => {
+		const distance = editDistance(lowered, id.toLowerCase());
+		return best === null || distance < best.distance ? { id, distance } : best;
+	}, null);
+
+	return { found: false, closest: closest?.id ?? null };
 }
 
 /** Upper bound so a provider that keeps returning a cursor cannot loop forever. */

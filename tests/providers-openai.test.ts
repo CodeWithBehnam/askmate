@@ -6,7 +6,6 @@ import {
 	fetchOpenAIModels,
 	requestOpenAIResponses
 } from "../src/providers/open-ai";
-import { parseOpenAIStreamEvent } from "../src/providers/open-ai-stream";
 import type { ProviderRequestOptions, ProviderRuntime } from "../src/providers/types";
 import {
 	getModelCapability,
@@ -108,19 +107,5 @@ describe("OpenAI model refresh", () => {
 		expect(getModelCapability("gpt-5.5")).toBe("text");
 		expect(isOpenAITextModel("gpt-image-1")).toBe(false);
 		expect(isOpenAITextModel("chatgpt-4o-latest")).toBe(true);
-	});
-});
-
-describe("OpenAI stream event parsing", () => {
-	test("accepts data lines with or without a space", () => {
-		expect(parseOpenAIStreamEvent('data:{"type":"response.output_text.delta","delta":"a"}')?.delta).toBe("a");
-		expect(parseOpenAIStreamEvent('data: {"type":"response.output_text.delta","delta":"b"}')?.delta).toBe("b");
-		expect(parseOpenAIStreamEvent("data: [DONE]")).toBeNull();
-		expect(parseOpenAIStreamEvent("event: response.created")).toBeNull();
-	});
-
-	test("raises top-level error events", () => {
-		expect(() => parseOpenAIStreamEvent('data: {"type":"error","code":"server_error","message":"Boom"}')).toThrow("Boom");
-		expect(() => parseOpenAIStreamEvent('data: {"type":"error"}')).toThrow("OpenAI stream error.");
 	});
 });

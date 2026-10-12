@@ -11,11 +11,13 @@ import { tryStreamChatCompletions } from "./chat-completions-stream";
 import {
 	buildChatCompletionsResult,
 	describeProviderErrorBody,
-	formatProviderHttpError
+	describeTestTimeout,
+	formatProviderHttpError,
+	PROVIDER_TEST_TIMEOUT_MS
 } from "./common";
 import type { ProviderRuntime } from "./types";
 
-const AZURE_AI_INFERENCE_API_VERSION = "2024-05-01-preview";
+export const AZURE_AI_INFERENCE_API_VERSION = "2024-05-01-preview";
 const AZURE_AI_RESOURCE_HOST_PATTERN = /\.(?:services\.ai|cognitiveservices)\.azure\.com$/i;
 
 interface AzureAIModelInfoBody {
@@ -121,7 +123,7 @@ export async function completeAzureAIText(
 		throw new Error(formatProviderHttpError(providerRef.providerName, response.status, describeProviderErrorBody(response, [apiKey])));
 	}
 
-	return buildChatCompletionsResult(providerRef.providerName, providerRef.model, body);
+	return buildChatCompletionsResult(providerRef.providerName, providerRef.model, body, [apiKey]);
 }
 
 export async function fetchAzureAIModels(runtime: ProviderRuntime): Promise<string[]> {
@@ -166,8 +168,8 @@ export async function testAzureAIConnection(runtime: ProviderRuntime): Promise<s
 		"Reply with OK to confirm this Azure AI Foundry deployment works.",
 		undefined,
 		{
-			timeoutMs: 10000,
-			timeoutMessage: "Azure AI Foundry test request timed out after 10 seconds."
+			timeoutMs: PROVIDER_TEST_TIMEOUT_MS,
+			timeoutMessage: describeTestTimeout("Azure AI Foundry")
 		}
 	);
 

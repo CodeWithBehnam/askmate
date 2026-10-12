@@ -1,92 +1,17 @@
 /**
  * OpenAI Responses streaming. Deltas come from `response.output_text.delta`; the terminal
  * `response.completed`, `response.incomplete` and `response.failed` events carry the full response object,
- * which is handed to the same parser as a buffered reply. The line-level helpers below are older and only
- * used by tests; the live path decodes SSE through sse.ts.
+ * which is handed to the same parser as a buffered reply. SSE framing is decoded in sse.ts.
  */
 import type {
 	AskMateHttpResponse,
 	OpenAIResponseBody,
-	OpenAIStreamEvent,
-	OpenAITokenUsage,
 	ReasoningEffort
 } from "../shared/core";
-import { DEFAULT_TEXT_GENERATION_TIMEOUT_MS } from "../shared/core";
 import { redactSecrets } from "./common";
-import { buildOpenAIResponsesBody, extractOpenAIText, getOpenAIBaseUrl, joinOpenAIUrl } from "./open-ai";
+import { buildOpenAIResponsesBody, extractOpenAIText, getOpenAIBaseUrl, getOpenAIGenerationTimeoutMs, joinOpenAIUrl } from "./open-ai";
 import { parseEventJson, runTextStream, STREAM_INTERRUPTED_REASON, StreamProviderError, type StreamAdapter } from "./streaming";
 import type { ProviderRuntime } from "./types";
-
-export function parseOpenAIStreamEvent(line: string): OpenAIStreamEvent | null {
-	// SSE allows "data:" with or without a following space.
-	const match = /^data:\s?(.*)$/.exec(line);
-	if (!match) {
-		return null;
-	}
-
-	const payload = match[1].trim();
-
-	if (!payload || payload === "[DONE]") {
-		return null;
-	}
-
-	try {
-		const event = JSON.parse(payload) as OpenAIStreamEvent;
-
-		if (event.error?.message) {
-			throw new Error(event.error.message);
-		}
-
-		// Responses API "error" events put the message at the top level, not under `error`.
-		const topLevelMessage = "message" in event ? event.message : undefined;
-		if (event.type === "error") {
-			throw new Error(typeof topLevelMessage === "string" && topLevelMessage.trim() ? topLevelMessage.trim() : "OpenAI stream error.");
-		}
-
-		return event;
-	} catch (error) {
-		if (error instanceof Error) {
-			throw error;
-		}
-	}
-
-	return null;
-}
-
-export function getOpenAIStreamDelta(event: OpenAIStreamEvent): string {
-	if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-		return event.delta;
-	}
-
-	return "";
-}
-
-export function getOpenAIStreamUsage(event: OpenAIStreamEvent): OpenAITokenUsage | null {
-	return event.response?.usage ?? event.usage ?? null;
-}
-
-export function isCompletedOpenAIStreamEvent(event: OpenAIStreamEvent): boolean {
-	return event.type === "response.completed" || event.response?.status === "completed";
-}
-
-export function getOpenAIStreamTerminalError(event: OpenAIStreamEvent): string | null {
-	const responseError = event.response?.error?.message?.trim();
-
-	if (responseError) {
-		return responseError;
-	}
-
-	if (event.type === "response.failed" || event.response?.status === "failed") {
-		return "OpenAI response failed.";
-	}
-
-	if (event.type === "response.incomplete" || event.response?.status === "incomplete") {
-		const reason = event.response?.incomplete_details?.reason?.trim();
-		return reason ? `OpenAI response incomplete: ${reason}.` : "OpenAI response incomplete.";
-	}
-
-	return null;
-}
 
 export interface OpenAIResponsesStreamState {
 	text: string;
@@ -181,7 +106,9 @@ export async function streamOpenAIResponses(
 		},
 		body: JSON.stringify({ ...buildOpenAIResponsesBody({ model, instructions, input, reasoningEffort }), stream: true }),
 		abortSignal,
-		idleTimeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
+		// Same scaling as the buffered limit. Keep-alive events normally reset the idle timer, but a gateway that drops
+		// them would otherwise cut a long reasoning run off, so the margin follows the effort.
+		idleTimeoutMs: getOpenAIGenerationTimeoutMs(model, reasoningEffort),
 		adapter: openAIResponsesStreamAdapter,
 		onDelta
 	});

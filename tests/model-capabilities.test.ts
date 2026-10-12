@@ -1,6 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { getSupportedReasoningEffort } from "../src/shared/modelCapabilities";
+import { getSupportedReasoningEffort, isOpenAITextModel } from "../src/shared/modelCapabilities";
 import type { ReasoningEffort } from "../src/shared/types";
+
+describe("isOpenAITextModel", () => {
+	test.each(["o3-deep-research", "o4-mini-deep-research", "o3-deep-research-2025-06-26", "o4-mini-deep-research-2025-06-26"])(
+		"%s needs a data-source tool, so it is not offered as a plain text model",
+		(model: string) => {
+			expect(isOpenAITextModel(model)).toBe(false);
+		}
+	);
+
+	test.each(["gpt-5.5", "gpt-5-mini", "o3", "o3-pro", "o4-mini", "gpt-4.1", "chatgpt-4o-latest"])("%s stays a text model", (model: string) => {
+		expect(isOpenAITextModel(model)).toBe(true);
+	});
+
+	test.each(["gpt-image-1", "text-embedding-3-large", "whisper-1", "gpt-4o-mini-tts", "omni-moderation-latest"])("%s is not a text model", (model: string) => {
+		expect(isOpenAITextModel(model)).toBe(false);
+	});
+});
 
 describe("getSupportedReasoningEffort", () => {
 	test.each([

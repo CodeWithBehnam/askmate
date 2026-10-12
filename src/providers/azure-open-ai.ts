@@ -6,7 +6,7 @@ import {
 	validateAzureOpenAIBaseUrl
 } from "../shared/core";
 import { completeChatCompletionsStreaming } from "./chat-completions-stream";
-import { describeProviderErrorBody, formatProviderHttpError } from "./common";
+import { describeProviderErrorBody, describeTestTimeout, formatProviderHttpError, PROVIDER_TEST_TIMEOUT_MS } from "./common";
 import type { ProviderRuntime } from "./types";
 
 export function getAzureOpenAIHeaders(apiKey: string): Record<string, string> {
@@ -79,8 +79,8 @@ export async function testAzureOpenAIConnection(runtime: ProviderRuntime): Promi
 	const response = await runtime.requestJson<Record<string, unknown>>(`${baseUrl}/chat/completions`, {
 		method: "POST",
 		headers: getAzureOpenAIHeaders(apiKey),
-		timeoutMs: 10000,
-		timeoutMessage: "Azure OpenAI test request timed out after 10 seconds.",
+		timeoutMs: PROVIDER_TEST_TIMEOUT_MS,
+		timeoutMessage: describeTestTimeout("Azure OpenAI"),
 		body: JSON.stringify({
 			model: deploymentName,
 			messages: [

@@ -1,6 +1,12 @@
 import { DEFAULT_TEXT_GENERATION_TIMEOUT_MS } from "../shared/core";
 import type { ProviderModelRef, ProviderTextResult } from "../shared/core";
-import { buildChatCompletionsResult, completeChatCompletionsText, extractChatCompletionBodyError } from "./common";
+import {
+	buildChatCompletionsResult,
+	completeChatCompletionsText,
+	extractChatCompletionBodyError,
+	getSecretHeaderValues,
+	normalizeChatCompletionsUsage
+} from "./common";
 import { parseEventJson, StreamProviderError, tryStreamTextResult, type StreamAdapter } from "./streaming";
 import type { ProviderRuntime } from "./types";
 
@@ -30,6 +36,7 @@ function readFirstChoice(body: Record<string, unknown>): { delta: Record<string,
 export const chatCompletionsStreamAdapter: StreamAdapter<ChatStreamState> = {
 	initial: { text: "", refusal: "", finishReason: null, usage: null, done: false },
 	getText: (state) => state.text,
+	getUsage: (state) => normalizeChatCompletionsUsage(state.usage),
 	// Some servers omit [DONE] but always report a finish reason before closing.
 	isTerminal: (state) => state.done || state.finishReason !== null,
 	reduce: (state, event) => {
@@ -113,7 +120,7 @@ export async function tryStreamChatCompletions(
 		model: providerRef.model,
 		endpoint: "chat_completions",
 		assemble: assembleChatCompletionsBody,
-		buildResult: (body) => buildChatCompletionsResult(providerRef.providerName, providerRef.model, body),
+		buildResult: (body) => buildChatCompletionsResult(providerRef.providerName, providerRef.model, body, getSecretHeaderValues(headers)),
 		body: JSON.stringify({
 			model: providerRef.model,
 			messages: [

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { completeAnthropicText } from "../src/providers/anthropic";
 import { completeAzureAIText } from "../src/providers/azure-ai";
 import { buildChatCompletionsResult } from "../src/providers/common";
-import { completeGeminiText } from "../src/providers/google-gemini";
+import { completeGeminiText, getGeminiPromptBlockReason as bufferedGetGeminiPromptBlockReason } from "../src/providers/google-gemini";
+import { getGeminiPromptBlockReason } from "../src/providers/google-gemini-stream";
 import { completeProviderTextRequest } from "../src/providers/index";
 import { streamOpenAIResponses } from "../src/providers/open-ai-stream";
 import { STREAM_INTERRUPTED_REASON } from "../src/providers/streaming";
@@ -33,8 +34,12 @@ interface Harness {
 
 type StreamBehaviour =
 	| { kind: "sse"; chunks: string[] }
+	/** A 200 reply with an arbitrary body and Content-Type, for gateways that mislabel what they send. */
+	| { kind: "raw"; body: string; contentType?: string; status?: number }
 	| { kind: "http"; status: number; body: unknown }
 	| { kind: "network-error" }
+	| { kind: "other-error" }
+	| { kind: "stall"; status: number }
 	| { kind: "none" };
 
 function harness(behaviour: StreamBehaviour, buffered: AskMateHttpResponse<unknown>[] = [], baseUrl = "https://example.test/v1"): Harness {
@@ -45,6 +50,22 @@ function harness(behaviour: StreamBehaviour, buffered: AskMateHttpResponse<unkno
 		streamCalls.push({ url, headers: init.headers ?? {}, body: JSON.parse(init.body ?? "{}") as Record<string, unknown> });
 		if (behaviour.kind === "network-error") {
 			throw new TypeError("Failed to fetch");
+		}
+		if (behaviour.kind === "other-error") {
+			throw new Error("socket hang up");
+		}
+		if (behaviour.kind === "raw") {
+			return new Response(behaviour.body, {
+				status: behaviour.status ?? 200,
+				headers: behaviour.contentType ? { "content-type": behaviour.contentType } : {}
+			});
+		}
+		if (behaviour.kind === "stall") {
+			return new Response(new ReadableStream<Uint8Array>({
+				start(stream) {
+					init.signal.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")));
+				}
+			}), { status: behaviour.status, headers: { "content-type": "text/plain" } });
 		}
 		if (behaviour.kind === "http") {
 			return new Response(JSON.stringify(behaviour.body), { status: behaviour.status, headers: { "content-type": "application/json" } });
@@ -74,7 +95,15 @@ function harness(behaviour: StreamBehaviour, buffered: AskMateHttpResponse<unkno
 			}
 			return next as AskMateHttpResponse<T>;
 		},
-		...(behaviour.kind === "none" ? {} : { streamSse: (url, options, onEvent) => fetchSse(fetchFn, url, options, onEvent) })
+		...(behaviour.kind === "none" ? {} : {
+			streamSse: (url, options, onEvent) => fetchSse(
+				fetchFn,
+				url,
+				// A stalled body would otherwise wait out the real two minute limit.
+				{ ...options, ...(behaviour.kind === "stall" ? { idleTimeoutMs: 30 } : {}) },
+				onEvent
+			)
+		})
 	};
 	return { runtime, streamCalls, bufferedCalls };
 }
@@ -178,6 +207,13 @@ describe("chat completions streaming", () => {
 		expect(result.text).toBe("half");
 	});
 
+	test("an interrupted reply keeps the usage that was already reported", async () => {
+		const stream = harness({ kind: "sse", chunks: [chatChunk("half", null, { usage })] });
+		const result = await completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined);
+		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
+		expect(result.usage).toEqual({ input_tokens: 11, output_tokens: 7, total_tokens: 18 });
+	});
+
 	test("HTTP error statuses are formatted like the buffered path and never retried", async () => {
 		const stream = harness({ kind: "http", status: 429, body: { error: { message: "slow down" } } }, [json(200, {})]);
 		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
@@ -189,6 +225,73 @@ describe("chat completions streaming", () => {
 		const stream = harness({ kind: "http", status: 401, body: { error: { message: `bad key ${API_KEY}` } } });
 		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
 		expect((error as Error).message).not.toContain(API_KEY);
+	});
+
+	test("a stream labelled application/json is still streamed and gives the same result", async () => {
+		const chunks = [chatChunk("Hel"), chatChunk("lo", "stop"), frame(null, "[DONE]")];
+		const labelled = harness({ kind: "sse", chunks });
+		const mislabelled = harness({ kind: "raw", body: chunks.join(""), contentType: "application/json" });
+		const deltas: string[] = [];
+		const expected = await completeProviderTextRequest(labelled.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined);
+		const result = await completeProviderTextRequest(mislabelled.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, (delta) => deltas.push(delta));
+		expect(result).toEqual(expected);
+		expect(result.text).toBe("Hello");
+		expect(deltas).toEqual(["Hel", "lo"]);
+		expect(mislabelled.bufferedCalls).toEqual([]);
+	});
+
+	test("an error hidden in a JSON reply to a stream request is redacted with the key that was sent", async () => {
+		const body = JSON.stringify({ error: { message: `Incorrect API key ${API_KEY}` } });
+		const stream = harness({ kind: "raw", body, contentType: "application/json" });
+		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		expect((error as Error).message).toContain("reported an error in its response");
+		expect((error as Error).message).not.toContain(API_KEY);
+	});
+
+	test("a JSON reply labelled as an event stream is read by the buffered parser", async () => {
+		const body = JSON.stringify({ choices: [{ message: { content: "Plain reply" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } });
+		const stream = harness({ kind: "raw", body, contentType: "text/event-stream" });
+		const result = await completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined);
+		expect(result.text).toBe("Plain reply");
+		expect(result.usage).toEqual({ input_tokens: 3, output_tokens: 2, total_tokens: 5 });
+		expect(result.incompleteReason).toBeNull();
+		expect(stream.bufferedCalls).toEqual([]);
+	});
+
+	test("a web page instead of a reply says so, and is not retried", async () => {
+		const page = "<!doctype html><html><head><title>Login</title><style>p{}</style></head><body><p>Sign in to the Wi-Fi network</p></body></html>";
+		const stream = harness({ kind: "raw", body: page, contentType: "text/html" }, [json(200, {})]);
+		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		const message = (error as Error).message;
+		expect(message).toContain("OpenRouter answered with a web page instead of a reply");
+		expect(message).toContain("Sign in to the Wi-Fi network");
+		expect(message).not.toContain("<p>");
+		expect(message).not.toContain("p{}");
+		expect(message).not.toContain("closed the connection");
+		expect(stream.bufferedCalls).toEqual([]);
+	});
+
+	test("an empty 200 reply is reported as no reply, and plain non-JSON text as an unexpected reply", async () => {
+		const empty = harness({ kind: "raw", body: "", contentType: "application/json" });
+		const emptyError = await rejectionOf(completeProviderTextRequest(empty.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		expect((emptyError as Error).message).toBe("OpenRouter closed the connection without sending a reply.");
+		const text = harness({ kind: "raw", body: "OK", contentType: "text/plain" });
+		const textError = await rejectionOf(completeProviderTextRequest(text.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		expect((textError as Error).message).toContain("OpenRouter returned something that is not a reply");
+	});
+
+	test("a fetch failure that is not a network error is thrown instead of sending the prompt again", async () => {
+		const stream = harness({ kind: "other-error" }, [json(200, { choices: [{ message: { content: "second send" }, finish_reason: "stop" }] })]);
+		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		expect((error as Error).message).toContain("socket hang up");
+		expect(stream.bufferedCalls).toEqual([]);
+	});
+
+	test("a gateway that stalls after an error status reports silence, not a user stop", async () => {
+		const stream = harness({ kind: "stall", status: 502 });
+		const error = await rejectionOf(completeProviderTextRequest(stream.runtime, ref("openrouter", "OpenRouter"), "s", "i", undefined, () => undefined));
+		expect(isAbortError(error)).toBe(false);
+		expect((error as Error).message).toContain("went quiet");
 	});
 
 	test("a network failure before any response falls back silently to the buffered request", async () => {
@@ -278,6 +381,23 @@ describe("anthropic streaming", () => {
 		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
 		expect(result.streamError).toContain("Overloaded");
 	});
+
+	test("a connection that closes between message_delta and message_stop is still a complete reply", async () => {
+		const withoutStop = events("end_turn", ["Hello", " there"]).slice(0, -1);
+		const result = await completeAnthropicText(harness({ kind: "sse", chunks: withoutStop }).runtime, ref("anthropic", "Anthropic"), "s", "i", undefined, () => undefined);
+		expect(result.text).toBe("Hello there");
+		expect(result.incompleteReason).toBeNull();
+		expect(result.streamError).toBeUndefined();
+		expect(result.usage).toEqual({ input_tokens: 25, output_tokens: 15, total_tokens: 40 });
+	});
+
+	test("a stream that breaks before message_delta keeps the input tokens already reported", async () => {
+		const early = events("end_turn", ["abc"]).slice(0, 4);
+		const result = await completeAnthropicText(harness({ kind: "sse", chunks: early }).runtime, ref("anthropic", "Anthropic"), "s", "i", undefined, () => undefined);
+		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
+		expect(result.text).toBe("abc");
+		expect(result.usage).toEqual({ input_tokens: 25 });
+	});
 });
 
 describe("gemini streaming", () => {
@@ -314,6 +434,43 @@ describe("gemini streaming", () => {
 	test("a stream with no finish reason after text is interrupted", async () => {
 		const result = await completeGeminiText(harness({ kind: "sse", chunks: [chunk("so far")] }).runtime, ref("google-gemini", "Google Gemini"), "s", "i", undefined, () => undefined);
 		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
+	});
+
+	test("BLOCK_REASON_UNSPECIFIED is not a terminal block, so a cut-off stream is still interrupted", async () => {
+		const result = await completeGeminiText(
+			harness({ kind: "sse", chunks: [chunk("partial", { promptFeedback: { blockReason: "BLOCK_REASON_UNSPECIFIED" } })] }).runtime,
+			ref("google-gemini", "Google Gemini"), "s", "i", undefined, () => undefined
+		);
+		expect(result.text).toBe("partial");
+		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
+	});
+
+	test("an interrupted stream keeps the usage the provider already reported", async () => {
+		const usageMetadata = { promptTokenCount: 9, candidatesTokenCount: 3, totalTokenCount: 12 };
+		const result = await completeGeminiText(
+			harness({ kind: "sse", chunks: [chunk("so far", { usageMetadata })] }).runtime,
+			ref("google-gemini", "Google Gemini"), "s", "i", undefined, () => undefined
+		);
+		expect(result.incompleteReason).toBe(STREAM_INTERRUPTED_REASON);
+		expect(result.usage).toEqual({ input_tokens: 9, output_tokens: 3, total_tokens: 12 });
+	});
+});
+
+describe("gemini prompt block reason", () => {
+	test.each([
+		[{ promptFeedback: { blockReason: "BLOCK_REASON_UNSPECIFIED" } }, null],
+		[{ promptFeedback: { blockReason: "" } }, null],
+		[{ promptFeedback: { blockReason: 3 } }, null],
+		[{ promptFeedback: {} }, null],
+		[{}, null],
+		[null, null],
+		[{ promptFeedback: { blockReason: "SAFETY" } }, "SAFETY"]
+	])("%j gives %p", (body: Record<string, unknown> | null, expected: string | null) => {
+		expect(getGeminiPromptBlockReason(body)).toBe(expected);
+	});
+
+	test("the buffered module re-exports the one shared implementation", () => {
+		expect(bufferedGetGeminiPromptBlockReason).toBe(getGeminiPromptBlockReason);
 	});
 });
 

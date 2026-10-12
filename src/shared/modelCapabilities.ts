@@ -9,8 +9,9 @@ const GPT_6_FAMILY_PATTERN = /^gpt-6(?:$|[.-])/;
 const O_SERIES_PATTERN = /^o\d(?:$|-)/;
 // The earliest o1 previews reject `reasoning.effort`.
 const O_SERIES_WITHOUT_EFFORT_PATTERN = /^o1-(?:mini|preview)(?:$|-)/;
-// Model families returned by /models that cannot answer a Responses text request.
-const NON_TEXT_MODEL_PATTERN = /(?:^|-)(?:embedding|tts|whisper|transcribe|moderation|audio|realtime|search|instruct|davinci|babbage|computer-use)(?:$|-)|^(?:text-|omni-moderation|sora)/;
+// Model families returned by /models that cannot answer a plain Responses text request. Deep research models need a
+// data-source tool (web search, file search or MCP) that AskMate does not attach, so they would answer HTTP 400.
+const NON_TEXT_MODEL_PATTERN = /(?:^|-)(?:embedding|tts|whisper|transcribe|moderation|audio|realtime|search|instruct|davinci|babbage|computer-use|deep-research)(?:$|-)|^(?:text-|omni-moderation|sora)/;
 
 export function isGpt55Model(model: string): boolean {
 	return GPT_5_5_MODEL_PATTERN.test(model.trim());

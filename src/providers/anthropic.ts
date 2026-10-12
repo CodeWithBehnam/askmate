@@ -1,22 +1,43 @@
 import {
 	DEFAULT_PROVIDER_SETTINGS,
-	getNonNegativeInteger,
 	getProviderLabel,
-	OpenAITokenUsage,
 	ProviderModelRef,
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
-import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
-import { anthropicStreamAdapter, assembleAnthropicBody } from "./anthropic-stream";
+import {
+	assertProviderTextPresent,
+	collectModelPages,
+	describeProviderErrorBody,
+	formatProviderHttpError,
+	formatTimeoutDuration
+} from "./common";
+import { anthropicStreamAdapter, assembleAnthropicBody, normalizeAnthropicUsage } from "./anthropic-stream";
 import { tryStreamTextResult } from "./streaming";
 import type { ProviderRuntime } from "./types";
 
-/** Named default so long-note workflows are not silently capped without intent. */
-export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
-const ANTHROPIC_API_VERSION = "2023-06-01";
-/** Non-streaming requests return only when generation ends; slower Claude models need several minutes for an 8192-token answer. */
+/**
+ * Output budget for models without a smaller limit of their own. max_tokens is required by the API and also covers
+ * thinking tokens, so 8192 cut long rewrites short. Every Claude 4 generation and later accepts at least this much.
+ */
+export const ANTHROPIC_DEFAULT_MAX_TOKENS = 32000;
+export const ANTHROPIC_API_VERSION = "2023-06-01";
+/** A stream may go quiet for this long between events before AskMate gives up. */
 export const ANTHROPIC_GENERATION_TIMEOUT_MS = 300000;
+/** A non-streaming request returns only when generation ends, and the output budget is large. */
+export const ANTHROPIC_BUFFERED_TIMEOUT_MS = 600000;
+
+// Models whose own output limit is below the default answer HTTP 400 if max_tokens exceeds it.
+const ANTHROPIC_OUTPUT_LIMITS: ReadonlyArray<readonly [RegExp, number]> = [
+	[/^claude-3-5-/, 8192],
+	[/^claude-(?:3-(?:opus|sonnet|haiku)|2|instant)(?:$|[-.])/, 4096]
+];
+
+export function getAnthropicMaxTokens(model: string): number {
+	const id = model.trim().toLowerCase();
+	const limit = ANTHROPIC_OUTPUT_LIMITS.find(([pattern]) => pattern.test(id))?.[1];
+	return limit === undefined ? ANTHROPIC_DEFAULT_MAX_TOKENS : Math.min(limit, ANTHROPIC_DEFAULT_MAX_TOKENS);
+}
 
 export async function completeAnthropicText(
 	runtime: ProviderRuntime,
@@ -36,7 +57,7 @@ export async function completeAnthropicText(
 	const requestBody = {
 		model: providerRef.model,
 		system: instructions,
-		max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+		max_tokens: getAnthropicMaxTokens(providerRef.model),
 		messages: [
 			{ role: "user", content: input }
 		]
@@ -77,8 +98,8 @@ export async function completeAnthropicText(
 			"Content-Type": "application/json"
 		},
 		abortSignal,
-		timeoutMs: ANTHROPIC_GENERATION_TIMEOUT_MS,
-		timeoutMessage: "Anthropic generation timed out after 5 minutes.",
+		timeoutMs: ANTHROPIC_BUFFERED_TIMEOUT_MS,
+		timeoutMessage: `Anthropic generation timed out after ${formatTimeoutDuration(ANTHROPIC_BUFFERED_TIMEOUT_MS)}.`,
 		body: JSON.stringify(requestBody)
 	});
 
@@ -104,7 +125,8 @@ export function buildAnthropicResult(model: string, body: Record<string, unknown
 	};
 }
 
-const ANTHROPIC_COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence"]);
+// tool_use is the model asking for a tool, a normal end to a turn in a tool loop, not a cut-off answer.
+const ANTHROPIC_COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence", "tool_use"]);
 
 /** Any stop other than a natural end (max_tokens, refusal, model_context_window_exceeded, pause_turn) means the answer is partial. */
 export function getAnthropicIncompleteReason(body: Record<string, unknown> | null): string | null {
@@ -161,7 +183,7 @@ interface AnthropicModelListBody {
 	};
 }
 
-function getAnthropicBaseUrl(runtime: ProviderRuntime): string {
+export function getAnthropicBaseUrl(runtime: ProviderRuntime): string {
 	return validateProviderBaseUrl(
 		runtime.getProviderSettings("anthropic").baseUrl,
 		DEFAULT_PROVIDER_SETTINGS.anthropic.baseUrl,
@@ -185,20 +207,4 @@ function extractAnthropicText(body: Record<string, unknown> | null): string {
 	}
 
 	return parts.join("\n").trim();
-}
-
-function normalizeAnthropicUsage(value: unknown): OpenAITokenUsage | null {
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const usage = value as { input_tokens?: unknown; output_tokens?: unknown };
-	const inputTokens = getNonNegativeInteger(usage.input_tokens);
-	const outputTokens = getNonNegativeInteger(usage.output_tokens);
-
-	return {
-		input_tokens: inputTokens ?? undefined,
-		output_tokens: outputTokens ?? undefined,
-		total_tokens: inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : undefined
-	};
 }

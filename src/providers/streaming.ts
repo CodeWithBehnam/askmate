@@ -1,4 +1,4 @@
-import type { AskMateHttpResponse, ApiEndpoint, ProviderTextResult } from "../shared/core";
+import type { AskMateHttpResponse, ApiEndpoint, OpenAITokenUsage, ProviderTextResult } from "../shared/core";
 import { isAbortError } from "../shared/core";
 import {
 	describeProviderErrorBody,
@@ -26,6 +26,8 @@ export interface StreamAdapter<S> {
 	getText: (state: S) => string;
 	/** True once the provider signalled the end of the reply, so a closed connection is a normal finish. */
 	isTerminal: (state: S) => boolean;
+	/** Usage the provider had already reported, kept when the stream breaks so tokens that were billed are not lost. */
+	getUsage?: (state: S) => OpenAITokenUsage | null;
 }
 
 export type TextStreamOutcome<S> =
@@ -42,6 +44,10 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
+}
+
+function looksLikeHtml(text: string): boolean {
+	return /^\s*<(?:!doctype\s+html|html|head|body)\b/i.test(text);
 }
 
 /** Parses an SSE `data:` payload; non-JSON payloads (keep-alives, truncated tails) are ignored by the adapters. */
@@ -121,6 +127,19 @@ export async function runTextStream<S>(runtime: ProviderRuntime, request: TextSt
 			throw new Error(formatProviderHttpError(providerName, response.status, describeProviderErrorBody(response, secrets)));
 		}
 
+		if (!response.text.trim()) {
+			throw new Error(`${providerName} closed the connection without sending a reply.`);
+		}
+
+		// A 200 that is neither JSON nor a stream is not a reply. Say what it was instead of reporting an empty answer.
+		if (!response.body) {
+			const excerpt = describeProviderErrorBody(response, secrets);
+			const detail = excerpt ? ` What it sent: ${excerpt}` : "";
+			throw new Error(looksLikeHtml(response.text)
+				? `${providerName} answered with a web page instead of a reply. A proxy, a captive portal or a wrong base URL is probably in the way. Check the base URL and your network.${detail}`
+				: `${providerName} returned something that is not a reply. Check the base URL.${detail}`);
+		}
+
 		return { kind: "buffered", response };
 	}
 
@@ -139,13 +158,14 @@ export function buildInterruptedResult(
 	model: string,
 	endpoint: ApiEndpoint,
 	text: string,
-	message: string
+	message: string,
+	usage: OpenAITokenUsage | null = null
 ): ProviderTextResult {
 	return {
 		text,
 		model,
 		endpoint,
-		usage: null,
+		usage,
 		incompleteReason: STREAM_INTERRUPTED_REASON,
 		streamError: message
 	};
@@ -175,7 +195,13 @@ export async function tryStreamTextResult<S>(
 		case "complete":
 			return request.buildResult(request.assemble(outcome.state));
 		case "interrupted":
-			return buildInterruptedResult(request.model, request.endpoint, request.adapter.getText(outcome.state), outcome.message);
+			return buildInterruptedResult(
+				request.model,
+				request.endpoint,
+				request.adapter.getText(outcome.state),
+				outcome.message,
+				request.adapter.getUsage?.(outcome.state) ?? null
+			);
 		default: {
 			const unhandled: never = outcome;
 			throw new Error(`Unhandled stream outcome: ${String(unhandled)}`);

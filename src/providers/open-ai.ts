@@ -12,7 +12,7 @@ import {
 	ReasoningEffort,
 	validateProviderBaseUrl
 } from "../shared/core";
-import { fetchModelList } from "./common";
+import { fetchModelList, formatTimeoutDuration } from "./common";
 import type { ProviderRuntime } from "./types";
 
 /** Default OpenAI max output for Responses API is provider-side; image/text hosts share one base. */
@@ -49,6 +49,31 @@ export function normalizeOpenAIModelOptions(
 	return options.length > 0 ? options : normalizeList(fallback);
 }
 
+const OPENAI_MEDIUM_EFFORT_TIMEOUT_MS = 300000;
+const OPENAI_HIGH_EFFORT_TIMEOUT_MS = 600000;
+
+/**
+ * How long one Responses call may take. A reasoning model can think for minutes before the first token, and a buffered
+ * request returns only when generation ends, so the limit follows the reasoning effort that is actually sent. A model
+ * that takes no reasoning parameter keeps the base limit whatever the setting says.
+ */
+export function getOpenAIGenerationTimeoutMs(model: string, reasoningEffort: ReasoningEffort): number {
+	return getReasoningEffortTimeoutMs(getSupportedReasoningEffort(model, reasoningEffort));
+}
+
+/** The limit for an effort that is already the value being sent (null: no reasoning parameter). */
+export function getReasoningEffortTimeoutMs(effort: string | null): number {
+	switch (effort) {
+		case "medium":
+			return OPENAI_MEDIUM_EFFORT_TIMEOUT_MS;
+		case "high":
+		case "xhigh":
+			return OPENAI_HIGH_EFFORT_TIMEOUT_MS;
+		default:
+			return DEFAULT_TEXT_GENERATION_TIMEOUT_MS;
+	}
+}
+
 export async function requestOpenAIResponses(
 	runtime: ProviderRuntime,
 	{
@@ -68,6 +93,7 @@ export async function requestOpenAIResponses(
 	}
 ) {
 	const baseUrl = getOpenAIBaseUrl(runtime);
+	const timeoutMs = getOpenAIGenerationTimeoutMs(model, reasoningEffort);
 	return await runtime.requestJson<OpenAIResponseBody>(joinOpenAIUrl(baseUrl, "responses"), {
 		method: "POST",
 		headers: {
@@ -75,8 +101,8 @@ export async function requestOpenAIResponses(
 			"Content-Type": "application/json"
 		},
 		abortSignal,
-		timeoutMs: DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
-		timeoutMessage: "OpenAI generation timed out after 2 minutes.",
+		timeoutMs,
+		timeoutMessage: `OpenAI generation timed out after ${formatTimeoutDuration(timeoutMs)}.`,
 		body: JSON.stringify(buildOpenAIResponsesBody({ model, instructions, input, reasoningEffort }))
 	});
 }

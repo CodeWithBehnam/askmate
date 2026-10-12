@@ -57,7 +57,7 @@ export async function fetchOpenAICompatibleModels(runtime: ProviderRuntime): Pro
 	});
 }
 
-function getOpenAICompatibleBaseUrl(runtime: ProviderRuntime): string {
+export function getOpenAICompatibleBaseUrl(runtime: ProviderRuntime): string {
 	return validateProviderBaseUrl(
 		runtime.getProviderSettings("openai-compatible").baseUrl,
 		DEFAULT_PROVIDER_SETTINGS["openai-compatible"].baseUrl,

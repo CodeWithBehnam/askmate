@@ -2,20 +2,24 @@ import {
 	DEFAULT_PROVIDER_SETTINGS,
 	DEFAULT_TEXT_GENERATION_TIMEOUT_MS,
 	GeminiModelListBody,
-	getNonNegativeInteger,
 	getProviderLabel,
-	OpenAITokenUsage,
 	ProviderModelRef,
 	ProviderTextResult,
 	validateProviderBaseUrl
 } from "../shared/core";
 import { assertProviderTextPresent, collectModelPages, describeProviderErrorBody, formatProviderHttpError } from "./common";
-import { assembleGeminiBody, geminiStreamAdapter } from "./google-gemini-stream";
+import {
+	assembleGeminiBody,
+	geminiStreamAdapter,
+	getGeminiPromptBlockReason,
+	normalizeGeminiUsage,
+	readGeminiCandidateText
+} from "./google-gemini-stream";
 import { tryStreamTextResult } from "./streaming";
 import type { ProviderRuntime } from "./types";
 
-/** Default max output tokens for generateContent (API default can be too low for note workflows). */
-export const GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+// Kept exported from here for existing importers; the implementation lives beside the stream adapter that shares it.
+export { getGeminiPromptBlockReason };
 
 export async function completeGeminiText(
 	runtime: ProviderRuntime,
@@ -38,6 +42,8 @@ export async function completeGeminiText(
 		"Content-Type": "application/json",
 		"x-goog-api-key": apiKey
 	};
+	// maxOutputTokens is left out on purpose: Gemini 2.5 counts thinking tokens against it, so a fixed cap could leave a
+	// long rewrite with no visible text, and each model's own limit is the right ceiling.
 	const requestBody = JSON.stringify({
 		systemInstruction: {
 			parts: [{ text: instructions }]
@@ -47,10 +53,7 @@ export async function completeGeminiText(
 				role: "user",
 				parts: [{ text: input }]
 			}
-		],
-		generationConfig: {
-			maxOutputTokens: GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
-		}
+		]
 	});
 
 	if (onDelta) {
@@ -110,15 +113,6 @@ export function buildGeminiResult(model: string, body: Record<string, unknown> |
 	};
 }
 
-export function getGeminiPromptBlockReason(body: Record<string, unknown> | null): string | null {
-	const feedback = body?.promptFeedback;
-	const blockReason = feedback && typeof feedback === "object"
-		? (feedback as { blockReason?: unknown }).blockReason
-		: null;
-
-	return typeof blockReason === "string" && blockReason && blockReason !== "BLOCK_REASON_UNSPECIFIED" ? blockReason : null;
-}
-
 /** Only STOP is a natural end; MAX_TOKENS, SAFETY, RECITATION and the rest leave the answer partial or empty. */
 export function getGeminiIncompleteReason(body: Record<string, unknown> | null): string | null {
 	const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
@@ -164,7 +158,7 @@ export async function fetchGeminiModels(runtime: ProviderRuntime): Promise<strin
 
 type GeminiModelListPage = GeminiModelListBody & { nextPageToken?: string };
 
-function getGeminiBaseUrl(runtime: ProviderRuntime): string {
+export function getGeminiBaseUrl(runtime: ProviderRuntime): string {
 	return validateProviderBaseUrl(
 		runtime.getProviderSettings("google-gemini").baseUrl,
 		DEFAULT_PROVIDER_SETTINGS["google-gemini"].baseUrl,
@@ -172,63 +166,11 @@ function getGeminiBaseUrl(runtime: ProviderRuntime): string {
 	);
 }
 
+/**
+ * Gemini splits one reply across several text parts at arbitrary points (even inside a word), so parts are joined
+ * with no separator, exactly as the stream adapter and Google's SDKs do. Only the first candidate is read and thought
+ * summaries are not answer text.
+ */
 function extractGeminiText(body: Record<string, unknown> | null): string {
-	const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
-	const parts: string[] = [];
-
-	for (const candidate of candidates) {
-		if (!candidate || typeof candidate !== "object") {
-			continue;
-		}
-
-		const content = (candidate as { content?: unknown }).content;
-		const blocks = content && typeof content === "object"
-			? (content as { parts?: unknown }).parts
-			: null;
-
-		if (!Array.isArray(blocks)) {
-			continue;
-		}
-
-		for (const block of blocks) {
-			if (!block || typeof block !== "object") {
-				continue;
-			}
-
-			const text = (block as { text?: unknown }).text;
-			if (typeof text === "string") {
-				parts.push(text);
-			}
-		}
-	}
-
-	return parts.join("\n").trim();
-}
-
-function normalizeGeminiUsage(value: unknown): OpenAITokenUsage | null {
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const usage = value as {
-		promptTokenCount?: unknown;
-		candidatesTokenCount?: unknown;
-		thoughtsTokenCount?: unknown;
-		totalTokenCount?: unknown;
-	};
-	const inputTokens = getNonNegativeInteger(usage.promptTokenCount);
-	const candidateTokens = getNonNegativeInteger(usage.candidatesTokenCount);
-	// Thinking tokens are billed as output but reported apart from candidate tokens.
-	const thoughtTokens = getNonNegativeInteger(usage.thoughtsTokenCount);
-	const outputTokens = candidateTokens === null && thoughtTokens === null
-		? null
-		: (candidateTokens ?? 0) + (thoughtTokens ?? 0);
-	const totalTokens = getNonNegativeInteger(usage.totalTokenCount);
-
-	return {
-		input_tokens: inputTokens ?? undefined,
-		output_tokens: outputTokens ?? undefined,
-		total_tokens: totalTokens ?? undefined,
-		...(thoughtTokens !== null ? { output_tokens_details: { reasoning_tokens: thoughtTokens } } : {})
-	};
+	return readGeminiCandidateText(body).trim();
 }

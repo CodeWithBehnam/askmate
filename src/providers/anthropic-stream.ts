@@ -1,3 +1,4 @@
+import { getNonNegativeInteger, type OpenAITokenUsage } from "../shared/core";
 import { parseEventJson, StreamProviderError, type StreamAdapter } from "./streaming";
 
 export interface AnthropicStreamState {
@@ -11,10 +12,37 @@ function readRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+export function normalizeAnthropicUsage(value: unknown): OpenAITokenUsage | null {
+	if (!value || typeof value !== "object") {
+		return null;
+	}
+
+	const usage = value as { input_tokens?: unknown; output_tokens?: unknown };
+	const inputTokens = getNonNegativeInteger(usage.input_tokens);
+	const outputTokens = getNonNegativeInteger(usage.output_tokens);
+
+	return {
+		input_tokens: inputTokens ?? undefined,
+		output_tokens: outputTokens ?? undefined,
+		total_tokens: inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : undefined
+	};
+}
+
 export const anthropicStreamAdapter: StreamAdapter<AnthropicStreamState> = {
 	initial: { text: "", stopReason: null, usage: {}, done: false },
 	getText: (state) => state.text,
-	isTerminal: (state) => state.done,
+	// message_delta carries the stop reason and message_stop follows at once, so a connection that closes in between
+	// has still delivered the whole reply. The buffered parser classifies max_tokens and refusal from the stop reason.
+	isTerminal: (state) => state.done || state.stopReason !== null,
+	getUsage: (state) => {
+		// Before message_delta, output_tokens in message_start is only a placeholder, so only the input side is real.
+		if (state.stopReason !== null) {
+			return normalizeAnthropicUsage(state.usage);
+		}
+
+		const inputTokens = getNonNegativeInteger(state.usage.input_tokens);
+		return inputTokens === null ? null : { input_tokens: inputTokens };
+	},
 	reduce: (state, event) => {
 		const body = parseEventJson(event);
 		if (!body) {

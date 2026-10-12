@@ -57,7 +57,7 @@ export async function fetchOpenRouterModels(runtime: ProviderRuntime): Promise<s
 	});
 }
 
-function getOpenRouterBaseUrl(runtime: ProviderRuntime): string {
+export function getOpenRouterBaseUrl(runtime: ProviderRuntime): string {
 	return validateProviderBaseUrl(
 		runtime.getProviderSettings("openrouter").baseUrl,
 		DEFAULT_PROVIDER_SETTINGS.openrouter.baseUrl,
