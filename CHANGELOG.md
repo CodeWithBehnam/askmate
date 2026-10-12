@@ -2,6 +2,13 @@
 
 All notable changes to AskMate are listed here, newest first. The release workflow publishes the section for each tag as the GitHub release notes, so write each entry for people who use the plugin.
 
+## [1.12.1] - 2026-10-12
+
+### Security
+
+- The diagram guard now rejects text after a `style` or `classDef` statement on the same line. On the Mermaid version Obsidian bundles, such text could escape the diagram and restyle the rest of the window (GHSA-6x64-9x62-f2gx). A diagram that uses this is shown as source and cannot be inserted.
+- Development tooling only: the Mermaid and KaTeX packages used by the test suite are upgraded past their published advisories. Neither is part of the installed plugin.
+
 ## [1.12.0] - 2026-10-12
 
 AskMate can now draw your notes as Mermaid diagrams, call tools through the Model Context Protocol (MCP) with your approval, and use reusable skills. It also has a guided first run, six regrouped settings pages, a new icon and a much safer write path.

@@ -1,7 +1,7 @@
 {
 	"id": "askmate",
 	"name": "AskMate",
-	"version": "1.12.0",
+	"version": "1.12.1",
 	"minAppVersion": "1.13.0",
 	"description": "Chat with your notes, draw Mermaid diagrams, use MCP tools with approval and apply safe edits, with any AI provider or a local model.",
 	"author": "Behnam Ebrahimi",
