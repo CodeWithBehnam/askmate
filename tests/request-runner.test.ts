@@ -1,7 +1,17 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { TFile as ObsidianFile } from "obsidian";
 import type { ProviderRequestOptions, ProviderRuntime } from "../src/providers/types";
 import type { RequestRunnerHost } from "../src/requests/RequestRunner";
-import { buildImagePrompt, buildPrompt, buildPromptContextContent, formatEvidenceSources } from "../src/requests/requestBuilders";
+import {
+	buildImagePrompt,
+	buildImagePromptPlanningInput,
+	buildImagePromptPlanningInstructions,
+	buildPrompt,
+	buildPromptContextContent,
+	buildRequestInput,
+	buildRequestInstructions,
+	formatEvidenceSources
+} from "../src/requests/requestBuilders";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type {
 	AskMateHttpResponse,
@@ -11,11 +21,21 @@ import type {
 	NoteContext,
 	OpenAITokenUsage,
 	ProviderModelRef,
+	ReasoningEffort,
+	RequestIntentKind,
 	TextProviderId,
 	Workflow
 } from "../src/shared/types";
 
 import { TFile } from "./support/obsidian-fakes";
+
+/** The shared fake is not structurally a full Obsidian TFile, so the typed tests view it through the real type. */
+function fakeFile(path: string): ObsidianFile {
+	return new TFile(path) as unknown as ObsidianFile;
+}
+
+/** "diagram" joins RequestIntentKind with the schema package; until then the test builds it through a cast. */
+const DIAGRAM_INTENT = "diagram" as unknown as RequestIntentKind;
 
 const {
 	MAX_FALLBACK_IMAGE_PROMPT_CHARACTERS,
@@ -49,6 +69,34 @@ function abortError(): DOMException {
 	return new DOMException("The request was stopped.", "AbortError");
 }
 
+/** Resolves with the error a promise rejects with, and fails the test when it resolves instead. */
+async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
+	return await promise.then(
+		() => new Error("Expected the promise to reject, but it resolved."),
+		(caught: unknown) => (caught instanceof Error ? caught : new Error(String(caught)))
+	);
+}
+
+function sseEvent(payload: Record<string, unknown>): { event: string; data: string } {
+	return { event: "message", data: JSON.stringify(payload) };
+}
+
+/** A runtime whose stream delivers the events and then ends the way `finish` says: a thrown error, or a clean close. */
+function streamingRuntime(events: Array<{ event: string; data: string }>, finish: () => void = () => undefined): Partial<ProviderRuntime> {
+	return {
+		streamSse: async (_url, _options, onEvent) => {
+			events.forEach(onEvent);
+			finish();
+			return { kind: "streamed" };
+		}
+	};
+}
+
+function sentBody(call: { options: ProviderRequestOptions } | undefined): Record<string, unknown> {
+	const body: unknown = JSON.parse(call?.options.body ?? "{}");
+	return typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+}
+
 function noteContext(content: string, source: NoteContext["source"] = "Current note"): NoteContext {
 	return { content, file: null, source, attachments: [] };
 }
@@ -59,6 +107,7 @@ function makeRequest(options: {
 	model?: string;
 	autoImage?: boolean;
 	budget?: ContextBudgetMode;
+	reasoningEffort?: ReasoningEffort;
 } = {}): AskRequest {
 	const providerId = options.providerId ?? "openai";
 	return {
@@ -75,7 +124,7 @@ function makeRequest(options: {
 			providerName: providerId === "openai" ? "OpenAI" : "Anthropic",
 			selectedModel: options.model ?? "gpt-5.5",
 			modelCapability: "text",
-			reasoningEffort: "medium",
+			reasoningEffort: options.reasoningEffort ?? "medium",
 			privacy: { includeNoteContext: true, includeImageReferences: true },
 			contextBudgetMode: options.budget ?? "expanded",
 			contextBudgetLimitCharacters: null,
@@ -231,6 +280,14 @@ describe("OpenAI text requests", () => {
 		expect(records).toHaveLength(1);
 		expect(records[0]?.status).toBe("aborted");
 		expect(records[0]?.usage).toBeNull();
+		expect(records[0]?.sent).toBe(false);
+	});
+
+	test("an HTTP error counts as sent but delivered no text", async () => {
+		const { runner, records } = makeHarness([() => httpError(500, { error: { message: "Server down" } })]);
+
+		await expect(runner.runOpenAIRequest(makeRequest())).rejects.toThrow(/Server down/);
+		expect(records[0]).toMatchObject({ status: "failed", sent: true, responseText: "" });
 	});
 
 	test("an abort that arrives with the response discards the answer but keeps the billed usage", async () => {
@@ -282,6 +339,41 @@ describe("Image requests", () => {
 		]);
 		expect(records[0]?.usage).toEqual(USAGE);
 		expect(records[1]?.usage).toEqual(imageUsage);
+		expect(records.map((record) => record.sent)).toEqual([true, true]);
+	});
+
+	test("a planner reply with prose around the JSON still yields the plan", async () => {
+		const { runner, records, calls } = makeHarness([
+			() => ok({ output_text: "Here you go:\n```json\n{\"prompt\":\"A lighthouse at dusk\"}\n```\nEnjoy!", usage: USAGE }),
+			() => ok({ data: [{ b64_json: VALID_BASE64 }] })
+		]);
+		const result = await runner.runOpenAIRequest(makeRequest({ autoImage: true }));
+
+		expect(result.kind === "image" ? result.promptPlan : null).toMatchObject({ status: "completed", fallbackReason: null });
+		expect(sentImagePrompt(calls[1])).toBe("A lighthouse at dusk");
+		expect(records[0]).toMatchObject({ operationKind: "image_prompt_planning", status: "completed" });
+	});
+
+	test("the planning call uses the planning builders and a low reasoning effort", async () => {
+		const { runner, calls } = makeHarness([
+			() => ok({ output_text: "{\"prompt\":\"A cat\"}" }),
+			() => ok({ data: [{ b64_json: VALID_BASE64 }] })
+		]);
+		const request = makeRequest({ autoImage: true, reasoningEffort: "high" });
+		await runner.runOpenAIRequest(request);
+		const body = sentBody(calls[0]);
+
+		expect(body.instructions).toBe(buildImagePromptPlanningInstructions());
+		expect(body.instructions).toBe(buildRequestInstructions(request));
+		expect(body.input).toBe(buildImagePromptPlanningInput(request));
+		expect(body.input).toBe(buildRequestInput(request));
+		expect(body.reasoning).toEqual({ effort: "low" });
+	});
+
+	test("visible answers keep the chat reasoning effort", async () => {
+		const { runner, calls } = makeHarness([() => ok({ output_text: "Answer" })]);
+		await runner.runOpenAIRequest(makeRequest({ reasoningEffort: "high" }));
+		expect(sentBody(calls[0]).reasoning).toEqual({ effort: "high" });
 	});
 
 	test("invalid planning JSON falls back to a capped prompt and keeps the planning usage", async () => {
@@ -296,6 +388,9 @@ describe("Image requests", () => {
 		expect(result.kind === "image" ? result.promptPlan.status : "").toBe("fallback");
 		expect(prompt.length).toBeLessThanOrEqual(MAX_FALLBACK_IMAGE_PROMPT_CHARACTERS);
 		expect(prompt).toContain("Opening paragraph about the lighthouse.");
+		for (const housekeeping of ["Prompt version:", "Intent:", "Workflow:", "Source:", "Context type:"]) {
+			expect(prompt).not.toContain(housekeeping);
+		}
 		expect(records[0]?.status).toBe("fallback");
 		expect(records[0]?.usage).toEqual(USAGE);
 	});
@@ -380,7 +475,7 @@ describe("buildRequest", () => {
 	});
 
 	test("@note widens a selection to the whole note through the host", async () => {
-		const file = new TFile("Plan.md");
+		const file = fakeFile("Plan.md");
 		const fullNote: NoteContext = { content: "# Plan\n\nWhole note text.", file, source: "Current note", attachments: [] };
 		const requested: string[] = [];
 		const { runner } = makeHarness([], {
@@ -407,8 +502,8 @@ describe("buildRequest", () => {
 			globalInstructions: "Reply in British English.",
 			folderInstructions: [{ folder: "Projects", instructions: "Keep it formal." }]
 		};
-		const inFolder = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: new TFile("Projects/Plan.md") }) });
-		const outside = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: new TFile("ProjectsOld/Plan.md") }) });
+		const inFolder = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: fakeFile("Projects/Plan.md") }) });
+		const outside = makeHarness([], { getSettings: () => settings, getNoteContext: async () => ({ ...noteContext("Body"), file: fakeFile("ProjectsOld/Plan.md") }) });
 
 		expect((await inFolder.runner.buildRequest("Q", "T")).customInstructions).toBe('Reply in British English.\n\nFor notes in the folder "Projects":\nKeep it formal.');
 		expect((await outside.runner.buildRequest("Q", "T")).customInstructions).toBe("Reply in British English.");
@@ -430,6 +525,73 @@ describe("buildRequest", () => {
 
 		expect(evidence.length).toBeGreaterThan(0);
 		expect(request.metadata.promptContextCharacters).toBe(promptContext.finalCharacters + evidence.length);
+	});
+
+	describe("folder instructions and note context privacy", () => {
+		const settings: AskMateSettings = {
+			...DEFAULT_SETTINGS,
+			globalInstructions: "Reply in British English.",
+			folderInstructions: [{ folder: "Clients/Acme", instructions: "Keep it formal." }]
+		};
+		const inFolder = (): ReturnType<typeof makeHarness> => makeHarness([], {
+			getSettings: () => settings,
+			getNoteContext: async () => ({ ...noteContext("Private body"), file: fakeFile("Clients/Acme/Deal.md") })
+		});
+
+		test("sends only the global instructions when note context is withheld", async () => {
+			const { runner } = inFolder();
+			const request = await runner.buildRequest("Q", "T", { privacy: { includeNoteContext: false } });
+
+			expect(request.customInstructions).toBe("Reply in British English.");
+			expect(buildRequestInstructions(request)).not.toContain("Acme");
+			expect(buildRequestInstructions(request)).toContain("Reply in British English.");
+			expect(buildPrompt(request)).not.toContain("Acme");
+		});
+
+		test("still sends the folder rule when note context is sent", async () => {
+			const { runner } = inFolder();
+			const request = await runner.buildRequest("Q", "T");
+
+			expect(request.customInstructions).toBe("Reply in British English.\n\nFor notes in the folder \"Clients/Acme\":\nKeep it formal.");
+		});
+	});
+
+	describe("evidence sources for diagram and code-only output", () => {
+		const plan = "# Plan\n\nThe launch is on Friday.\n\nThe budget is 4,000 GBP.";
+		const withPlan = (overrides: Partial<RequestRunnerHost> = {}): ReturnType<typeof makeHarness> => makeHarness([], { getNoteContext: async () => noteContext(plan), ...overrides });
+
+		test("an ordinary question keeps its evidence sources", async () => {
+			const request = await withPlan().runner.buildRequest("When is the launch?", "T");
+
+			expect(request.evidenceSources.length).toBeGreaterThan(0);
+			expect(request.metadata.evidenceEnabled).toBe(true);
+		});
+
+		test("the Mermaid workflow gets none, in chat mode too", async () => {
+			const mermaid: Workflow = { ...workflow, id: "mermaid-diagram", name: "Mermaid diagram", prompt: "Draw a diagram.", outputKind: "new-content" };
+			const { runner } = withPlan({ expandWorkflowPrompt: () => "One valid diagram in a single code fence." });
+			const request = await runner.buildRequest("", "Diagram", { workflow: mermaid, outputMode: "chat" });
+
+			expect(request.evidenceSources).toEqual([]);
+			expect(request.metadata.evidenceEnabled).toBe(false);
+			expect(buildPrompt(request)).not.toContain("<evidence_sources>");
+			expect(buildPrompt(request)).not.toContain("cite factual claims");
+		});
+
+		test("a diagram intent and a drawing request get none", async () => {
+			const { runner } = withPlan();
+
+			expect((await runner.buildRequest("Plan", "T", { intentKind: DIAGRAM_INTENT })).evidenceSources).toEqual([]);
+			expect((await runner.buildRequest("Draw a mermaid flowchart of the plan", "T")).evidenceSources).toEqual([]);
+			expect((await runner.buildRequest("Return only the code for a parser", "T")).evidenceSources).toEqual([]);
+		});
+
+		test("a workflow that lists the Mermaid skill gets none", async () => {
+			const withSkill: Workflow = Object.assign({ ...workflow, id: "custom-flow", prompt: "Sketch it.", outputKind: "new-content" as const }, { skillIds: ["built-in:mermaid-diagrams"] });
+			const { runner } = withPlan({ expandWorkflowPrompt: () => "Sketch the process." });
+
+			expect((await runner.buildRequest("", "T", { workflow: withSkill })).evidenceSources).toEqual([]);
+		});
 	});
 });
 
@@ -483,7 +645,7 @@ describe("OpenAI HTTP errors without a JSON body", () => {
 			text: "<html><body>Bad gateway for key sk-abcdefghijklmnopqrstuvwxyz</body></html>"
 		})]);
 
-		const error = await runner.runOpenAIRequest(makeRequest()).catch((caught: unknown) => caught as Error);
+		const error = await rejectionOf(runner.runOpenAIRequest(makeRequest()));
 		expect(error.message).toContain("Bad gateway");
 		expect(error.message).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
 	});
@@ -573,5 +735,198 @@ describe("streamed text requests", () => {
 		);
 		await runner.completeOpenAIPlanningText(makeRequest(), ref("openai", "gpt-5.5"), "plan", "input");
 		expect(streamed).toBe(false);
+	});
+});
+
+describe("what is sent is what the builders return", () => {
+	const delta = (text: string): { event: string; data: string } => sseEvent({ type: "response.output_text.delta", delta: text });
+
+	test("OpenAI text sends buildRequestInstructions and buildRequestInput, custom instructions included", async () => {
+		const { runner, calls } = makeHarness([() => ok({ status: "completed", output_text: "A", usage: USAGE })]);
+		const request: AskRequest = { ...makeRequest(), customInstructions: "Reply in British English." };
+		await runner.runOpenAIRequest(request);
+		const body = sentBody(calls[0]);
+
+		expect(body.instructions).toBe(buildRequestInstructions(request));
+		expect(body.input).toBe(buildRequestInput(request));
+		expect(body.instructions).toContain("Reply in British English.");
+		expect(body.input).toBe(buildPrompt(request));
+	});
+
+	test("skills and tools carried on the request reach the instructions that are sent", async () => {
+		const { runner, calls } = makeHarness([() => ok({ status: "completed", output_text: "A" })]);
+		const request = Object.assign(makeRequest(), {
+			skills: [{ id: "built-in:alpha", name: "alpha", source: "built-in", version: "1.0.0", body: "Alpha skill body." }],
+			tools: { toolCount: 2 }
+		});
+		await runner.runOpenAIRequest(request);
+		const body = sentBody(calls[0]);
+
+		expect(body.instructions).toBe(buildRequestInstructions(request));
+		expect(body.instructions).toContain("Alpha skill body.");
+		expect(body.instructions).toContain("# Tools");
+		expect(body.input).not.toContain("Alpha skill body.");
+	});
+
+	test("another provider sends the same instructions as its system prompt", async () => {
+		const { runner, calls } = makeHarness([() => ok({ content: [{ type: "text", text: "A" }], stop_reason: "end_turn" })]);
+		const request: AskRequest = { ...makeRequest({ providerId: "anthropic", model: "claude-test" }), customInstructions: "Reply in British English." };
+		await runner.runOpenAIRequest(request);
+		const body = sentBody(calls[0]);
+
+		expect(body.system).toBe(buildRequestInstructions(request));
+		expect(body.messages).toEqual([{ role: "user", content: buildRequestInput(request) }]);
+	});
+
+	test("the streamed OpenAI path sends the same instructions as the buffered path", async () => {
+		const streamedBodies: string[] = [];
+		const { runner } = makeHarness([], {}, {
+			streamSse: async (_url, options, onEvent) => {
+				streamedBodies.push(options.body ?? "");
+				onEvent(delta("A"));
+				onEvent(sseEvent({ type: "response.completed", response: { status: "completed", output: [{ content: [{ type: "output_text", text: "A" }] }] } }));
+				return { kind: "streamed" };
+			}
+		});
+		const request: AskRequest = { ...makeRequest(), customInstructions: "Reply in British English." };
+		await runner.runOpenAIRequest(request);
+		const body: unknown = JSON.parse(streamedBodies[0] ?? "{}");
+
+		expect(body).toMatchObject({ instructions: buildRequestInstructions(request), input: buildRequestInput(request) });
+	});
+});
+
+describe("aborted and interrupted streams", () => {
+	const delta = (text: string): { event: string; data: string } => sseEvent({ type: "response.output_text.delta", delta: text });
+	const anthropicDelta = (text: string): { event: string; data: string } => sseEvent({ type: "content_block_delta", delta: { type: "text_delta", text } });
+	const stop = (): never => {
+		throw abortError();
+	};
+
+	test("a stop mid-stream keeps the delivered text for the usage record and marks the request as sent", async () => {
+		const controller = new AbortController();
+		const onTextDelta = mock((_delta: string) => undefined);
+		const { runner, records } = makeHarness([], {}, streamingRuntime([delta("Hello "), delta("brave world")], stop));
+
+		await expect(runner.runOpenAIRequest(makeRequest(), { abortSignal: controller.signal, onTextDelta })).rejects.toThrow("The request was stopped.");
+		expect(onTextDelta.mock.calls.map(([text]) => text)).toEqual(["Hello ", "brave world"]);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ status: "aborted", responseText: "Hello brave world", sent: true, usage: null });
+	});
+
+	test("a stop mid-stream on another provider behaves the same", async () => {
+		const { runner, records } = makeHarness([], {}, streamingRuntime([anthropicDelta("Partial "), anthropicDelta("claude answer")], stop));
+
+		await expect(runner.runOpenAIRequest(makeRequest({ providerId: "anthropic", model: "claude-test" }))).rejects.toThrow("The request was stopped.");
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ status: "aborted", responseText: "Partial claude answer", sent: true });
+	});
+
+	test("a stop before anything streamed records empty text but still counts as sent once the call was made", async () => {
+		const { runner, records } = makeHarness([], {}, streamingRuntime([], stop));
+
+		await expect(runner.runOpenAIRequest(makeRequest())).rejects.toThrow("The request was stopped.");
+		expect(records[0]).toMatchObject({ status: "aborted", responseText: "", sent: true });
+	});
+
+	test("a stop before the call is made is not sent, on every provider path", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const openAi = makeHarness([], {}, streamingRuntime([delta("never")]));
+		const other = makeHarness([], {}, streamingRuntime([anthropicDelta("never")]));
+
+		await expect(openAi.runner.runOpenAIRequest(makeRequest(), { abortSignal: controller.signal })).rejects.toThrow("The request was stopped.");
+		await expect(other.runner.runOpenAIRequest(makeRequest({ providerId: "anthropic", model: "claude-test" }), { abortSignal: controller.signal })).rejects.toThrow("The request was stopped.");
+		expect(openAi.records[0]).toMatchObject({ status: "aborted", sent: false, responseText: "" });
+		expect(other.records[0]).toMatchObject({ status: "aborted", sent: false, responseText: "" });
+	});
+
+	test("an OpenAI stream cut short keeps its partial text and counts as sent", async () => {
+		const { runner, records } = makeHarness([], {}, streamingRuntime([delta("Partial answer"), sseEvent({ type: "error", message: "server_error" })]));
+		const request = makeRequest();
+		const result = await runner.runOpenAIRequest(request);
+
+		expect(result).toMatchObject({ kind: "text", text: "Partial answer", incompleteReason: "stream_interrupted" });
+		expect(records[0]).toMatchObject({ status: "failed", responseText: "Partial answer", sent: true });
+		expect(records[0]?.errorMessage).toContain("server_error");
+	});
+
+	test("another provider's stream closed early keeps its partial text and counts as sent", async () => {
+		const { runner, records } = makeHarness([], {}, streamingRuntime([anthropicDelta("Half a reply")]));
+		const result = await runner.runOpenAIRequest(makeRequest({ providerId: "anthropic", model: "claude-test" }));
+
+		expect(result).toMatchObject({ kind: "text", text: "Half a reply", incompleteReason: "stream_interrupted" });
+		expect(records[0]).toMatchObject({ status: "failed", responseText: "Half a reply", sent: true });
+	});
+
+	test("usage the provider reported for a finished stream passes through to the record", async () => {
+		const { runner, records } = makeHarness([], {}, streamingRuntime([
+			sseEvent({ type: "message_start", message: { usage: { input_tokens: 40, output_tokens: 1 } } }),
+			anthropicDelta("Done"),
+			sseEvent({ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 9 } }),
+			sseEvent({ type: "message_stop" })
+		]));
+		const result = await runner.runOpenAIRequest(makeRequest({ providerId: "anthropic", model: "claude-test" }));
+
+		expect(result).toMatchObject({ text: "Done", incompleteReason: "max_tokens" });
+		expect(records[0]).toMatchObject({ status: "completed", sent: true, usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 } });
+	});
+
+	test("a plain answer still records its own text and the sent flag", async () => {
+		const { runner, records } = makeHarness([() => ok({ status: "completed", output_text: "Answer", usage: USAGE })]);
+		await runner.runOpenAIRequest(makeRequest());
+
+		expect(records[0]).toMatchObject({ status: "completed", responseText: "Answer", sent: true, usage: USAGE });
+	});
+});
+
+describe("provider failure messages are redacted", () => {
+	const KEY = "sk-test-secret-key-0123456789";
+	const LEAKY = `rejected key ${KEY} and sk-abcdefghijklmnopqrstuvwx1234`;
+	const withKey = { getOpenAiApiKey: async () => KEY };
+
+	function expectRedacted(text: string | undefined): void {
+		expect(text).toBeDefined();
+		expect(text).not.toContain(KEY);
+		expect(text).not.toContain("sk-abcdefghijklmnopqrstuvwx1234");
+		expect(text).toContain("[redacted]");
+	}
+
+	test("a streamed response.failed with no text is redacted in the error and in usage history", async () => {
+		const failed = sseEvent({ type: "response.failed", response: { status: "failed", error: { message: LEAKY } } });
+		const { runner, records } = makeHarness([], withKey, streamingRuntime([failed]));
+		const error = await rejectionOf(runner.runOpenAIRequest(makeRequest()));
+
+		expectRedacted(error.message);
+		expect(error.message).toContain("OpenAI could not complete the response. Provider message:");
+		expect(records).toHaveLength(1);
+		expectRedacted(records[0]?.errorMessage);
+	});
+
+	test("a buffered failed response is redacted in the error and in usage history", async () => {
+		const { runner, records } = makeHarness([() => ok({ status: "failed", error: { message: LEAKY } })], withKey);
+		const error = await rejectionOf(runner.runOpenAIRequest(makeRequest()));
+
+		expectRedacted(error.message);
+		expectRedacted(records[0]?.errorMessage);
+	});
+
+	test("a refusal is redacted on the streamed and buffered paths", async () => {
+		const refusal = { status: "completed", output: [{ content: [{ type: "refusal", refusal: LEAKY }] }] };
+		const buffered = makeHarness([() => ok(refusal)], withKey);
+		const streamed = makeHarness([], withKey, streamingRuntime([sseEvent({ type: "response.completed", response: refusal })]));
+
+		expectRedacted((await rejectionOf(buffered.runner.runOpenAIRequest(makeRequest()))).message);
+		expectRedacted((await rejectionOf(streamed.runner.runOpenAIRequest(makeRequest()))).message);
+		expectRedacted(buffered.records[0]?.errorMessage);
+		expectRedacted(streamed.records[0]?.errorMessage);
+	});
+
+	test("readOpenAIResponseText redacts the given secrets and key-shaped text", () => {
+		expect(() => readOpenAIResponseText({ status: "failed", error: { message: LEAKY } }, [KEY])).toThrow("rejected key [redacted] and [redacted]");
+		expect(() => readOpenAIResponseText({ status: "failed", error: { message: "plain failure" } }, [KEY])).toThrow("Provider message: plain failure");
+		const refusal = { output: [{ content: [{ type: "refusal", refusal: LEAKY }] }] };
+		expect(() => readOpenAIResponseText(refusal, [KEY])).toThrow("refused the request. Provider message: rejected key [redacted] and [redacted]");
+		expect(() => readOpenAIResponseText({ status: "failed", error: { message: "key-like sk-abcdefghijklmnopqrstuvwx1234" } })).toThrow("key-like [redacted]");
 	});
 });

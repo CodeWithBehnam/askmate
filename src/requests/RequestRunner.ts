@@ -45,17 +45,17 @@ import {
 	requestOpenAIResponses,
 	streamOpenAIResponses
 } from "../providers";
+import { redactSecrets } from "../providers/common";
 import type { OpenAIStreamResult, ProviderRuntime } from "../providers";
 import {
 	buildEvidenceSources,
 	buildImagePrompt,
-	buildImagePromptPlanningInput,
-	buildImagePromptPlanningInstructions,
-	buildPrompt,
 	buildPromptContextContent,
-	buildTextInstructions,
+	buildRequestInput,
+	buildRequestInstructions,
 	extractPlannedImagePrompt,
-	formatEvidenceSources
+	formatEvidenceSources,
+	wantsCodeOrDiagramOutput
 } from "./requestBuilders";
 import { formatCustomInstructions, resolveCustomInstructions } from "../settings/customInstructions";
 import { truncateAtCodePoint } from "./promptSafety";
@@ -79,10 +79,13 @@ export type RequestRunnerHost = {
 		model: string;
 		instructions: string;
 		input: string;
+		/** Text that reached the user or the runner, including the part of a stopped or interrupted stream that arrived. */
 		responseText: string;
 		usage: OpenAITokenUsage | null;
 		startedAt: Date;
 		errorMessage?: string;
+		/** True once the request was handed to the provider, so a stopped call can still count toward budgets. */
+		sent?: boolean;
 	}) => Promise<void>;
 	getErrorMessage: (error: unknown) => string;
 	expandWorkflowPrompt: (workflow: NonNullable<BuildRequestOptions["workflow"]>, context: NoteContext, selectedTextReference: string, privacy: RequestPrivacyOptions) => string;
@@ -96,8 +99,6 @@ export type RequestRunnerHost = {
 		privacy: AskRequest["metadata"]["privacy"]
 	) => Promise<ContextAttachment[]>;
 	throwIfAborted: (abortSignal?: AbortSignal) => void;
-	/** No longer called: the runner checks base64 shape cheaply and the plugin decodes once when saving. */
-	decodeBase64Image?: (base64: string) => ArrayBuffer;
 };
 
 // No angle brackets: buildPrompt escapes delimiter tags inside user_request.
@@ -171,11 +172,19 @@ export class RequestRunner {
 			: question;
 		const folderAttachments = attachments.filter((attachment) => attachment.kind === "folder_note");
 		// Note-edit workflows (rewrite, translate) return text that replaces the note, so they must never be asked for [S1] citations.
-		const evidenceSources = privacy.includeNoteContext && providerRef.capability === "text" && !forceImage && !autoImage && options.workflow?.outputKind !== "note-edit"
+		// The same holds for a diagram or a code block, where an ID inside the syntax would break it.
+		const producesCodeOrDiagram = wantsCodeOrDiagramOutput({
+			question: requestQuestion,
+			intentKind,
+			workflowId: options.workflow?.id,
+			skillIds: readWorkflowSkillIds(options.workflow)
+		});
+		const evidenceSources = privacy.includeNoteContext && providerRef.capability === "text" && !forceImage && !autoImage && options.workflow?.outputKind !== "note-edit" && !producesCodeOrDiagram
 			? buildEvidenceSources(settings, contextWithAttachments)
 			: [];
 
-		const customInstructions = formatCustomInstructions(resolveCustomInstructions(settings, context.file?.path));
+		// A folder rule names the vault folder, so it is sent only with the note context it belongs to.
+		const customInstructions = formatCustomInstructions(resolveCustomInstructions(settings, privacy.includeNoteContext ? context.file?.path : null));
 		const request: AskRequest = {
 			context: contextWithAttachments,
 			customInstructions,
@@ -234,7 +243,7 @@ export class RequestRunner {
 
 		if (shouldGenerateImage) {
 			if (!(await this.host.getOpenAiApiKey())) {
-				throw new Error("Add an OpenAI API key in AskMate settings before generating an image with gpt-image-2.");
+				throw new Error("Add an OpenAI API key in AskMate settings before generating an image.");
 			}
 			const imagePromptPlan = await this.prepareImagePrompt(request, options.abortSignal);
 			return await this.generateOpenAIImage(request, options.abortSignal, imagePromptPlan);
@@ -252,8 +261,8 @@ export class RequestRunner {
 					model,
 					capability: "text"
 				},
-				buildTextInstructions(request.customInstructions),
-				buildPrompt(request),
+				buildRequestInstructions(request, { purpose: "answer" }),
+				buildRequestInput(request, { purpose: "answer" }),
 				"text_response",
 				options.abortSignal,
 				onDelta
@@ -301,8 +310,8 @@ export class RequestRunner {
 				model,
 				capability: "text"
 			},
-			buildTextInstructions(request.customInstructions),
-			buildPrompt(request),
+			buildRequestInstructions(request, { purpose: "answer" }),
+			buildRequestInput(request, { purpose: "answer" }),
 			"text_response",
 			abortSignal,
 			onDelta
@@ -334,8 +343,12 @@ export class RequestRunner {
 		const endpoint: ApiEndpoint = "responses";
 		const startedAt = new Date();
 		let deliveredDeltas = false;
+		// Kept so a stopped or broken stream still reports the text that arrived, which the provider billed.
+		let streamedText = "";
+		let sent = false;
 		const trackedOnDelta = (delta: string): void => {
 			deliveredDeltas = true;
+			streamedText += delta;
 			onDelta(delta);
 		};
 		let answer = "";
@@ -353,10 +366,11 @@ export class RequestRunner {
 				model: providerRef.model,
 				instructions,
 				input,
-				responseText: answer,
+				responseText: answer || streamedText,
 				usage,
 				startedAt,
-				errorMessage
+				errorMessage,
+				sent
 			});
 		};
 
@@ -367,9 +381,12 @@ export class RequestRunner {
 				model: providerRef.model,
 				instructions,
 				input,
-				reasoningEffort: request.metadata.reasoningEffort,
+				reasoningEffort: isPlanning ? getPlanningReasoningEffort(request.metadata.reasoningEffort) : request.metadata.reasoningEffort,
 				abortSignal
 			};
+			// A request stopped before this point never reached the provider, so it must not count as sent.
+			this.host.throwIfAborted(abortSignal);
+			sent = true;
 			// Planning output is never shown, so only visible replies are streamed.
 			const streamed: OpenAIStreamResult = isPlanning
 				? { kind: "unavailable" }
@@ -396,7 +413,7 @@ export class RequestRunner {
 			}
 
 			this.host.throwIfAborted(abortSignal);
-			const outcome = readOpenAIResponseText(body);
+			const outcome = readOpenAIResponseText(body, [apiKey]);
 			answer = outcome.text;
 			if (!deliveredDeltas) {
 				onDelta(answer);
@@ -437,12 +454,38 @@ export class RequestRunner {
 		let endpoint: ApiEndpoint = getProviderTextEndpoint(providerRef.providerId);
 		let usageRecorded = false;
 		let deliveredDeltas = false;
+		// Kept so a stopped or broken stream still reports the text that arrived, which the provider billed.
+		let streamedText = "";
+		let sent = false;
 		const trackedOnDelta = (delta: string): void => {
 			deliveredDeltas = true;
+			streamedText += delta;
 			onDelta(delta);
+		};
+		const record = async (status: OperationStatus, errorMessage?: string): Promise<void> => {
+			usageRecorded = true;
+			await this.host.recordOperationUsage({
+				request,
+				providerId: providerRef.providerId,
+				providerName: providerRef.providerName,
+				operationKind,
+				endpoint,
+				status,
+				model: providerRef.model,
+				instructions,
+				input,
+				responseText: answer || streamedText,
+				usage,
+				startedAt,
+				errorMessage,
+				sent
+			});
 		};
 
 		try {
+			// A request stopped before this point never reached the provider, so it must not count as sent.
+			this.host.throwIfAborted(abortSignal);
+			sent = true;
 			// Only visible replies stream; image prompt planning is consumed internally.
 			const result = await completeProviderTextRequest(
 				this.host.getProviderRuntime(),
@@ -468,42 +511,13 @@ export class RequestRunner {
 				onDelta(answer);
 			}
 			if (operationKind !== "image_prompt_planning") {
-				await this.host.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind,
-					endpoint,
-					status: result.streamError ? "failed" : "completed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: answer,
-					usage,
-					startedAt,
-					errorMessage: result.streamError
-				});
-				usageRecorded = true;
+				await record(result.streamError ? "failed" : "completed", result.streamError);
 				this.host.throwIfAborted(abortSignal);
 			}
 			return { ...result, text: answer.trim(), incompleteReason };
 		} catch (error) {
 			if (!usageRecorded) {
-				await this.host.recordOperationUsage({
-					request,
-					providerId: providerRef.providerId,
-					providerName: providerRef.providerName,
-					operationKind,
-					endpoint,
-					status: isAbortError(error) ? "aborted" : "failed",
-					model: providerRef.model,
-					instructions,
-					input,
-					responseText: answer,
-					usage,
-					startedAt,
-					errorMessage: this.host.getErrorMessage(error)
-				});
+				await record(isAbortError(error) ? "aborted" : "failed", this.host.getErrorMessage(error));
 			}
 
 			throw error;
@@ -543,6 +557,7 @@ export class RequestRunner {
 		let usage: OpenAITokenUsage | null = null;
 		let responseText = "";
 		let usageRecorded = false;
+		let sent = false;
 		const record = async (status: OperationStatus, errorMessage?: string): Promise<void> => {
 			usageRecorded = true;
 			await this.host.recordOperationUsage({
@@ -558,11 +573,14 @@ export class RequestRunner {
 				responseText,
 				usage,
 				startedAt,
-				errorMessage
+				errorMessage,
+				sent
 			});
 		};
 
 		try {
+			this.host.throwIfAborted(abortSignal);
+			sent = true;
 			const response = await requestOpenAIImageGeneration(this.host.getProviderRuntime(), {
 				apiKey,
 				model,
@@ -620,8 +638,8 @@ export class RequestRunner {
 
 	async prepareImagePrompt(request: AskRequest, abortSignal?: AbortSignal): Promise<ImagePromptPlan> {
 		const providerRef = this.host.getImagePlanningProviderRef();
-		const instructions = buildImagePromptPlanningInstructions();
-		const input = buildImagePromptPlanningInput(request);
+		const instructions = buildRequestInstructions(request, { purpose: "image-plan" });
+		const input = buildRequestInput(request, { purpose: "image-plan" });
 		const startedAt = new Date();
 
 		try {
@@ -643,7 +661,8 @@ export class RequestRunner {
 				responseText: planned.text,
 				usage: planned.usage,
 				startedAt,
-				errorMessage: extraction.fallbackReason ?? ""
+				errorMessage: extraction.fallbackReason ?? "",
+				sent: true
 			});
 			this.host.throwIfAborted(abortSignal);
 
@@ -670,12 +689,32 @@ export class RequestRunner {
 }
 
 /**
+ * Image prompt planning writes a short prompt, so it does not need the effort chosen for visible answers.
+ * "none" stays "none"; model support is clamped later, where the request body is built.
+ */
+export function getPlanningReasoningEffort(chatEffort: ReasoningEffort): ReasoningEffort {
+	return chatEffort === "none" ? "none" : "low";
+}
+
+/** Workflow.skillIds joins the schema in a later package, so it is read without depending on the type. */
+function readWorkflowSkillIds(workflow: BuildRequestOptions["workflow"]): string[] {
+	const raw: unknown = workflow && "skillIds" in workflow ? workflow.skillIds : undefined;
+	return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
+}
+
+/**
  * Reads the answer from a Responses API body. A failed response, a refusal or an empty answer throws an error that
  * names the cause; an incomplete response with text is returned with its reason so callers can warn before Apply.
+ * The provider's own wording is redacted, because the message reaches the screen and the usage history.
  */
-export function readOpenAIResponseText(body: OpenAIResponseBody | null): { text: string; incompleteReason: string | null } {
+export function readOpenAIResponseText(
+	body: OpenAIResponseBody | null,
+	secrets: readonly string[] = []
+): { text: string; incompleteReason: string | null } {
+	const redact = (text: string): string => redactSecrets(text, [...secrets]);
+
 	if (body?.status === "failed") {
-		const detail = body.error?.message?.trim();
+		const detail = redact(body.error?.message?.trim() ?? "");
 		throw new Error(detail
 			? `OpenAI could not complete the response. Provider message: ${detail}`
 			: "OpenAI could not complete the response and did not give a reason.");
@@ -691,7 +730,7 @@ export function readOpenAIResponseText(body: OpenAIResponseBody | null): { text:
 	const refusal = extractOpenAIRefusal(body);
 
 	if (refusal) {
-		throw new Error(`OpenAI refused the request. Provider message: ${refusal}`);
+		throw new Error(`OpenAI refused the request. Provider message: ${redact(refusal)}`);
 	}
 
 	if (incompleteReason) {
