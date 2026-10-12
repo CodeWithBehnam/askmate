@@ -212,7 +212,7 @@ Every finished reply has these actions:
 - `Copy`: copies the raw Markdown of the reply to the clipboard.
 - `Insert at cursor`: inserts the reply into the note you last edited, replacing the selection if there is one. If the sidebar has focus, AskMate uses the note you were last in. Incomplete replies are inserted with a warning.
 
-The command palette has `Copy last AskMate answer` and `Insert last AskMate answer at cursor` for the newest reply.
+The command palette has `AskMate: Copy last answer` and `AskMate: Insert last answer at cursor` for the newest reply.
 
 ### Streaming Replies
 
@@ -251,7 +251,7 @@ AskMate keeps your sidebar chat as a named thread. Threads survive restarts, and
 - `/clear` clears the current conversation and removes it from your saved conversations.
 - `/export [title]` writes the conversation to a Markdown note in your AskMate result folder and opens it. The note has your questions and AskMate's replies as separate sections, links to the notes each question was asked about, and marks incomplete replies. Generated images appear as embeds when they were saved to your vault.
 
-The same actions are in the sidebar header (`New conversation`, `Saved conversations`, `Export conversation to note`) and the command palette (`Export AskMate conversation to note`). Turn saving off, or delete every saved thread, with `Save conversations` and `Delete saved conversations` in settings. AskMate keeps up to 50 threads of 200 messages each.
+The same actions are in the sidebar header (`New conversation`, `Saved conversations`, `Export conversation to note`) and the command palette (`AskMate: Export conversation to note`). Turn saving off, or delete every saved thread, with `Save conversations` and `Delete saved conversations` in settings. AskMate keeps up to 50 threads of 200 messages each.
 
 ### Switch Model Or Provider
 

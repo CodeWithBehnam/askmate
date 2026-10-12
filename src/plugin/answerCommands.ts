@@ -21,7 +21,7 @@ function findLastAnswer(plugin: AskMatePlugin): LastAnswer | null {
 export function registerAnswerCommands(plugin: AskMatePlugin): void {
 	plugin.addCommand({
 		id: "copy-last-answer",
-		name: "Copy last AskMate answer",
+		name: "Copy last answer",
 		callback: () => {
 			const answer = findLastAnswer(plugin);
 			if (!isInsertable(answer)) {
@@ -34,7 +34,7 @@ export function registerAnswerCommands(plugin: AskMatePlugin): void {
 
 	plugin.addCommand({
 		id: "insert-last-answer",
-		name: "Insert last AskMate answer at cursor",
+		name: "Insert last answer at cursor",
 		editorCallback: (editor, ctx) => {
 			// The palette restores the editor, so the command's own editor is the right target even when the view is hidden.
 			if (ctx instanceof MarkdownView && ctx.getMode() !== "source") {

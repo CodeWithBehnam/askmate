@@ -50,13 +50,13 @@ describe("resolveCustomInstructions", () => {
 
 	test("orders global first, then folders from outermost to most specific", () => {
 		const resolved = resolveCustomInstructions(settings, "Projects/Client/note.md");
-		expect(resolved.global).toBe("Use British English.");
+		expect(resolved.everyRequest).toBe("Use British English.");
 		expect(resolved.folders.map((rule) => rule.instructions)).toEqual(["Use bullet points.", "Second broad rule.", "Be formal."]);
 	});
 
 	test("returns only global instructions without a source note", () => {
 		expect(resolveCustomInstructions(settings, null).folders).toEqual([]);
-		expect(resolveCustomInstructions(settings, undefined).global).toBe("Use British English.");
+		expect(resolveCustomInstructions(settings, undefined).everyRequest).toBe("Use British English.");
 	});
 
 	test("formats to empty text when nothing applies, and labels folder rules otherwise", () => {

@@ -54,14 +54,14 @@ export async function fetchSse(
 	const controller = new AbortController();
 	const forwardAbort = (): void => controller.abort();
 	init.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
-	let idleTimer: ReturnType<typeof setTimeout> | null = null;
+	let idleTimer: number | null = null;
 	let idleFired = false;
 	const armIdleTimer = (): void => {
 		if (idleTimer !== null) {
-			clearTimeout(idleTimer);
+			window.clearTimeout(idleTimer);
 		}
 		if (init.idleTimeoutMs && init.idleTimeoutMs > 0) {
-			idleTimer = setTimeout(() => {
+			idleTimer = window.setTimeout(() => {
 				idleFired = true;
 				controller.abort();
 			}, init.idleTimeoutMs);
@@ -130,7 +130,7 @@ export async function fetchSse(
 		return { kind: "streamed" };
 	} finally {
 		if (idleTimer !== null) {
-			clearTimeout(idleTimer);
+			window.clearTimeout(idleTimer);
 		}
 		init.abortSignal?.removeEventListener("abort", forwardAbort);
 	}

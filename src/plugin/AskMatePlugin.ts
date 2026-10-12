@@ -159,7 +159,7 @@ export class AskMatePlugin extends Plugin {
 			requestJson: async <T>(url: string, options?: ProviderRequestOptions) => await this.requestJson<T>(url, options),
 			// requestUrl buffers the whole body and cannot be cancelled, so streaming uses fetch; providers validate URLs before calling.
 			...(this.settings.streamResponses
-				? { streamSse: async (url, options, onEvent) => await fetchSse((input, init) => globalThis.fetch(input, init), url, options, onEvent) }
+				? { streamSse: async (url, options, onEvent) => await fetchSse((input, init) => window.fetch(input, init), url, options, onEvent) }
 				: {})
 		};
 	}
@@ -303,7 +303,7 @@ export class AskMatePlugin extends Plugin {
 
 		this.addCommand({
 			id: "export-conversation",
-			name: "Export AskMate conversation to note",
+			name: "Export conversation to note",
 			callback: () => {
 				void this.exportConversationFromCommand();
 			}

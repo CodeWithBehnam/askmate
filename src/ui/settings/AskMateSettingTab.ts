@@ -1026,7 +1026,7 @@ export class AskMateSettingTab extends PluginSettingTab {
 						desc: "Remove every saved thread from this plugin's data. The conversation on screen is not affected until you clear it.",
 						render: (setting) => {
 							setting.addButton((button) => {
-								button.setButtonText("Delete saved conversations").setWarning().onClick(async () => {
+								button.setButtonText("Delete saved conversations").setDestructive().onClick(async () => {
 									if (!(await askMateConfirm(this.app, "Delete all saved AskMate conversations? This cannot be undone."))) {
 										return;
 									}

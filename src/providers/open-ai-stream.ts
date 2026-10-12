@@ -113,7 +113,7 @@ export const openAIResponsesStreamAdapter: StreamAdapter<OpenAIResponsesStreamSt
 		}
 
 		if (OPENAI_TERMINAL_EVENTS.has(type) && body.response && typeof body.response === "object") {
-			return { state: { ...state, final: body.response as OpenAIResponseBody }, delta: "" };
+			return { state: { ...state, final: body.response }, delta: "" };
 		}
 
 		if (type === "error") {
@@ -190,7 +190,7 @@ export async function streamOpenAIResponses(
 		case "unavailable":
 			return outcome;
 		case "buffered":
-			return { kind: "buffered", response: outcome.response as AskMateHttpResponse<OpenAIResponseBody> };
+			return { kind: "buffered", response: outcome.response };
 		case "complete": {
 			const assembled = assembleOpenAIResponsesBody(outcome.state);
 			// The provider's failure text is stored in usage history, so it gets the same redaction as HTTP errors.

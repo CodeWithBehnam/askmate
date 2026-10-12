@@ -2497,9 +2497,8 @@ export class AskMateView extends ItemView {
 			this.runUiTask(this.selectOutputMode(order[(current + 1) % order.length]));
 		});
 		this.consoleStatusSegmentsEl = this.consoleStatusEl.createDiv({ cls: "askmate-console-status-segments" });
-		this.consoleModelButton = document.createElement("button");
-		this.consoleModelButton.type = "button";
-		this.consoleModelButton.className = "askmate-console-segment is-model";
+		// Created detached: refreshConsoleStatus re-attaches it among the segments it rebuilds.
+		this.consoleModelButton = createEl("button", { cls: "askmate-console-segment is-model", attr: { type: "button" } });
 		this.consoleModelButton.addEventListener("click", () => {
 			this.openModelPicker();
 		});

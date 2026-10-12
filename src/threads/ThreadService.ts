@@ -62,7 +62,7 @@ export class ThreadService {
 		}
 		this.pending = thread;
 		this.cancelTimer();
-		const setTimer = this.host.setTimer ?? ((callback, delay) => globalThis.setTimeout(callback, delay));
+		const setTimer = this.host.setTimer ?? ((callback, delay) => window.setTimeout(callback, delay));
 		this.timer = setTimer(() => {
 			this.timer = null;
 			void this.flush();
@@ -128,7 +128,7 @@ export class ThreadService {
 
 	private cancelTimer(): void {
 		if (this.timer !== null) {
-			const clearTimer = this.host.clearTimer ?? ((handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+			const clearTimer = this.host.clearTimer ?? ((handle) => window.clearTimeout(handle as number));
 			clearTimer(this.timer);
 			this.timer = null;
 		}

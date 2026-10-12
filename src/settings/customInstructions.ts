@@ -6,7 +6,7 @@ export const MAX_FOLDER_INSTRUCTION_RULES = 20;
 const MAX_FOLDER_PATH_LENGTH = 400;
 
 export interface ResolvedInstructions {
-	global: string;
+	everyRequest: string;
 	/** Matching folder rules, outermost folder first, so the most specific rule is read last. */
 	folders: FolderInstruction[];
 }
@@ -67,13 +67,13 @@ export function resolveCustomInstructions(
 			.sort((a, b) => a.rule.folder.split("/").length - b.rule.folder.split("/").length || a.index - b.index)
 			.map(({ rule }) => rule)
 		: [];
-	return { global: settings.globalInstructions.trim(), folders };
+	return { everyRequest: settings.globalInstructions.trim(), folders };
 }
 
 /** Plain text for the prompt: global preferences first, then each matching folder rule from the outermost to the most specific. */
 export function formatCustomInstructions(resolved: ResolvedInstructions): string {
 	return [
-		resolved.global,
+		resolved.everyRequest,
 		...resolved.folders.map((rule) => `For notes in the folder "${rule.folder}":\n${rule.instructions}`)
 	].filter(Boolean).join("\n\n");
 }
