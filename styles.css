@@ -1,14 +1,59 @@
-.askmate-sidebar {
+/*
+ * AskMate styles.
+ *
+ * Surfaces, borders and text always come from Obsidian's theme variables, so every theme keeps working. The only
+ * colours AskMate adds are the Mate Mark accents (indigo primary, mint accent) and the status colours below. Each has
+ * a light and a dark value, and tests/contrast.test.ts checks them against Obsidian's default palettes (text 4.5:1,
+ * UI 3:1). To restyle AskMate, override these --askmate-* variables from a CSS snippet instead of editing the rules.
+ */
+body {
+	/* Brand accents. Indigo carries structure and the main action; mint marks confirmation and the assistant voice. */
+	--askmate-brand: #352fa0;
+	--askmate-brand-hover: #2b2791;
+	--askmate-on-brand: #ffffff;
+	/* The text-safe mint. The graphic mint is for fills and the mark only, because it is too pale for text on light. */
+	--askmate-accent: #0a7558;
+	--askmate-mint: #46d9b0;
+	--askmate-focus: #352fa0;
+	/* Status colours tuned for text and icons on theme surfaces. */
+	--askmate-success: #0f7b49;
+	--askmate-warning: #b45309;
+	--askmate-danger: #c62828;
+	--askmate-on-danger: #ffffff;
+	--askmate-series-2: #b45309;
+	/* Tint strengths, mixed into the theme surface with color-mix. */
+	--askmate-tint-1: 8%;
+	--askmate-tint-2: 14%;
+	--askmate-tint-3: 32%;
+	/* Surfaces, borders and text follow the theme. */
+	--askmate-surface: var(--background-primary);
+	--askmate-surface-raised: var(--background-secondary);
+	--askmate-border: var(--background-modifier-border);
+	--askmate-radius-sm: var(--radius-s, 8px);
+	--askmate-radius-md: var(--radius-m, 12px);
 	--askmate-radius-lg: var(--radius-l, 18px);
+}
+
+body.theme-dark {
+	--askmate-brand: #9c98ff;
+	--askmate-brand-hover: #b9b6ff;
+	--askmate-on-brand: #0d0e26;
+	--askmate-accent: #7ee8c6;
+	--askmate-mint: #7ee8c6;
+	--askmate-focus: #9c98ff;
+	--askmate-success: #5be08f;
+	--askmate-warning: #fbbf24;
+	--askmate-danger: #ff8a80;
+	--askmate-on-danger: #0d0e26;
+	--askmate-series-2: #fbbf24;
+}
+
+.askmate-sidebar {
 	container-name: askmate-sidebar;
 	container-type: inline-size;
-	--askmate-radius-md: var(--radius-m, 12px);
-	--askmate-radius-sm: var(--radius-s, 8px);
-	--askmate-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
-	--askmate-focus-ring: color-mix(in srgb, var(--interactive-accent) 48%, transparent);
 	background:
-		radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--interactive-accent) 16%, transparent), transparent 32%),
-		linear-gradient(180deg, var(--background-primary), var(--background-secondary) 120%);
+		radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), transparent), transparent 32%),
+		linear-gradient(180deg, var(--askmate-surface), var(--askmate-surface-raised) 120%);
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -22,8 +67,8 @@
 }
 
 .askmate-model-chip {
-	background: color-mix(in srgb, var(--background-secondary) 84%, var(--interactive-accent) 16%);
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+	background: color-mix(in srgb, var(--background-secondary) 84%, var(--askmate-brand) 16%);
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) 18%, transparent);
 	border-radius: 999px;
 	color: var(--text-muted);
 	flex: 0 1 auto;
@@ -46,7 +91,6 @@
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	padding: 2px 2px 4px;
-	scrollbar-width: thin;
 }
 
 .askmate-message {
@@ -61,13 +105,12 @@
 }
 
 .askmate-message-user {
-	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--interactive-accent) 32%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface));
+	border-color: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
 }
 
 .askmate-message-assistant {
-	background: color-mix(in srgb, var(--background-primary) 88%, var(--background-secondary));
-	align-items: center;
+	background: color-mix(in srgb, var(--askmate-surface) 88%, var(--askmate-surface-raised));
 }
 
 .askmate-message-assistant.askmate-message-has-actions {
@@ -96,7 +139,8 @@
 		"avatar evidence";
 }
 
-.askmate-message-incomplete-warning {
+/* Two classes so this wins over the later .askmate-budget-warning margin that the same element also carries. */
+.askmate-message .askmate-message-incomplete-warning {
 	grid-area: warning;
 	margin: 0;
 }
@@ -113,11 +157,6 @@
 .askmate-message-header {
 	align-self: center;
 	grid-area: avatar;
-	padding-top: 0;
-}
-
-.askmate-message-system .askmate-message-header {
-	align-self: center;
 	padding-top: 0;
 }
 
@@ -168,8 +207,8 @@
 
 .askmate-message-action:hover,
 .askmate-message-action:focus-visible {
-	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--askmate-brand) 40%, var(--background-modifier-border));
 	color: var(--text-normal);
 }
 
@@ -179,7 +218,7 @@
 }
 
 .askmate-onboarding-message {
-	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+	border-color: color-mix(in srgb, var(--askmate-brand) 30%, var(--background-modifier-border));
 }
 
 .askmate-onboarding-card {
@@ -194,8 +233,8 @@
 
 .askmate-onboarding-card button {
 	align-self: flex-start;
-	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) 12%, var(--background-primary));
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) 34%, var(--background-modifier-border));
 	border-radius: 999px;
 	color: var(--text-normal);
 	cursor: pointer;
@@ -224,6 +263,41 @@
 .askmate-message-body-image,
 .askmate-message-assistant .askmate-message-body {
 	align-self: start;
+}
+
+/* Message states. The view sets these on the message wrapper: is-pending before the first text, is-streaming while text arrives. */
+.askmate-message-assistant .askmate-message-body:empty::before {
+	/* Static words rather than an animation, so the busy state is visible with reduced motion on as well. */
+	color: var(--text-muted);
+	content: "Working…";
+}
+
+.askmate-message.is-streaming .askmate-rendered-markdown > :last-child::after,
+.askmate-message.is-streaming .askmate-message-body:not(.askmate-message-body-markdown)::after {
+	animation: askmate-caret 1s steps(2, start) infinite;
+	background: var(--askmate-brand);
+	content: "";
+	display: inline-block;
+	height: 1em;
+	margin-inline-start: 2px;
+	vertical-align: text-bottom;
+	width: 2px;
+}
+
+.askmate-message.is-error {
+	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
+	border-color: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
+}
+
+/* A leading mark, so an error is not shown by colour alone. */
+.askmate-message.is-error .askmate-message-body::before {
+	color: var(--askmate-danger);
+	content: "! ";
+	font-weight: 800;
+}
+
+.askmate-message.is-stopped {
+	border-style: dashed;
 }
 
 .askmate-message-body-markdown.is-simple-markdown {
@@ -255,18 +329,27 @@
 	white-space: normal;
 }
 
-.askmate-message-assistant,
-.askmate-message-assistant .askmate-message-body,
-.askmate-message-assistant .askmate-rendered-markdown,
-.askmate-message-assistant .askmate-rendered-markdown * {
+/* Every line in the log can be selected and copied: replies, your own questions, console output and errors. */
+.askmate-messages,
+.askmate-messages .askmate-message,
+.askmate-messages .askmate-message-body,
+.askmate-messages .askmate-message-body *,
+.askmate-modal-message,
+.askmate-diff-view,
+.askmate-note-history-turn,
+.askmate-review-item,
+.askmate-tool-args,
+.askmate-tool-result,
+.askmate-diagram-meta {
 	-webkit-user-select: text;
 	user-select: text;
 }
 
-.askmate-message-assistant .askmate-message-header,
-.askmate-message-assistant .askmate-message-header *,
-.askmate-message-assistant .askmate-message-actions,
-.askmate-message-assistant .askmate-message-actions * {
+.askmate-messages .askmate-message-header,
+.askmate-messages .askmate-message-header *,
+.askmate-messages .askmate-message-actions,
+.askmate-messages .askmate-message-actions *,
+.askmate-messages button {
 	-webkit-user-select: none;
 	user-select: none;
 }
@@ -301,7 +384,7 @@
 }
 
 .askmate-context-image-more {
-	color: var(--text-faint);
+	color: var(--text-muted);
 	font-weight: 500;
 }
 
@@ -330,7 +413,7 @@
 }
 
 .askmate-context-image-card figcaption {
-	color: var(--text-faint);
+	color: var(--text-muted);
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	line-height: 1.25;
 	margin-top: 5px;
@@ -367,6 +450,7 @@
 }
 
 .askmate-rendered-markdown {
+	min-width: 0;
 	overflow-wrap: anywhere;
 }
 
@@ -423,7 +507,7 @@
 }
 
 .askmate-rendered-markdown blockquote {
-	border-inline-start: 3px solid var(--interactive-accent);
+	border-inline-start: 3px solid var(--askmate-brand);
 	color: var(--text-muted);
 	padding-inline-start: 0.8em;
 }
@@ -442,23 +526,54 @@
 	vertical-align: top;
 }
 
+/* MarkdownRenderer does not add Obsidian's markdown-rendered class to its host, so the code tokens are applied here. */
 .askmate-rendered-markdown code {
-	background: var(--background-secondary-alt);
-	border-radius: 4px;
-	font-size: 0.92em;
+	background: var(--code-background, var(--background-primary-alt));
+	border: 1px solid var(--askmate-border);
+	border-radius: var(--code-radius, 4px);
+	color: var(--code-normal, var(--text-normal));
+	font-family: var(--font-monospace);
+	font-size: var(--code-size, 0.92em);
 	padding: 0.1em 0.28em;
 }
 
 .askmate-rendered-markdown pre {
-	background: var(--background-secondary-alt);
+	background: var(--code-background, var(--background-primary-alt));
+	border: 1px solid var(--askmate-border);
 	border-radius: var(--askmate-radius-sm);
+	font-family: var(--font-monospace);
 	overflow-x: auto;
 	padding: 9px;
 }
 
 .askmate-rendered-markdown pre code {
 	background: transparent;
+	border: 0;
 	padding: 0;
+}
+
+/* Images and other media never push the message pane wider than the sidebar. */
+.askmate-rendered-markdown img,
+.askmate-rendered-markdown video,
+.askmate-rendered-markdown canvas,
+.askmate-rendered-markdown svg {
+	height: auto;
+	max-width: 100%;
+}
+
+/* Diagrams keep their natural size inside a frame that scrolls, which keeps the text readable in a narrow sidebar. */
+.askmate-rendered-markdown .mermaid {
+	border: 1px solid var(--askmate-border);
+	border-radius: var(--askmate-radius-sm);
+	max-width: 100%;
+	overflow-x: auto;
+	padding: 6px;
+}
+
+/* Obsidian already inverts .mermaid > svg in dark themes, so replies match notes without a rule here. */
+.askmate-rendered-markdown .mermaid > svg {
+	height: auto;
+	max-width: none;
 }
 
 .askmate-avatar {
@@ -472,29 +587,54 @@
 }
 
 .askmate-avatar-assistant {
-	background: linear-gradient(135deg, var(--interactive-accent), var(--interactive-accent-hover));
-	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+	background: linear-gradient(135deg, var(--askmate-brand), var(--askmate-brand-hover));
+	box-shadow: 0 6px 16px color-mix(in srgb, var(--askmate-brand) 24%, transparent);
+	color: var(--askmate-on-brand);
 }
 
 .askmate-avatar-user {
-	background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-secondary));
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface-raised));
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
 }
 
 .askmate-avatar-system {
 	background: var(--background-secondary-alt);
-	border: 1px solid var(--background-modifier-border);
+	border: 1px solid var(--askmate-border);
 	height: 24px;
 	width: 24px;
 }
 
-.askmate-message-system .askmate-avatar-status-mark {
-	transform: translateY(0);
+/* The Mate Mark icon (registered with addIcon). It is a single-colour glyph that follows the colour of its parent. */
+.askmate-brand-mark {
+	align-items: center;
+	color: inherit;
+	display: inline-flex;
+	flex: 0 0 auto;
+	height: var(--askmate-brand-mark-size, 18px);
+	justify-content: center;
+	line-height: 0;
+	width: var(--askmate-brand-mark-size, 18px);
+}
+
+.askmate-brand-mark svg {
+	display: block;
+	fill: currentColor;
+	height: 100%;
+	stroke: none;
+	width: 100%;
+}
+
+.askmate-avatar .askmate-brand-mark {
+	--askmate-brand-mark-size: 18px;
+}
+
+.askmate-composer-brand .askmate-brand-mark {
+	--askmate-brand-mark-size: 12px;
 }
 
 .askmate-avatar-robot-antenna {
-	background: var(--text-on-accent);
-	border: 2px solid color-mix(in srgb, var(--text-on-accent) 72%, transparent);
+	background: var(--askmate-on-brand);
+	border: 2px solid color-mix(in srgb, var(--askmate-on-brand) 72%, transparent);
 	border-radius: 999px;
 	height: 5px;
 	left: 50%;
@@ -505,7 +645,7 @@
 }
 
 .askmate-avatar-robot-face {
-	background: color-mix(in srgb, var(--text-on-accent) 92%, transparent);
+	background: color-mix(in srgb, var(--askmate-on-brand) 92%, transparent);
 	border-radius: 8px;
 	height: 16px;
 	position: relative;
@@ -520,9 +660,9 @@
 }
 
 .askmate-avatar-robot-eyes span {
-	background: var(--interactive-accent);
+	background: var(--askmate-brand);
 	border-radius: 999px;
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--askmate-brand) 12%, transparent);
 	height: 3px;
 	width: 3px;
 }
@@ -530,7 +670,7 @@
 .askmate-avatar-robot-smile {
 	background: transparent;
 	border: 0;
-	border-bottom: 2px solid var(--interactive-accent);
+	border-bottom: 2px solid var(--askmate-brand);
 	border-radius: 0 0 999px 999px;
 	height: 5px;
 	left: 5px;
@@ -573,9 +713,13 @@
 	border-radius: var(--askmate-radius-md);
 	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
 	display: flex;
-	flex: 0 0 auto;
+	/* Capped so the panel can never squeeze the chat and composer to slivers. */
+	flex: 0 1 auto;
 	flex-direction: column;
 	gap: 6px;
+	max-height: 40%;
+	min-height: 0;
+	overflow-y: auto;
 	padding: 7px;
 }
 
@@ -610,7 +754,7 @@
 }
 
 .askmate-workflow-card {
-	--askmate-card-accent: var(--interactive-accent);
+	--askmate-card-accent: var(--askmate-brand);
 	align-items: flex-start;
 	background: linear-gradient(135deg, color-mix(in srgb, var(--askmate-card-accent) 13%, var(--background-primary)), var(--background-primary));
 	border: 1px solid color-mix(in srgb, var(--askmate-card-accent) 32%, var(--background-modifier-border));
@@ -620,9 +764,11 @@
 	cursor: pointer;
 	display: flex;
 	gap: 6px;
+	/* Obsidian gives buttons a fixed height; the card grows with its wrapped name and description instead. */
+	height: auto;
 	min-height: 48px;
 	padding: 7px;
-	text-align: left;
+	text-align: start;
 	transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
 	width: 100%;
 }
@@ -639,23 +785,28 @@
 	transform: none;
 }
 
-.askmate-workflow-card:focus-visible,
-.askmate-workflow-toggle:focus-visible,
-.askmate-segment:focus-visible,
+/*
+ * One solid 2px ring everywhere. It measures at least 3:1 on every surface (tests/contrast.test.ts) and survives forced colours.
+ * Text fields and checkboxes are included, because Obsidian's own focus glow on them is only about 1.9:1. The prompt box is left
+ * out, since its surrounding shell draws the ring. The exclusion sits in :where() so it adds no specificity, which keeps the
+ * per-component overrides below (the inset ring in the console status bar) winning without a specificity race.
+ */
+.askmate-sidebar :is(button, select, summary, a, input, textarea, [tabindex]):where(:not(.askmate-question)):focus-visible,
 .askmate-reasoning-shell:focus-within,
 .askmate-icon-select-control:focus-within,
-.askmate-action-button:focus-visible,
-.askmate-message-action:focus-visible,
-.askmate-request-preview-select:focus-visible {
-	box-shadow: 0 0 0 2px var(--askmate-focus-ring);
-	outline: 2px solid transparent;
+.askmate-input-shell:focus-within {
+	/* Replaces Obsidian's softer glow so the two do not stack. */
+	box-shadow: none;
+	outline: 2px solid var(--askmate-focus);
+	outline-offset: 1px;
 }
 
 .askmate-workflow-icon {
 	align-items: center;
 	background: color-mix(in srgb, var(--askmate-card-accent) 16%, var(--background-secondary));
 	border-radius: 8px;
-	color: var(--askmate-card-accent);
+	/* Pulled towards the text colour so the glyph stays visible on pale category colours. */
+	color: color-mix(in srgb, var(--askmate-card-accent) 62%, var(--text-normal));
 	display: inline-flex;
 	flex: 0 0 22px;
 	height: 22px;
@@ -670,7 +821,10 @@
 
 .askmate-workflow-copy {
 	min-width: 0;
+	overflow-wrap: anywhere;
 	padding-top: 4px;
+	/* The card is a button, and Obsidian keeps button text on one line; names and descriptions must be allowed to wrap. */
+	white-space: normal;
 }
 
 .askmate-workflow-name {
@@ -680,20 +834,21 @@
 }
 
 .askmate-workflow-desc {
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
 	color: var(--text-muted);
+	display: -webkit-box;
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	line-height: 1.2;
 	margin-top: 2px;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 .askmate-accent-blue { --askmate-card-accent: var(--color-blue); }
 .askmate-accent-violet { --askmate-card-accent: var(--color-purple); }
-.askmate-accent-green { --askmate-card-accent: var(--color-green); }
+.askmate-accent-green { --askmate-card-accent: var(--askmate-success); }
 .askmate-accent-amber { --askmate-card-accent: var(--color-orange); }
-.askmate-accent-rose { --askmate-card-accent: var(--color-red); }
+.askmate-accent-rose { --askmate-card-accent: var(--askmate-danger); }
 .askmate-accent-slate { --askmate-card-accent: var(--text-muted); }
 
 .askmate-composer {
@@ -707,6 +862,8 @@
 	gap: 7px;
 	max-height: 65%;
 	min-height: 0;
+	/* A safety net: the header wraps, but nothing in the composer should ever add a horizontal scrollbar. */
+	overflow-x: hidden;
 	overflow-y: auto;
 	padding: 8px;
 }
@@ -718,7 +875,8 @@
 
 .askmate-composer-layout-expanded .askmate-question {
 	min-height: 112px;
-	padding: 12px 56px 46px 12px;
+	padding-block: 12px 46px;
+	padding-inline: 12px 56px;
 }
 
 .askmate-composer-layout-expanded .askmate-composer-footer {
@@ -741,32 +899,53 @@
 	align-items: center;
 	display: flex;
 	flex: 1 1 auto;
+	flex-wrap: wrap;
 	gap: 6px;
 	min-width: 0;
 }
 
+/* Readiness pill. The state is carried by the glyph and the border, never by hue alone; the text stays neutral. */
 .askmate-composer-brand {
-	flex: 0 0 auto;
-	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-surface-raised) 78%, var(--askmate-surface));
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) 18%, var(--askmate-border));
 	border-radius: 999px;
 	color: var(--text-muted);
+	flex: 0 1 auto;
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	font-weight: 750;
 	letter-spacing: 0.01em;
 	line-height: 1;
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
 	padding: 4px 8px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .askmate-composer-brand.is-not-ready {
-	border-color: color-mix(in srgb, var(--text-warning) 60%, var(--background-modifier-border));
-	color: var(--text-warning);
+	border-color: color-mix(in srgb, var(--askmate-warning) 60%, var(--askmate-border));
+	color: var(--text-normal);
 }
 
+.askmate-composer-brand.is-not-ready::before {
+	color: var(--askmate-warning);
+	content: "! ";
+	font-weight: 800;
+}
+
+.askmate-composer-brand.is-ready,
 .askmate-composer-brand.is-api-key-set {
-	border-color: color-mix(in srgb, var(--color-green) 72%, var(--background-modifier-border));
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-green) 18%, transparent);
-	color: var(--text-success);
+	border-color: color-mix(in srgb, var(--askmate-success) 72%, var(--askmate-border));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--askmate-success) 18%, transparent);
+	color: var(--text-normal);
+}
+
+.askmate-composer-brand.is-ready::before,
+.askmate-composer-brand.is-api-key-set::before {
+	color: var(--askmate-success);
+	content: "✓ ";
+	font-weight: 800;
 }
 
 .askmate-composer-model {
@@ -847,15 +1026,15 @@
 .askmate-workflow-toggle:hover:not(.is-active),
 .askmate-segment:hover:not(.is-active),
 .askmate-reasoning-shell:hover:not(.is-disabled) {
-	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+	background: color-mix(in srgb, var(--askmate-brand) 10%, var(--background-primary));
 	color: var(--text-normal);
 }
 
 .askmate-workflow-toggle.is-active,
 .askmate-segment.is-active {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
-	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+	background: var(--askmate-brand);
+	color: var(--askmate-on-brand);
+	box-shadow: 0 6px 16px color-mix(in srgb, var(--askmate-brand) 24%, transparent);
 }
 
 .askmate-workflow-toggle:disabled,
@@ -917,7 +1096,7 @@
 
 .askmate-reasoning-shell.is-disabled {
 	cursor: not-allowed;
-	opacity: 0.82;
+	opacity: 0.5;
 }
 
 .askmate-reasoning-shell.is-disabled .askmate-reasoning-icon {
@@ -944,10 +1123,6 @@
 	z-index: 2;
 }
 
-.askmate-reasoning-select:disabled {
-	cursor: not-allowed;
-}
-
 .askmate-reasoning-select option {
 	background: var(--background-primary);
 	color: var(--text-normal);
@@ -972,14 +1147,12 @@
 	line-height: 1.4;
 	max-height: 240px;
 	min-height: 68px;
-	outline: 2px solid transparent;
-	padding: 9px 52px 42px 9px;
+	/* The focus ring is drawn on the surrounding shell, which keeps it outside the scrolling text. */
+	outline: none;
+	padding-block: 9px 42px;
+	padding-inline: 9px 52px;
 	resize: vertical;
 	width: 100%;
-}
-
-.askmate-question:focus {
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
 
 .askmate-actions {
@@ -1006,15 +1179,15 @@
 }
 
 .askmate-image-button {
-	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-secondary));
-	border-color: color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) 10%, var(--background-secondary));
+	border-color: color-mix(in srgb, var(--askmate-brand) 34%, var(--background-modifier-border));
 	color: var(--text-normal);
 	padding-inline: 0;
 }
 
 .askmate-context-button {
 	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	border-color: color-mix(in srgb, var(--askmate-brand) 18%, var(--background-modifier-border));
 	color: var(--text-muted);
 	flex-basis: 22px;
 	height: 22px;
@@ -1025,28 +1198,28 @@
 
 .askmate-context-button:hover,
 .askmate-context-button:focus-visible {
-	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--askmate-brand) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--askmate-brand) 40%, var(--background-modifier-border));
 	color: var(--text-normal);
 }
 
 
 .askmate-send-button {
-	box-shadow: 0 10px 24px color-mix(in srgb, var(--interactive-accent) 32%, transparent);
+	box-shadow: 0 10px 24px color-mix(in srgb, var(--askmate-brand) 32%, transparent);
 	min-width: 32px;
 }
 
 .askmate-input-shell .askmate-send-button {
 	bottom: 8px;
 	position: absolute;
-	right: 8px;
+	inset-inline-end: 8px;
 	z-index: 2;
 }
 
 .askmate-send-button:not(:disabled) {
-	background: linear-gradient(135deg, var(--interactive-accent), var(--interactive-accent-hover));
-	border-color: color-mix(in srgb, var(--interactive-accent) 72%, var(--background-modifier-border));
-	color: var(--text-on-accent);
+	background: linear-gradient(135deg, var(--askmate-brand), var(--askmate-brand-hover));
+	border-color: color-mix(in srgb, var(--askmate-brand) 72%, var(--background-modifier-border));
+	color: var(--askmate-on-brand);
 }
 
 .askmate-action-button[hidden] {
@@ -1054,9 +1227,9 @@
 }
 
 .askmate-stop-button:not(:disabled) {
-	background: color-mix(in srgb, var(--color-red) 12%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--color-red) 48%, var(--background-modifier-border));
-	color: var(--text-error);
+	background: color-mix(in srgb, var(--askmate-danger) 12%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--askmate-danger) 48%, var(--background-modifier-border));
+	color: var(--askmate-danger);
 }
 
 .askmate-action-button:disabled {
@@ -1064,7 +1237,10 @@
 	opacity: 0.55;
 }
 
-.askmate-sidebar.is-loading .askmate-avatar-assistant {
+/* Only the reply that is being written pulses, not every assistant avatar in the log. */
+.askmate-messages > .askmate-message-assistant.is-pending .askmate-avatar-assistant,
+.askmate-messages > .askmate-message-assistant.is-streaming .askmate-avatar-assistant,
+.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-avatar-assistant {
 	animation: askmate-pulse 1.4s ease-in-out infinite;
 }
 
@@ -1143,15 +1319,15 @@
 }
 
 .askmate-stat-desc {
-	color: var(--text-faint);
+	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.25;
 	margin-top: 3px;
 }
 
 .askmate-usage-empty {
-	background: color-mix(in srgb, var(--background-secondary) 70%, var(--interactive-accent) 8%);
-	border: 1px dashed color-mix(in srgb, var(--interactive-accent) 32%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--background-secondary) 70%, var(--askmate-brand) 8%);
+	border: 1px dashed color-mix(in srgb, var(--askmate-brand) 32%, var(--background-modifier-border));
 	border-radius: 12px;
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
@@ -1199,14 +1375,14 @@
 
 .askmate-chart-legend-input,
 .askmate-chart-bar-input {
-	fill: var(--interactive-accent);
-	background: var(--interactive-accent);
+	fill: var(--askmate-brand);
+	background: var(--askmate-brand);
 }
 
 .askmate-chart-legend-output,
 .askmate-chart-bar-output {
-	fill: var(--color-orange);
-	background: var(--color-orange);
+	fill: var(--askmate-series-2);
+	background: var(--askmate-series-2);
 }
 
 .askmate-chart-svg {
@@ -1232,7 +1408,7 @@
 
 .askmate-chart-axis-label {
 	fill: var(--text-muted);
-	font-size: 11px;
+	font-size: calc(var(--font-ui-smaller) - 1px);
 }
 
 .askmate-chart-bar-input,
@@ -1246,20 +1422,20 @@
 
 .askmate-chart-line {
 	fill: none;
-	stroke: var(--interactive-accent);
+	stroke: var(--askmate-brand);
 	stroke-linecap: round;
 	stroke-linejoin: round;
 	stroke-width: 3;
 }
 
 .askmate-chart-dot {
-	fill: var(--interactive-accent);
+	fill: var(--askmate-brand);
 	stroke: var(--background-primary);
 	stroke-width: 2;
 }
 
 .askmate-chart-average {
-	stroke: var(--text-faint);
+	stroke: var(--text-muted);
 	stroke-dasharray: 5 5;
 	stroke-width: 1.5;
 }
@@ -1280,7 +1456,7 @@
 .askmate-usage-table td {
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding: 7px 8px;
-	text-align: left;
+	text-align: start;
 	white-space: nowrap;
 }
 
@@ -1341,25 +1517,25 @@
 }
 
 .askmate-budget-fill {
-	background: var(--interactive-accent);
+	background: var(--askmate-brand);
 	height: 100%;
 	width: var(--askmate-budget-fill, 0%);
 }
 
 .askmate-budget-meter.is-near .askmate-budget-fill {
-	background: var(--text-warning);
+	background: var(--askmate-warning);
 }
 
 .askmate-budget-meter.is-over .askmate-budget-fill {
-	background: var(--text-error);
+	background: var(--askmate-danger);
 }
 
 .askmate-budget-meter.is-near .askmate-budget-meter-text {
-	color: var(--text-warning);
+	color: var(--askmate-warning);
 }
 
 .askmate-budget-meter.is-over .askmate-budget-meter-text {
-	color: var(--text-error);
+	color: var(--askmate-danger);
 }
 
 .askmate-budget-note {
@@ -1372,6 +1548,18 @@
 	}
 	50% {
 		transform: scale(1.04);
+	}
+}
+
+@keyframes askmate-caret {
+	to {
+		visibility: hidden;
+	}
+}
+
+@keyframes askmate-spin {
+	to {
+		transform: rotate(360deg);
 	}
 }
 
@@ -1428,7 +1616,7 @@
 }
 
 .askmate-request-preview-summary.has-blocker {
-	color: var(--text-error);
+	color: var(--askmate-danger);
 }
 
 .askmate-request-preview-controls {
@@ -1520,11 +1708,11 @@
 }
 
 .askmate-settings-feedback.is-error {
-	color: var(--text-error);
+	color: var(--askmate-danger);
 }
 
 .askmate-settings-feedback.is-success {
-	color: var(--text-success);
+	color: var(--askmate-success);
 }
 
 .askmate-settings-feedback.is-info {
@@ -1532,7 +1720,7 @@
 }
 
 .askmate-settings-setup {
-	border-inline-start: 3px solid var(--text-warning);
+	border-inline-start: 3px solid var(--askmate-warning);
 	padding-inline-start: 12px;
 }
 
@@ -1557,7 +1745,7 @@
 }
 
 .askmate-workflow-favorite.is-active {
-	color: var(--text-accent);
+	color: var(--askmate-brand);
 }
 
 .askmate-workflow-favorite.is-active svg {
@@ -1602,8 +1790,8 @@
 }
 
 .askmate-evidence-label {
-	color: var(--text-faint);
-	font-size: 10px;
+	color: var(--text-muted);
+	font-size: calc(var(--font-ui-smaller) - 2px);
 	font-weight: 700;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
@@ -1615,7 +1803,7 @@
 	background: var(--background-secondary);
 	color: var(--text-muted);
 	cursor: pointer;
-	font-size: 10px;
+	font-size: calc(var(--font-ui-smaller) - 2px);
 	max-width: min(260px, 100%);
 	overflow: hidden;
 	padding: 3px 8px;
@@ -1626,7 +1814,7 @@
 .askmate-evidence-chip:hover,
 .askmate-evidence-chip:focus-visible {
 	color: var(--text-normal);
-	border-color: var(--interactive-accent);
+	border-color: var(--askmate-brand);
 }
 
 .modal.askmate-modal-wide {
@@ -1638,19 +1826,39 @@
 	white-space: pre-line;
 }
 
+.askmate-modal-input {
+	width: 100%;
+}
+
+/* Button rows: right-aligned with a gap. A destructive button placed first in the row sits on the left. */
+.askmate-modal-actions,
+.askmate-modal-buttons {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 16px;
+}
+
+.askmate-modal-actions > .mod-warning,
+.askmate-modal-buttons > .mod-warning {
+	margin-inline-end: auto;
+}
+
 .askmate-diff-summary,
 .askmate-prompt-inspector-meta,
 .askmate-note-history-meta,
 .askmate-review-item-meta {
 	color: var(--text-muted);
-	font-size: 12px;
+	font-size: var(--font-ui-smaller);
 	margin: 4px 0 8px;
 }
 
 .askmate-diff-warning,
 .askmate-budget-warning {
 	border: 1px solid var(--background-modifier-border);
-	border-left: 3px solid var(--text-warning);
+	border-inline-start: 3px solid var(--askmate-warning);
 	border-radius: 8px;
 	background: var(--background-secondary);
 	padding: 8px 10px;
@@ -1658,14 +1866,14 @@
 }
 
 .askmate-budget-blocker {
-	border-left-color: var(--text-error);
+	border-inline-start-color: var(--askmate-danger);
 }
 
 .askmate-diff-view {
 	max-height: 52vh;
 	overflow: auto;
 	font-family: var(--font-monospace);
-	font-size: 12px;
+	font-size: var(--font-ui-smaller);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	background: var(--background-primary);
@@ -1680,11 +1888,11 @@
 }
 
 .askmate-diff-line-added {
-	background: color-mix(in srgb, var(--color-green) 12%, transparent);
+	background: color-mix(in srgb, var(--askmate-success) 12%, transparent);
 }
 
 .askmate-diff-line-removed {
-	background: color-mix(in srgb, var(--color-red) 12%, transparent);
+	background: color-mix(in srgb, var(--askmate-danger) 12%, transparent);
 }
 
 .askmate-diff-line-context {
@@ -1698,8 +1906,8 @@
 }
 
 .askmate-diff-line-number {
-	color: var(--text-faint);
-	text-align: right;
+	color: var(--text-muted);
+	text-align: end;
 	user-select: none;
 }
 
@@ -1713,12 +1921,12 @@
 	min-height: 180px;
 	resize: vertical;
 	font-family: var(--font-monospace);
-	font-size: 12px;
+	font-size: var(--font-ui-smaller);
 }
 
 .askmate-request-preview-button {
 	border-radius: 999px;
-	font-size: 11px;
+	font-size: calc(var(--font-ui-smaller) - 1px);
 	padding: 3px 8px;
 }
 
@@ -1741,7 +1949,7 @@
 }
 
 .askmate-batch-progress {
-	font-size: 12px;
+	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 	margin-bottom: 6px;
 }
@@ -1757,12 +1965,12 @@
 .askmate-batch-progress-fill {
 	height: 100%;
 	width: var(--askmate-batch-fill, 0%);
-	background: var(--interactive-accent);
+	background: var(--askmate-brand);
 	transition: width 180ms ease;
 }
 
 .askmate-review-excerpt {
-	font-size: 12px;
+	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
@@ -1842,10 +2050,17 @@
 	box-shadow: none;
 	display: block;
 	padding: 1px 0;
+	position: relative;
 }
 
+/* Hidden from sight but kept in the accessibility tree, so the You, AskMate and Status labels are still announced. */
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-header {
-	display: none;
+	clip: rect(0 0 0 0);
+	height: 1px;
+	overflow: hidden;
+	position: absolute;
+	white-space: nowrap;
+	width: 1px;
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-body {
@@ -1866,7 +2081,7 @@
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-user .askmate-message-body::before,
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-echo .askmate-message-body::before {
-	color: var(--interactive-accent);
+	color: var(--askmate-brand);
 	content: "askmate › ";
 	font-weight: 600;
 }
@@ -1875,9 +2090,16 @@
 	color: var(--text-muted);
 }
 
-.askmate-sidebar.askmate-composer-layout-console .askmate-message-system:not(.askmate-console-echo):not(.askmate-console-output) .askmate-message-body::before {
+/* The dot belongs on one-line notes only. Before a card or a preview it would sit alone on its own line. */
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-system:not(.askmate-console-echo, .askmate-console-output, .askmate-onboarding-message, .askmate-message-has-image, .askmate-message-card) .askmate-message-body::before {
 	color: var(--text-faint);
 	content: "· ";
+}
+
+/* An error keeps its mark in the console instead of the plain dot. */
+.askmate-sidebar.askmate-composer-layout-console .askmate-message.is-error .askmate-message-body::before {
+	color: var(--askmate-danger);
+	content: "! ";
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-output .askmate-message-body {
@@ -1887,12 +2109,12 @@
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-output.is-error .askmate-message-body {
-	color: var(--text-error);
+	color: var(--askmate-danger);
 	white-space: pre-wrap;
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-assistant .askmate-message-body:empty::before {
-	color: var(--text-faint);
+	color: var(--text-muted);
 	content: "working…";
 }
 
@@ -1951,9 +2173,7 @@
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-action:hover,
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-action:focus-visible {
 	background: transparent;
-	color: var(--interactive-accent);
-	outline: 1px dotted var(--interactive-accent);
-	outline-offset: 1px;
+	color: var(--askmate-brand);
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-evidence {
@@ -1971,7 +2191,7 @@
 	background: transparent;
 	border: 0;
 	box-shadow: none;
-	color: var(--text-faint);
+	color: var(--text-muted);
 	font: inherit;
 	font-size: var(--font-ui-smaller);
 	height: auto;
@@ -1985,7 +2205,7 @@
 .askmate-sidebar.askmate-composer-layout-console .askmate-message-incomplete-warning {
 	background: transparent;
 	border: 0;
-	color: var(--text-warning);
+	color: var(--askmate-warning);
 	margin: 0;
 	padding: 0;
 }
@@ -2014,7 +2234,7 @@
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-prompt {
-	color: var(--interactive-accent);
+	color: var(--askmate-brand);
 	display: block;
 	font-weight: 600;
 	line-height: 1.55;
@@ -2033,8 +2253,9 @@
 	resize: none;
 }
 
-.askmate-sidebar.askmate-composer-layout-console .askmate-question:focus {
-	box-shadow: none;
+/* The console prompt has no box, so the ring sits just inside the line. */
+.askmate-sidebar.askmate-composer-layout-console .askmate-input-shell:focus-within {
+	outline-offset: -2px;
 }
 
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-completions:not([hidden]) {
@@ -2070,10 +2291,12 @@
 	white-space: nowrap;
 }
 
+/* A calm bar on the theme's own surface, with the brand colour kept for the mode segment, instead of inverted text colours. */
 .askmate-sidebar.askmate-composer-layout-console .askmate-console-status {
 	align-items: stretch;
-	background: var(--text-normal);
-	color: var(--background-primary);
+	background: var(--askmate-surface-raised);
+	border-top: 1px solid var(--askmate-border);
+	color: var(--text-normal);
 	display: flex;
 	font-size: var(--font-ui-smaller);
 	line-height: 1.6;
@@ -2086,11 +2309,32 @@
 }
 
 .askmate-console-segment {
-	border-right: 1px solid color-mix(in srgb, var(--background-primary) 28%, transparent);
+	border-inline-end: 1px solid var(--askmate-border);
 	overflow: hidden;
 	padding: 2px 8px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* Setup, skills and MCP segments: plain text, or a status chip, with a button state when they open something. */
+.askmate-console-segment .askmate-status-chip {
+	background: transparent;
+	border: 0;
+	padding: 0;
+}
+
+.askmate-sidebar .askmate-console-segment:is(.is-setup, .is-skills, .is-mcp) {
+	background: transparent;
+	color: inherit;
+}
+
+.askmate-sidebar .askmate-console-segment:is(.is-setup, .is-skills, .is-mcp):hover:not(:disabled) {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), transparent);
+}
+
+.askmate-sidebar .askmate-console-segment.is-setup {
+	color: var(--text-normal);
+	font-weight: 600;
 }
 
 .askmate-console-segment.is-model {
@@ -2099,8 +2343,8 @@
 }
 
 .askmate-console-segment.is-usage {
-	border-right: 0;
-	margin-left: auto;
+	border-inline-end: 0;
+	margin-inline-start: auto;
 }
 
 .askmate-sidebar .askmate-console-status button {
@@ -2114,8 +2358,8 @@
 }
 
 .askmate-sidebar .askmate-console-segment.is-mode {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
+	background: var(--askmate-brand);
+	color: var(--askmate-on-brand);
 	font-weight: 600;
 }
 
@@ -2126,7 +2370,7 @@
 
 .askmate-sidebar .askmate-console-segment.is-model:hover:not(:disabled),
 .askmate-sidebar .askmate-console-segment.is-model:focus-visible {
-	background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), transparent);
 }
 
 .askmate-sidebar .askmate-console-segment.is-model:disabled {
@@ -2139,8 +2383,8 @@
 }
 
 .askmate-sidebar .askmate-console-stop {
-	background: var(--text-error);
-	color: var(--background-primary);
+	background: var(--askmate-danger);
+	color: var(--askmate-on-danger);
 	font-weight: 600;
 }
 
@@ -2148,9 +2392,670 @@
 	display: none;
 }
 
+/* Inside the bar the ring is drawn inwards so it is not cut off by the edge of the sidebar. */
 .askmate-sidebar .askmate-console-status button:focus-visible {
-	outline: 2px solid var(--interactive-accent);
 	outline-offset: -2px;
+}
+
+/*
+ * The inward ring lands on the button's own fill, where the brand or danger ring would vanish, so these two take the fill's
+ * text colour. They also sit 2px further in, so fill surrounds the ring on both sides: at the edge it would blend into the
+ * pale status bar and the button would only look slightly smaller.
+ */
+.askmate-sidebar .askmate-console-status .askmate-console-segment.is-mode:focus-visible {
+	outline-color: var(--askmate-on-brand);
+	outline-offset: -4px;
+}
+
+.askmate-sidebar .askmate-console-status .askmate-console-stop:focus-visible {
+	outline-color: var(--askmate-on-danger);
+	outline-offset: -4px;
+}
+
+/* ---------- Status chips (settings and console) ---------- */
+/* The state shows as a glyph and a border as well as a colour, and the text stays neutral so it keeps its contrast. */
+.askmate-status-chip {
+	align-items: center;
+	background: color-mix(in srgb, var(--askmate-surface-raised) 80%, var(--askmate-surface));
+	border: 1px solid var(--askmate-border);
+	border-radius: 999px;
+	color: var(--text-normal);
+	display: inline-flex;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 600;
+	gap: 5px;
+	line-height: 1.2;
+	padding: 2px 8px;
+	white-space: nowrap;
+}
+
+.askmate-status-chip::before {
+	font-weight: 800;
+}
+
+.askmate-status-chip.is-ready {
+	border-color: color-mix(in srgb, var(--askmate-success) 55%, var(--askmate-border));
+}
+
+.askmate-status-chip.is-ready::before {
+	color: var(--askmate-success);
+	content: "✓";
+}
+
+.askmate-status-chip.is-warning {
+	border-color: color-mix(in srgb, var(--askmate-warning) 60%, var(--askmate-border));
+}
+
+.askmate-status-chip.is-warning::before {
+	color: var(--askmate-warning);
+	content: "!";
+}
+
+.askmate-status-chip.is-error {
+	border-color: color-mix(in srgb, var(--askmate-danger) 60%, var(--askmate-border));
+}
+
+.askmate-status-chip.is-error::before {
+	color: var(--askmate-danger);
+	content: "×";
+}
+
+.askmate-status-chip.is-off {
+	color: var(--text-muted);
+}
+
+.askmate-status-chip.is-off::before {
+	content: "–";
+}
+
+.askmate-status-chip.is-busy {
+	border-color: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+}
+
+.askmate-status-chip.is-busy::before {
+	color: var(--askmate-brand);
+	content: "…";
+}
+
+/* ---------- Primary buttons inside the sidebar use the brand colour ---------- */
+.askmate-sidebar button.mod-cta {
+	background: var(--askmate-brand);
+	color: var(--askmate-on-brand);
+}
+
+.askmate-sidebar button.mod-cta:hover:not(:disabled) {
+	background: var(--askmate-brand-hover);
+	color: var(--askmate-on-brand);
+}
+
+/* ---------- Setup card ---------- */
+.askmate-setup-card {
+	background: linear-gradient(160deg, color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface)), var(--askmate-surface) 70%);
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+	border-radius: var(--askmate-radius-md);
+	counter-reset: askmate-step;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 0;
+	padding: 12px;
+}
+
+.askmate-setup-title {
+	align-items: center;
+	display: flex;
+	font-size: var(--font-ui-medium);
+	font-weight: 700;
+	gap: 8px;
+	line-height: 1.25;
+	margin: 0;
+}
+
+.askmate-setup-step {
+	color: var(--text-muted);
+	counter-increment: askmate-step;
+	display: grid;
+	font-size: var(--font-ui-small);
+	gap: 6px 8px;
+	grid-template-columns: 22px minmax(0, 1fr);
+	line-height: 1.4;
+	min-width: 0;
+}
+
+.askmate-setup-step > * {
+	grid-column: 2;
+	min-width: 0;
+}
+
+.askmate-setup-step::before {
+	align-items: center;
+	align-self: start;
+	background: var(--askmate-surface-raised);
+	border: 1px solid var(--askmate-border);
+	border-radius: 999px;
+	color: var(--text-muted);
+	content: counter(askmate-step);
+	display: flex;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 700;
+	height: 22px;
+	justify-content: center;
+	width: 22px;
+}
+
+.askmate-setup-step.is-current {
+	color: var(--text-normal);
+}
+
+.askmate-setup-step.is-current::before {
+	background: var(--askmate-brand);
+	border-color: var(--askmate-brand);
+	color: var(--askmate-on-brand);
+}
+
+.askmate-setup-step.is-done::before {
+	background: color-mix(in srgb, var(--askmate-success) var(--askmate-tint-2), var(--askmate-surface));
+	border-color: var(--askmate-success);
+	color: var(--askmate-success);
+	content: "✓";
+}
+
+.askmate-setup-providers {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.askmate-setup-provider {
+	align-items: center;
+	background: var(--askmate-surface);
+	border: 1px solid var(--askmate-border);
+	border-radius: var(--askmate-radius-sm);
+	box-shadow: none;
+	color: var(--text-normal);
+	cursor: pointer;
+	display: flex;
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	gap: 6px;
+	height: auto;
+	justify-content: flex-start;
+	min-height: 32px;
+	min-width: 0;
+	padding: 6px 8px;
+	text-align: start;
+}
+
+.askmate-setup-provider:hover {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-1), var(--askmate-surface));
+	border-color: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+}
+
+/* The selected provider also gets a tick, so the choice is not shown by colour alone. */
+.askmate-setup-provider.is-selected {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface));
+	border-color: var(--askmate-brand);
+	box-shadow: inset 0 0 0 1px var(--askmate-brand);
+}
+
+.askmate-setup-provider.is-selected::before {
+	color: var(--askmate-brand);
+	content: "✓";
+	font-weight: 800;
+}
+
+.askmate-setup-key-row {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.askmate-setup-key-row input {
+	flex: 1 1 140px;
+	font-family: var(--font-monospace);
+	min-width: 0;
+}
+
+.askmate-setup-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.askmate-setup-error {
+	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
+	border: 1px solid color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
+	border-inline-start: 3px solid var(--askmate-danger);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+	padding: 6px 8px;
+}
+
+.askmate-setup-error::before {
+	color: var(--askmate-danger);
+	content: "! ";
+	font-weight: 800;
+}
+
+.askmate-starter-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.askmate-starter-chip {
+	background: var(--askmate-surface);
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+	border-radius: 999px;
+	box-shadow: none;
+	color: var(--text-normal);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	height: auto;
+	padding: 4px 10px;
+}
+
+.askmate-starter-chip:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface));
+	border-color: var(--askmate-brand);
+}
+
+.askmate-starter-chip:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+/* ---------- Skill chips and badge ---------- */
+.askmate-skill-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+.askmate-skill-chip {
+	align-items: center;
+	background: var(--askmate-surface);
+	border: 1px solid var(--askmate-border);
+	border-radius: 999px;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	display: inline-flex;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 600;
+	gap: 4px;
+	height: auto;
+	line-height: 1.2;
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
+	padding: 3px 9px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-skill-chip:hover {
+	border-color: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+	color: var(--text-normal);
+}
+
+.askmate-skill-chip.is-active {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface));
+	border-color: var(--askmate-brand);
+	color: var(--text-normal);
+}
+
+.askmate-skill-chip.is-active::before {
+	color: var(--askmate-brand);
+	content: "✓";
+	font-weight: 800;
+}
+
+.askmate-skill-chip.is-suggested {
+	border-color: var(--askmate-brand);
+	border-style: dashed;
+	color: var(--text-normal);
+}
+
+.askmate-skill-chip.is-suggested::before {
+	color: var(--askmate-brand);
+	content: "+";
+	font-weight: 800;
+}
+
+.askmate-skill-badge {
+	align-items: center;
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-1), var(--askmate-surface));
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+	border-radius: 999px;
+	color: var(--text-muted);
+	display: inline-flex;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 600;
+	gap: 4px;
+	line-height: 1.2;
+	max-width: 100%;
+	padding: 1px 8px;
+	width: max-content;
+}
+
+.askmate-skill-badge::before {
+	color: var(--askmate-accent);
+	content: "◆";
+	font-size: 0.8em;
+}
+
+/* ---------- Diagram card ---------- */
+.askmate-diagram-card {
+	background: var(--askmate-surface);
+	border: 1px solid var(--askmate-border);
+	border-inline-start: 3px solid var(--askmate-accent);
+	border-radius: var(--askmate-radius-md);
+	display: flex;
+	flex-direction: column;
+	margin-block: 0.55em;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.askmate-diagram-card-header {
+	align-items: center;
+	background: var(--askmate-surface-raised);
+	border-bottom: 1px solid var(--askmate-border);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	justify-content: space-between;
+	padding: 6px 10px;
+}
+
+.askmate-diagram-meta {
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+/* A framed viewport. A wide diagram scrolls at its natural size instead of shrinking until the text is unreadable. */
+.askmate-diagram-preview {
+	max-height: min(60vh, 420px);
+	min-width: 0;
+	overflow: auto;
+	padding: 8px;
+}
+
+.askmate-diagram-preview > svg,
+.askmate-diagram-preview > .mermaid > svg {
+	display: block;
+	height: auto;
+	margin-inline: auto;
+	max-width: none;
+}
+
+/* Obsidian inverts Mermaid output in dark themes. The same filter is applied here so a preview matches the note it will land in. */
+.theme-dark .askmate-diagram-preview > svg,
+.theme-dark .askmate-diagram-preview > .mermaid > svg {
+	filter: invert(100%) hue-rotate(180deg) saturate(1.25);
+}
+
+.askmate-diagram-actions {
+	align-items: center;
+	border-top: 1px solid var(--askmate-border);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 6px 10px;
+}
+
+.askmate-diagram-actions button {
+	font-size: var(--font-ui-smaller);
+	height: auto;
+	padding: 3px 9px;
+}
+
+.askmate-diagram-fallback {
+	background: color-mix(in srgb, var(--askmate-warning) var(--askmate-tint-1), var(--askmate-surface));
+	border-inline-start: 3px solid var(--askmate-warning);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.45;
+	min-width: 0;
+	padding: 8px 10px;
+}
+
+.askmate-diagram-fallback pre {
+	background: var(--code-background, var(--background-primary-alt));
+	border: 1px solid var(--askmate-border);
+	border-radius: var(--askmate-radius-sm);
+	font-family: var(--font-monospace);
+	margin: 6px 0 0;
+	max-height: 220px;
+	overflow: auto;
+	padding: 6px 8px;
+}
+
+.askmate-diagram-placeholder {
+	align-items: center;
+	border: 1px dashed var(--askmate-border);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--text-muted);
+	display: flex;
+	font-size: var(--font-ui-small);
+	gap: 8px;
+	justify-content: center;
+	min-height: 96px;
+	padding: 12px;
+}
+
+.askmate-diagram-placeholder::before {
+	animation: askmate-spin 0.9s linear infinite;
+	border: 2px solid var(--askmate-brand);
+	border-block-start-color: transparent;
+	border-radius: 999px;
+	content: "";
+	flex: 0 0 auto;
+	height: 14px;
+	width: 14px;
+}
+
+/* ---------- Tool call card ---------- */
+.askmate-tool-card {
+	background: var(--askmate-surface);
+	border: 1px solid var(--askmate-border);
+	border-inline-start: 3px solid var(--askmate-border);
+	border-radius: var(--askmate-radius-md);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-block: 0.55em;
+	min-width: 0;
+	padding: 8px 10px;
+}
+
+.askmate-tool-card.is-pending {
+	background: color-mix(in srgb, var(--askmate-warning) var(--askmate-tint-1), var(--askmate-surface));
+	border-inline-start-color: var(--askmate-warning);
+}
+
+.askmate-tool-card.is-running {
+	border-inline-start-color: var(--askmate-brand);
+}
+
+.askmate-tool-card.is-done {
+	border-inline-start-color: var(--askmate-success);
+}
+
+.askmate-tool-card.is-error {
+	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
+	border-inline-start-color: var(--askmate-danger);
+}
+
+.askmate-tool-card.is-denied {
+	border-inline-start-color: var(--text-muted);
+	border-style: dashed;
+}
+
+.askmate-tool-card-header {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	font-size: var(--font-ui-small);
+	font-weight: 650;
+	gap: 4px 8px;
+	justify-content: flex-start;
+	line-height: 1.3;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+/* A leading mark per state, so the state is readable without colour. */
+.askmate-tool-card-header::before {
+	font-weight: 800;
+	margin-inline-end: -2px;
+	min-width: 1ch;
+}
+
+.askmate-tool-card.is-pending > .askmate-tool-card-header::before {
+	color: var(--askmate-warning);
+	content: "?";
+}
+
+.askmate-tool-card.is-running > .askmate-tool-card-header::before {
+	color: var(--askmate-brand);
+	content: "…";
+}
+
+.askmate-tool-card.is-done > .askmate-tool-card-header::before {
+	color: var(--askmate-success);
+	content: "✓";
+}
+
+.askmate-tool-card.is-error > .askmate-tool-card-header::before {
+	color: var(--askmate-danger);
+	content: "!";
+}
+
+.askmate-tool-card.is-denied > .askmate-tool-card-header::before {
+	color: var(--text-muted);
+	content: "×";
+}
+
+.askmate-tool-args {
+	background: var(--code-background, var(--background-primary-alt));
+	border: 1px solid var(--askmate-border);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--code-normal, var(--text-normal));
+	font-family: var(--font-monospace);
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	line-height: 1.45;
+	margin: 0;
+	max-height: 160px;
+	overflow: auto;
+	overflow-wrap: anywhere;
+	padding: 6px 8px;
+	white-space: pre-wrap;
+}
+
+.askmate-tool-result {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	max-height: 160px;
+	overflow: auto;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.askmate-tool-card-header > .askmate-status-chip {
+	margin-inline-start: auto;
+}
+
+.askmate-tool-approval-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+/* Deny is a quiet outline, so the safe choice is never the loudest button on the card. */
+.askmate-tool-approval-actions button.mod-warning {
+	background: transparent;
+	border: 1px solid var(--askmate-danger);
+	box-shadow: none;
+	color: var(--askmate-danger);
+}
+
+/* ---------- Settings rows and callout ---------- */
+.askmate-skill-row,
+.askmate-mcp-row {
+	border-inline-start: 3px solid transparent;
+	padding-inline-start: 10px;
+}
+
+.askmate-skill-row .setting-item-description,
+.askmate-mcp-row .setting-item-description {
+	overflow-wrap: anywhere;
+}
+
+.askmate-skill-row .askmate-status-chip,
+.askmate-mcp-row .askmate-status-chip {
+	margin-inline-end: 6px;
+}
+
+.askmate-settings-callout {
+	background: color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-1), var(--askmate-surface));
+	border: 1px solid color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-3), var(--askmate-border));
+	border-inline-start: 3px solid var(--askmate-brand);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+	margin-block: 8px;
+	padding: 8px 12px;
+}
+
+.askmate-settings-callout.is-warning {
+	background: color-mix(in srgb, var(--askmate-warning) var(--askmate-tint-1), var(--askmate-surface));
+	border-color: color-mix(in srgb, var(--askmate-warning) var(--askmate-tint-3), var(--askmate-border));
+	border-inline-start-color: var(--askmate-warning);
+}
+
+.askmate-settings-callout.is-error {
+	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
+	border-color: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
+	border-inline-start-color: var(--askmate-danger);
+}
+
+/* ---------- Approval, trust and review modals ---------- */
+.modal.askmate-approval-modal,
+.modal.askmate-trust-modal {
+	max-width: 92vw;
+	width: min(560px, 92vw);
+}
+
+.modal.askmate-skill-review-modal {
+	max-width: 92vw;
+	width: min(720px, 92vw);
+}
+
+.askmate-approval-modal,
+.askmate-trust-modal,
+.askmate-skill-review-modal {
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.askmate-approval-modal .askmate-tool-args,
+.askmate-trust-modal .askmate-tool-args,
+.askmate-skill-review-modal .askmate-tool-args {
+	max-height: 40vh;
 }
 
 @media (pointer: coarse) {
@@ -2161,6 +3066,14 @@
 		min-height: 44px;
 		min-width: 44px;
 	}
+
+	.askmate-setup-provider,
+	.askmate-starter-chip,
+	.askmate-skill-chip,
+	.askmate-tool-approval-actions button,
+	.askmate-diagram-actions button {
+		min-height: 44px;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2170,31 +3083,56 @@
 		transition: none;
 	}
 
-	.askmate-sidebar.is-loading .askmate-avatar-assistant {
+	.askmate-messages > .askmate-message-assistant.is-pending .askmate-avatar-assistant,
+	.askmate-messages > .askmate-message-assistant.is-streaming .askmate-avatar-assistant,
+	.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-avatar-assistant {
 		animation: none;
 	}
 
 	.askmate-workflow-card:hover {
 		transform: none;
 	}
+
+	/* A steady caret instead of a blinking one, and a static ring instead of a spinner. */
+	.askmate-message.is-streaming .askmate-rendered-markdown > :last-child::after,
+	.askmate-message.is-streaming .askmate-message-body:not(.askmate-message-body-markdown)::after,
+	.askmate-diagram-placeholder::before {
+		animation: none;
+	}
 }
 
 @media (forced-colors: active) {
-	.askmate-action-button:focus-visible,
-	.askmate-message-action:focus-visible,
-	.askmate-workflow-card:focus-visible,
-	.askmate-workflow-toggle:focus-visible,
-	.askmate-segment:focus-visible,
+	/* The solid outline survives forced colours, and the system picks its colour. */
+	.askmate-sidebar :is(button, select, summary, a, input, textarea, [tabindex]):where(:not(.askmate-question)):focus-visible,
 	.askmate-reasoning-shell:focus-within,
 	.askmate-icon-select-control:focus-within,
-	.askmate-request-preview-select:focus-visible,
-	.askmate-question:focus {
+	.askmate-input-shell:focus-within {
 		outline: 2px solid CanvasText;
 	}
 
 	.askmate-workflow-toggle.is-active,
-	.askmate-segment.is-active {
+	.askmate-segment.is-active,
+	.askmate-skill-chip.is-active,
+	.askmate-setup-provider.is-selected {
 		outline: 2px solid Highlight;
+	}
+
+	/* Chips, cards and badges lose their tinted fills, so each keeps a visible border. */
+	.askmate-status-chip,
+	.askmate-skill-chip,
+	.askmate-skill-badge,
+	.askmate-starter-chip,
+	.askmate-setup-provider,
+	.askmate-setup-card,
+	.askmate-tool-card,
+	.askmate-diagram-card,
+	.askmate-settings-callout {
+		border: 1px solid CanvasText;
+	}
+
+	.askmate-tool-card.is-denied,
+	.askmate-skill-chip.is-suggested {
+		border-style: dashed;
 	}
 
 	.askmate-chart-axis-line,

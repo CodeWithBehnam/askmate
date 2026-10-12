@@ -107,8 +107,22 @@ for (const match of allSource.matchAll(/askmate-[a-z0-9-]*-(?=\$\{|"\s*\+)/g)) {
 	dynamicPrefixes.add(match[0]);
 }
 const cssClasses = new Set(Array.from(styles.matchAll(/\.(askmate-[a-z0-9-]+)/g), (match) => match[1]));
+// Wave 2 component classes (docs: wave 2 contract, section 2). The stylesheet lands before the packages that emit them,
+// so the guard would fail on a branch that has the styles but not yet the markup. Delete an entry once its emitter is in
+// src; from then on the guard protects that selector like every other one.
+const awaitingEmitter = new Set([
+	"askmate-brand-mark",
+	"askmate-setup-card", "askmate-setup-title", "askmate-setup-step", "askmate-setup-providers", "askmate-setup-provider",
+	"askmate-setup-key-row", "askmate-setup-actions", "askmate-setup-error", "askmate-starter-chips", "askmate-starter-chip",
+	"askmate-skill-chips", "askmate-skill-chip", "askmate-skill-badge",
+	"askmate-diagram-card", "askmate-diagram-card-header", "askmate-diagram-meta", "askmate-diagram-preview",
+	"askmate-diagram-actions", "askmate-diagram-fallback", "askmate-diagram-placeholder",
+	"askmate-tool-card", "askmate-tool-card-header", "askmate-tool-args", "askmate-tool-result", "askmate-tool-approval-actions",
+	"askmate-status-chip", "askmate-skill-row", "askmate-mcp-row", "askmate-settings-callout",
+	"askmate-approval-modal", "askmate-trust-modal", "askmate-skill-review-modal", "askmate-modal-buttons"
+]);
 for (const cssClass of cssClasses) {
-	const used = allSource.includes(cssClass) || Array.from(dynamicPrefixes).some((prefix) => cssClass.startsWith(prefix));
+	const used = awaitingEmitter.has(cssClass) || allSource.includes(cssClass) || Array.from(dynamicPrefixes).some((prefix) => cssClass.startsWith(prefix));
 	check(used, `styles.css selector .${cssClass} is not used in src`);
 }
 
