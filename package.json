@@ -4,10 +4,16 @@
 	"author": "Behnam Ebrahimi",
 	"main": "main.js",
 	"devDependencies": {
+		"@types/bun": "1.4.2",
 		"@types/node": "^24.0.0",
 		"esbuild": "^0.25.0",
+		"eslint": "9.39.5",
+		"eslint-plugin-obsidianmd": "0.4.2",
+		"happy-dom": "20.14.5",
+		"mermaid": "11.13.0",
 		"obsidian": "1.13.1",
-		"typescript": "^5.9.0"
+		"typescript": "^5.9.0",
+		"typescript-eslint": "8.70.1"
 	},
 	"overrides": {
 		"moment": "2.31.0"
@@ -31,6 +37,8 @@
 		"build": "tsc -noEmit -skipLibCheck && bun run esbuild.config.mjs production",
 		"test": "bun run scripts/roadmap-smoke-tests.ts && bun test tests",
 		"install:vault": "bun run build && bun run scripts/install-to-vault.ts",
-		"verify:vault": "bun run build && bun run scripts/install-to-vault.ts --verify-only"
+		"verify:vault": "bun run build && bun run scripts/install-to-vault.ts --verify-only",
+		"lint": "eslint .",
+		"typecheck:tests": "tsc -p tsconfig.tests.json --noEmit"
 	}
 }
