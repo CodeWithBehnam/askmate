@@ -368,7 +368,9 @@ export function normalizeReviewQueueItems(value: unknown, maxItems = DEFAULT_REV
 				providerName: typeof item.providerName === "string" ? item.providerName.trim().slice(0, 80) : "AskMate",
 				model: typeof item.model === "string" ? item.model.trim().slice(0, 120) : "",
 				workflowId: typeof item.workflowId === "string" ? item.workflowId.trim().slice(0, 120) : null,
-				workflowName: typeof item.workflowName === "string" ? item.workflowName.trim().slice(0, 120) : null
+				workflowName: typeof item.workflowName === "string" ? item.workflowName.trim().slice(0, 120) : null,
+				// Only a pending item is ever applied, and the flag is written only when set so ordinary items stay as they were.
+				...(status === "pending" && item.toolDerived === true ? { toolDerived: true } : {})
 			};
 		})
 		.filter((item): item is ReviewQueueItem => Boolean(item))

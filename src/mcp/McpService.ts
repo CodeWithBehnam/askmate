@@ -3,6 +3,7 @@ import { type McpServerConfig, type McpSettings, type McpValue, findSecretRisks,
 import { describeMcpError } from "./errors";
 import type {
 	ApprovalChoice,
+	DeviceTrustStore,
 	McpHost,
 	McpServerState,
 	McpServerStatus,
@@ -87,6 +88,15 @@ export type TrustOutcome =
 	| { readonly kind: "invalid"; readonly message: string };
 
 const trustKey = (serverId: string): string => `server:${serverId}`;
+
+/**
+ * Forgets a server's trust record on this device. It needs no running service, which does not exist while tools are off, so
+ * the plugin can revoke trust at any time. McpService.revokeTrust uses it too, so both remove the same key.
+ */
+export function forgetServerTrust(store: DeviceTrustStore, serverId: string): void {
+	store.remove(trustKey(serverId));
+}
+
 const pinKey = (serverId: string, toolName: string): string => `tool:${serverId}:${toolName}`;
 const grantKey = (serverId: string, toolName: string): string => `${serverId}\0${toolName}`;
 
@@ -319,7 +329,7 @@ export class McpService {
 
 	/** Forgets trust for a server and stops it. The next start asks again. */
 	async revokeTrust(serverId: string): Promise<void> {
-		this.host.deviceTrust.remove(trustKey(serverId));
+		forgetServerTrust(this.host.deviceTrust, serverId);
 		const runtime = this.runtimes.get(serverId);
 		if (runtime) {
 			await this.dispose(runtime);

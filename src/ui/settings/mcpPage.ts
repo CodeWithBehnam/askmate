@@ -7,6 +7,7 @@ import {
 	slugifyServerId,
 	validateServerConfig,
 	type ImportResult,
+	type McpService,
 	type McpServerState,
 	type McpServerStatus
 } from "../../mcp";
@@ -24,7 +25,7 @@ import {
 import { askMateConfirm } from "../modals/modals";
 import { askNewServer } from "../modals/McpAddServerModal";
 import { askMcpImport } from "../modals/McpImportModal";
-import { linkFragment, statusChipClass, type ChipTone, type McpServiceView, type PluginWave2Api, type SettingsPageHost } from "./connectionPage";
+import { linkFragment, statusChipClass, type ChipTone, type SettingsPageHost } from "./connectionPage";
 import { uniqueLabels } from "./settingsInputs";
 import { pluralise } from "./settingsSummaries";
 
@@ -207,51 +208,11 @@ export function ownedSecretIds(server: McpServerConfig): string[] {
 	return ids.filter((id) => id.startsWith(`${MCP_SECRET_PREFIX}${server.id}-`));
 }
 
-type TrustReach = Pick<PluginWave2Api, "mcpService" | "revokeMcpTrust">;
-
-/**
- * Whether trust on this device can be forgotten right now: through the running service, or through the plugin's own path.
- * The service does not exist while tools are off, which is the default, so it cannot be assumed.
- */
-export function canRevokeTrust(reach: TrustReach): boolean {
-	return Boolean(reach.mcpService) || Boolean(reach.revokeMcpTrust);
-}
-
-/** Forgets a server's trust on this device. Returns false, having changed nothing, when there is no way to reach the trust record. */
-export async function revokeServerTrust(reach: TrustReach, serverId: string): Promise<boolean> {
-	// Called as members: the plugin's methods read `this`.
-	if (reach.mcpService) {
-		await reach.mcpService.revokeTrust(serverId);
-		return true;
-	}
-	if (reach.revokeMcpTrust) {
-		await reach.revokeMcpTrust(serverId);
-		return true;
-	}
-	return false;
-}
-
 export const TRUST_REVOKED_TEXT = "Trust revoked. The server is stopped and asks again before it starts.";
 
-/**
- * Why trust cannot be revoked. The service is missing while tools are off, and also on a device that cannot run tools at all
- * (mobile), where turning tools on would not help, so the advice differs.
- */
-export function describeTrustUnreachable(toolsEnabled: boolean): string {
-	return toolsEnabled
-		? "Tools do not run on this device, so AskMate cannot reach the trust it keeps here."
-		: "Tools are off, so AskMate cannot reach the trust it keeps on this device. Turn on tools, then revoke trust.";
-}
-
-/** The question before a delete. It says so when trust on this device cannot be cleared, so nobody learns that afterwards. */
-export function describeServerDeletion(label: string, reach: { canRevoke: boolean; toolsEnabled: boolean }): string {
-	const base = `Delete the server "${label}"? AskMate also wipes the secrets it stored for this server. The program or service itself is not touched.`;
-	if (reach.canRevoke) {
-		return base;
-	}
-	return `${base} ${reach.toolsEnabled
-		? "Tools do not run on this device, so AskMate cannot clear any trust you gave it here."
-		: "Tools are off, so AskMate cannot clear any trust you gave it on this device. To clear it, turn on tools and use Revoke trust first."}`;
+/** The question before a delete. Trust on this device is cleared with the server, whether or not tools are on. */
+export function describeServerDeletion(label: string): string {
+	return `Delete the server "${label}"? AskMate also wipes the secrets it stored for this server and forgets the trust you gave it on this device. The program or service itself is not touched.`;
 }
 
 /** What to tell the person when secrets could not be wiped, or null when all were. The ids are keychain names, never values. */
@@ -326,7 +287,7 @@ export function describeTestStatus(status: McpServerStatus | null): { ready: boo
  * is switched on only after the person has trusted it, because trusting it is what they came to do.
  */
 export async function runTrustAndTest(deps: {
-	service: Pick<McpServiceView, "trust" | "testConnection">;
+	service: Pick<McpService, "trust" | "testConnection">;
 	mcp: Pick<McpSettings, "enabled">;
 	server: McpServerConfig;
 	enable: () => Promise<void>;
@@ -368,7 +329,7 @@ async function saveMcp(host: SettingsPageHost, next: McpSettings): Promise<void>
 	host.plugin.settings.mcp = next;
 	await host.saveUiSetting();
 	// Stops anything that was edited, removed or switched off; the next run asks for trust again if the definition changed.
-	await host.extras.mcpService?.reconcile();
+	await host.plugin.mcpService?.reconcile();
 }
 
 /**
@@ -412,7 +373,7 @@ function writeSecret(app: App, id: string, value: string): void {
 }
 
 function stateOf(host: SettingsPageHost, server: McpServerConfig): McpServerState {
-	const status = host.extras.mcpService?.status().find((candidate) => candidate.id === server.id);
+	const status = host.plugin.mcpService?.status().find((candidate) => candidate.id === server.id);
 	return status?.state ?? staticServerState(host.plugin.settings.mcp, server);
 }
 
@@ -542,7 +503,7 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 		if (!server) {
 			return;
 		}
-		const confirmed = await askMateConfirm(app, describeServerDeletion(server.label, { canRevoke: canRevokeTrust(host.extras), toolsEnabled: toolsOn() }), {
+		const confirmed = await askMateConfirm(app, describeServerDeletion(server.label), {
 			title: "Delete server",
 			confirmLabel: "Delete server",
 			destructive: true
@@ -551,7 +512,7 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 			return;
 		}
 		await host.runSettingAction(async () => {
-			await revokeServerTrust(host.extras, server.id);
+			await plugin.revokeMcpTrust(server.id);
 			const unwiped = wipeSecrets((id) => writeSecret(app, id, ""), ownedSecretIds(server));
 			await saveMcp(host, { ...settings.mcp, servers: settings.mcp.servers.filter((candidate) => candidate.id !== server.id) });
 			// The definition that pointed at an unwiped secret is gone, so the notice is the only record of its name.
@@ -712,7 +673,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 				void host.keepFocusWhileBusy(button.buttonEl, (busy) => {
 					button.setButtonText(busy ? "Testing..." : "Trust and test").setDisabled(busy);
 				}, async () => {
-					const service = host.extras.mcpService;
+					const service = plugin.mcpService;
 					const live = currentServer(host, serverId);
 					host.setFieldFeedback(setting, null);
 					if (!service || !live) {
@@ -736,9 +697,9 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 			host.labelControl(button.buttonEl, `Revoke trust for ${first.label}`);
 			button.setButtonText("Revoke trust").onClick(() => {
 				void host.runSettingAction(async () => {
-					// Success is only reported once the trust record was actually reached: with tools off there is no service to ask.
-					const revoked = await revokeServerTrust(host.extras, serverId);
-					host.setFieldFeedback(setting, revoked ? TRUST_REVOKED_TEXT : describeTrustUnreachable(plugin.settings.mcp.enabled), revoked ? "info" : "warning");
+					// A failure throws, and runSettingAction shows it, so the line below is only reached once the trust was forgotten.
+					await plugin.revokeMcpTrust(serverId);
+					host.setFieldFeedback(setting, TRUST_REVOKED_TEXT, "info");
 					paintStatus();
 					renderTools();
 				});
@@ -901,7 +862,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 			return;
 		}
 		const group = new SettingGroup(toolsGroup).setHeading("Tools");
-		const known = (host.extras.mcpService?.snapshotTools?.().tools ?? []).filter((tool) => tool.serverId === serverId);
+		const known = (host.plugin.mcpService?.snapshotTools().tools ?? []).filter((tool) => tool.serverId === serverId);
 		const turnedOff = (live.disabledTools ?? []).filter((name) => !known.some((tool) => tool.toolName === name));
 		if (known.length === 0 && turnedOff.length === 0) {
 			group.addSetting((setting) => {
@@ -943,7 +904,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 	renderTools();
 
 	// --- Status updates while the page is open --------------------------------------------------------------------------
-	const unsubscribe = host.extras.mcpService?.onStatusChange(() => {
+	const unsubscribe = host.plugin.mcpService?.onStatusChange(() => {
 		paintStatus();
 		renderTools();
 	});

@@ -46,7 +46,7 @@ export function registerAnswerCommands(plugin: AskMatePlugin): void {
 				new Notice("Switch the note to editing mode (not reading view) to insert the answer.");
 				return;
 			}
-			insertAnswerIntoEditor(editor, await findLastAnswer(plugin));
+			insertAnswerIntoEditor(editor, await findLastAnswer(plugin), { targetLabel: ctx.file?.path ?? "" });
 		}
 	});
 }

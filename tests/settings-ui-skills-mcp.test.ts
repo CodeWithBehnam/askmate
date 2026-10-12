@@ -4,16 +4,13 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
 import { EXAMPLE_SKILL_TEMPLATES, SkillService, createSkillScaffold, hashSkillText, type Skill, type SkillConfig, type SkillFileInfo, type SkillHost } from "../src/skills";
 import type { McpServerConfig, McpSettings } from "../src/shared/types";
-import type { PluginWave2Api } from "../src/ui/settings/connectionPage";
 import {
 	APPROVAL_LABELS,
 	applyMcpImport,
-	canRevokeTrust,
 	chooseServerSecretId,
 	checkServerCandidate,
 	describeServerDeletion,
 	describeServerState,
-	describeTrustUnreachable,
 	describeTestStatus,
 	describeUnwipedSecrets,
 	formatArgsText,
@@ -22,7 +19,6 @@ import {
 	ownedSecretIds,
 	parseArgsText,
 	planVariable,
-	revokeServerTrust,
 	runTrustAndTest,
 	setToolAllowed,
 	staticServerState,
@@ -386,63 +382,9 @@ describe("secret ids", () => {
 	});
 });
 
-describe("revoking trust and deleting a server", () => {
-	const service = (calls: string[]): NonNullable<PluginWave2Api["mcpService"]> => ({
-		revokeTrust: async (id: string): Promise<void> => {
-			calls.push(`service:${id}`);
-		}
-	}) as never;
-
-	test("asks the running service first", async () => {
-		const calls: string[] = [];
-		const reach = { mcpService: service(calls), revokeMcpTrust: async (id: string): Promise<void> => { calls.push(`plugin:${id}`); } };
-		expect(canRevokeTrust(reach)).toBe(true);
-		expect(await revokeServerTrust(reach, "files")).toBe(true);
-		expect(calls).toEqual(["service:files"]);
-	});
-
-	test("falls back to the plugin's own path while tools are off", async () => {
-		const calls: string[] = [];
-		const reach = { mcpService: null, revokeMcpTrust: async (id: string): Promise<void> => { calls.push(`plugin:${id}`); } };
-		expect(canRevokeTrust(reach)).toBe(true);
-		expect(await revokeServerTrust(reach, "files")).toBe(true);
-		expect(calls).toEqual(["plugin:files"]);
-	});
-
-	test("says nothing was revoked when neither path exists", async () => {
-		for (const reach of [{}, { mcpService: null }]) {
-			expect(canRevokeTrust(reach)).toBe(false);
-			expect(await revokeServerTrust(reach, "files")).toBe(false);
-		}
-	});
-
-	test("keeps `this` when it calls the plugin's own path", async () => {
-		const plugin = {
-			seen: [] as string[],
-			async revokeMcpTrust(id: string): Promise<void> {
-				this.seen.push(id);
-			}
-		};
-		expect(await revokeServerTrust(plugin, "files")).toBe(true);
-		expect(plugin.seen).toEqual(["files"]);
-	});
-
-	test("lets a failure from the trust record reach the caller", async () => {
-		const reach = { mcpService: null, revokeMcpTrust: async (): Promise<void> => { throw new Error("storage is unavailable"); } };
-		await expect(revokeServerTrust(reach, "files")).rejects.toThrow("storage is unavailable");
-	});
-
-	test("the delete question only mentions trust when it cannot be cleared", () => {
-		expect(describeServerDeletion("Files", { canRevoke: true, toolsEnabled: false })).toBe("Delete the server \"Files\"? AskMate also wipes the secrets it stored for this server. The program or service itself is not touched.");
-		expect(describeServerDeletion("Files", { canRevoke: false, toolsEnabled: false })).toContain("Tools are off, so AskMate cannot clear any trust you gave it on this device.");
-	});
-
-	test("on a device that cannot run tools the advice is not to turn tools on", () => {
-		expect(describeServerDeletion("Files", { canRevoke: false, toolsEnabled: true })).toContain("Tools do not run on this device");
-		expect(describeServerDeletion("Files", { canRevoke: false, toolsEnabled: true })).not.toContain("turn on tools");
-		expect(describeTrustUnreachable(true)).toContain("Tools do not run on this device");
-		expect(describeTrustUnreachable(true)).not.toContain("Turn on tools");
-		expect(describeTrustUnreachable(false)).toBe("Tools are off, so AskMate cannot reach the trust it keeps on this device. Turn on tools, then revoke trust.");
+describe("deleting a server", () => {
+	test("the question says that the trust given on this device is forgotten too", () => {
+		expect(describeServerDeletion("Files")).toBe("Delete the server \"Files\"? AskMate also wipes the secrets it stored for this server and forgets the trust you gave it on this device. The program or service itself is not touched.");
 	});
 
 	test("wipes every secret it can and returns the ones that refused", () => {

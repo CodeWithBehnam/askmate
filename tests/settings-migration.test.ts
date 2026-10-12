@@ -169,6 +169,18 @@ describe("collection normalisers", () => {
 		expect(kept.filter((item) => item.status === "applied").map((item) => item.id)).toEqual(["a5", "a6"]);
 	});
 
+	test("the tool-derived flag is kept on a pending item only, and only when it is exactly true", () => {
+		const flagged = { ...queueItem("p1", 1, "pending"), toolDerived: true };
+		const [kept] = normalizeReviewQueueItems([flagged]);
+		expect(kept?.toolDerived).toBe(true);
+		// A reviewed item is only a log entry and is never applied again.
+		expect(normalizeReviewQueueItems([{ ...flagged, status: "applied" }])[0]).not.toHaveProperty("toolDerived");
+		for (const value of ["true", 1, null, false, {}]) {
+			expect(normalizeReviewQueueItems([{ ...queueItem("p2", 2, "pending"), toolDerived: value }])[0]).not.toHaveProperty("toolDerived");
+		}
+		expect(normalizeReviewQueueItems([queueItem("p3", 3, "pending")])[0]).not.toHaveProperty("toolDerived");
+	});
+
 	test("pending items may exceed the cap, and reviewed items are dropped first", () => {
 		const items = [queueItem("d1", 1, "dismissed"), ...Array.from({ length: 4 }, (_, index) => queueItem(`p${index}`, 5 + index, "pending"))];
 		const kept = normalizeReviewQueueItems(items, 2);

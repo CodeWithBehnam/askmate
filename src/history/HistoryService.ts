@@ -73,7 +73,13 @@ export class HistoryService {
 		await this.host.saveSettings();
 	}
 
-	async queueReviewItemFromRequest(request: AskRequest, proposedText: string, model: string, scope: ApplyScope = "auto"): Promise<ReviewQueueItem> {
+	async queueReviewItemFromRequest(
+		request: AskRequest,
+		proposedText: string,
+		model: string,
+		scope: ApplyScope = "auto",
+		options: { toolDerived?: boolean } = {}
+	): Promise<ReviewQueueItem> {
 		const settings = this.host.getSettings();
 		const file = request.context.file;
 		if (!file || file.extension !== "md") {
@@ -130,7 +136,8 @@ export class HistoryService {
 			providerName: request.metadata.providerName,
 			model,
 			workflowId: request.metadata.workflowId,
-			workflowName: request.metadata.workflowName
+			workflowName: request.metadata.workflowName,
+			...(options.toolDerived === true ? { toolDerived: true } : {})
 		};
 		// Re-check after the file read: another queue action may have filled the queue meanwhile.
 		this.assertReviewQueueHasRoom(settings);

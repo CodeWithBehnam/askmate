@@ -15,14 +15,14 @@ import {
 	savedDiagramSummary,
 	withDiagramMetadata
 } from "../src/ui/sidebar/components/diagramModel";
-import type { DiagramResultInfo } from "../src/ui/sidebar/components/pluginApi";
+import type { DiagramRunResult } from "../src/requests/runTypes";
 import type { AskRequest } from "../src/shared/types";
 import { createFakeEl, installDomGlobals } from "./support/fake-dom";
 
 const SOURCE = "flowchart TD\n  A[Start] --> B[End]";
-const valid: DiagramResultInfo = { status: "valid", kind: "flowchart", style: "blueprint", source: SOURCE };
-const repaired: DiagramResultInfo = { ...valid, status: "repaired", style: "slate" };
-const fallback: DiagramResultInfo = { status: "fallback", kind: "sequence", style: "auto", source: "sequenceDiagram\n  A->>", errors: ["Parse error on line 2", "Expecting 'ACTOR'", "", "a", "b", "c"] };
+const valid: DiagramRunResult = { status: "valid", kind: "flowchart", style: "blueprint", source: SOURCE };
+const repaired: DiagramRunResult = { ...valid, status: "repaired", style: "slate" };
+const fallback: DiagramRunResult = { status: "fallback", kind: "sequence", style: "auto", source: "sequenceDiagram\n  A->>", errors: ["Parse error on line 2", "Expecting 'ACTOR'", "", "a", "b", "c"] };
 
 describe("diagram card wording", () => {
 	test("names the kind and the look", () => {
@@ -141,7 +141,7 @@ describe("the diagram card", () => {
 		return { log, handlers };
 	}
 
-	function draw(info: DiagramResultInfo, drawing: DrawResult, hasNote = true): { parent: HTMLElement; handle: DiagramCardHandle; log: string[]; preview: ReturnType<typeof host> } {
+	function draw(info: DiagramRunResult, drawing: DrawResult, hasNote = true): { parent: HTMLElement; handle: DiagramCardHandle; log: string[]; preview: ReturnType<typeof host> } {
 		const parent = createFakeEl();
 		const { log, handlers } = actions();
 		const preview = host(drawing);

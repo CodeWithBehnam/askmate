@@ -194,6 +194,47 @@ describe("insertAnswerWithChoice (sidebar)", () => {
 	});
 });
 
+describe("Insert at cursor from the sidebar", () => {
+	const risky = answer("Chart: ![x](https://evil.example/a.png)");
+
+	test("collapses a selection to its end first, so the selected text stays", async () => {
+		const editor = new FakeEditor();
+		editor.selection = true;
+		await insertAnswerWithChoice(asEditor(editor), answer("Hello"), () => Promise.resolve("cancel"));
+		expect(editor.collapsedTo).toEqual({ line: 4, ch: 12 });
+		expect(editor.writes).toEqual(["Hello"]);
+	});
+
+	test("does the same for the safe version and for the reply as written", async () => {
+		for (const choice of ["safe", "anyway"] as const) {
+			const editor = new FakeEditor();
+			editor.selection = true;
+			await insertAnswerWithChoice(asEditor(editor), risky, () => Promise.resolve(choice));
+			expect(editor.collapsedTo).toEqual({ line: 4, ch: 12 });
+			expect(editor.writes).toHaveLength(1);
+		}
+	});
+
+	test("leaves the selection alone when the person cancels", async () => {
+		const editor = new FakeEditor();
+		editor.selection = true;
+		await insertAnswerWithChoice(asEditor(editor), risky, () => Promise.resolve("cancel"));
+		expect(editor.collapsedTo).toBeNull();
+		expect(editor.selection).toBe(true);
+		expect(editor.writes).toEqual([]);
+	});
+
+	test("warns that a reply may be incomplete, whichever way it goes in", async () => {
+		const plain = new FakeEditor();
+		await insertAnswerWithChoice(asEditor(plain), answer("Hello", "max_output_tokens"), () => Promise.resolve("cancel"), { targetLabel: "Notes/A.md" });
+		expect(Notice.messages.at(-1)).toBe("Inserted at the cursor in Notes/A.md. This reply may be incomplete: the provider stopped at its output token limit.");
+
+		Notice.clear();
+		await insertAnswerWithChoice(asEditor(new FakeEditor()), answer("Chart: ![x](https://evil.example/a.png)", "stream_interrupted"), () => Promise.resolve("safe"), { targetLabel: "Notes/A.md" });
+		expect(Notice.messages.at(-1)).toBe("Inserted a safe version at the cursor in Notes/A.md. This reply may be incomplete: the connection ended before the reply finished.");
+	});
+});
+
 describe("insertAnswerAtRememberedCursor", () => {
 	const view = (mode: "source" | "preview", editor: FakeEditor, path = "Notes/A.md"): MarkdownView => ({ getMode: () => mode, editor, file: { path } }) as unknown as MarkdownView;
 	const app = {} as never;
@@ -216,6 +257,20 @@ describe("insertAnswerAtRememberedCursor", () => {
 	test("asks the person to click into a note when there is none", async () => {
 		await insertAnswerAtRememberedCursor(app, null, null, answer("x"));
 		expect(Notice.messages).toEqual(["Click into the note where the answer should go, then try again."]);
+	});
+
+	test("checks the reply with the real dialog, keeps the selection, and names the note it went into", async () => {
+		const editor = new FakeEditor();
+		editor.selection = true;
+		const pending = insertAnswerAtRememberedCursor({} as never, null, view("source", editor, "Notes/Plan.md"), answer("Chart: ![x](https://evil.example/a.png)", "max_output_tokens"));
+		const dialog = Modal.opened.at(-1);
+		expect(dialog?.titleEl.textContent).toBe("This reply has active content");
+		Array.from(dialog?.contentEl.querySelectorAll<HTMLButtonElement>(".askmate-modal-buttons button") ?? []).find((button) => button.textContent === "Insert safe version")?.click();
+		await pending;
+		Modal.closeAll();
+		expect(editor.collapsedTo).toEqual({ line: 4, ch: 12 });
+		expect(editor.writes[0]).not.toContain("![x](https://evil.example");
+		expect(Notice.messages.at(-1)).toBe("Inserted a safe version at the cursor in Notes/Plan.md. This reply may be incomplete: the provider stopped at its output token limit.");
 	});
 
 	test("does not write in reading view", async () => {

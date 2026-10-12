@@ -5,6 +5,7 @@ import { describeActiveContentAdded, describeWriteChanges, prepareReplyForWrite 
 import { conversationToMarkdown } from "../src/output/conversationExport";
 import { planEmbedInsertion } from "../src/plugin/imagePlacement";
 import { findImportConcerns, withSafeImportDefaults } from "../src/plugin/importReview";
+import { normalizeReviewQueueItems } from "../src/settings/normalize";
 import { endpointHost, needsKeyApproval } from "../src/plugin/keyApproval";
 import type { AskRequest, ImageAskMateResult, ReviewQueueItem } from "../src/shared/types";
 import { createFakeApp, FakeEditor, leafFor, type FakeApp, type Position } from "./support/fake-app";
@@ -357,31 +358,74 @@ describe("the review queue", () => {
 		expectDefused(item?.proposedText ?? "");
 	});
 
-	test("a reply built from tool results is not queued, so it cannot be applied later without the diff", async () => {
+	test("a reply built from tool results is queued with the flag, and applying it later shows the diff even in auto-approve", async () => {
 		const { plugin, fake } = await loadPlugin();
 		const { file } = openNote(fake, "Notes/Tool.md", "Intro\n");
 		const request = makeRequest(file, "Intro");
 		(plugin as unknown as { requestRunner: { updateFacts(r: AskRequest, p: object): void } }).requestRunner.updateFacts(request, { toolDerived: true });
 
-		await expect(plugin.queueReviewItemFromRequest(request, "From a tool", "gpt-5.5", "append")).rejects.toThrow("written from tool results");
-		await expect(plugin.queueReviewItemFromRequest(request, "From a tool", "gpt-5.5", "full-note")).rejects.toThrow("Apply it directly");
-		expect(plugin.getPendingReviewQueueItems()).toEqual([]);
+		const queued = await plugin.queueReviewItemFromRequest(request, "From a tool", "gpt-5.5", "append");
 
-		// The route it points to does show the diff, even in auto-approve.
+		expect(queued.toolDerived).toBe(true);
+		expect(plugin.getPendingReviewQueueItems().map((item) => item.toolDerived)).toEqual([true]);
+		// The flag is part of the saved queue, so it survives a restart.
+		expect(normalizeReviewQueueItems(JSON.parse(JSON.stringify(plugin.settings.reviewQueue))).map((item) => item.toolDerived)).toEqual([true]);
+
 		expect(plugin.settings.applyApprovalMode).toBe("auto-approve");
 		const dialogs = answerDialogs();
-		await plugin.applyResponseToContext(request, "From a tool", { scope: "append" });
+		const message = await plugin.applyReviewQueueItem(queued.id);
 		dialogs.stop();
 		expect(dialogs.messages.join(" ")).toContain("written from tool results");
+		expect(message).toContain("Applied queued AskMate change");
+		expect(noteText(fake, file.path)).toContain("From a tool");
 	});
 
-	test("a reply that did not use tools is still queued", async () => {
+	test("declining the diff for a queued tool answer leaves the note and the item as they were", async () => {
+		const { plugin, fake } = await loadPlugin();
+		const { file } = openNote(fake, "Notes/ToolNo.md", "Intro\n");
+		const request = makeRequest(file, "Intro");
+		(plugin as unknown as { requestRunner: { updateFacts(r: AskRequest, p: object): void } }).requestRunner.updateFacts(request, { toolDerived: true });
+		const queued = await plugin.queueReviewItemFromRequest(request, "From a tool", "gpt-5.5", "append");
+		const dialogs = answerDialogs((modal) => Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Cancel") ?? null);
+
+		const message = await plugin.applyReviewQueueItem(queued.id);
+		dialogs.stop();
+
+		expect(message).toContain("cancelled");
+		expect(noteText(fake, file.path)).toBe("Intro\n");
+		expect(plugin.getPendingReviewQueueItems().map((item) => item.id)).toEqual([queued.id]);
+	});
+
+	test("a reply that did not use tools is queued without the flag and applies without a diff in auto-approve", async () => {
 		const { plugin, fake } = await loadPlugin();
 		const { file } = openNote(fake, "Notes/Plain.md", "Intro\n");
 
-		await plugin.queueReviewItemFromRequest(makeRequest(file, "Intro"), "Plain reply", "gpt-5.5", "append");
+		const queued = await plugin.queueReviewItemFromRequest(makeRequest(file, "Intro"), "Plain reply", "gpt-5.5", "append");
 
 		expect(plugin.getPendingReviewQueueItems().map((item) => item.proposedText)).toEqual(["Plain reply"]);
+		expect("toolDerived" in queued).toBe(false);
+		const dialogs = answerDialogs();
+		await plugin.applyReviewQueueItem(queued.id);
+		dialogs.stop();
+		expect(dialogs.messages).toEqual([]);
+		expect(noteText(fake, file.path)).toContain("Plain reply");
+	});
+
+	test("a queue item from an older build, with no flag, is applied as before", async () => {
+		const { plugin, fake } = await loadPlugin();
+		const file = fake.vault.add("Notes/Old.md", "Body\n");
+		plugin.settings.reviewQueue = [{
+			id: "old-1", createdAt: "2026-10-01T09:00:00.000Z", updatedAt: "2026-10-01T09:00:00.000Z", status: "pending", sourcePath: file.path, title: "T",
+			question: "Q", proposedText: "From before", beforeText: "", scope: "append", headingPath: "", selectionIdentity: null, providerName: "OpenAI",
+			model: "gpt-5.5", workflowId: null, workflowName: null
+		}];
+		const dialogs = answerDialogs();
+
+		await plugin.applyReviewQueueItem("old-1");
+		dialogs.stop();
+
+		expect(dialogs.messages).toEqual([]);
+		expect(noteText(fake, file.path)).toContain("From before");
 	});
 
 	test("an item that arrived unsafe from an older build is defused again when it is applied", async () => {

@@ -136,20 +136,17 @@ function existingSkillPaths(app: App, folder: string, templates: readonly SkillT
 export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[] {
 	const { app, plugin } = host;
 	const settings = plugin.settings;
-	const service = host.extras.skillService ?? null;
+	const service = plugin.skillService;
 	const skillsOn = (): boolean => settings.skills.enabled;
-	const skills = service?.list() ?? [];
-	const labels = uniqueLabels(skills.map((skill) => describeSkillRow(skill, service?.statusOf(skill) ?? "built-in").title));
+	const skills = service.list();
+	const labels = uniqueLabels(skills.map((skill) => describeSkillRow(skill, service.statusOf(skill)).title));
 
 	const rescanAndRedraw = async (): Promise<void> => {
-		await service?.scan();
+		await service.scan();
 		host.update();
 	};
 
 	const review = async (skill: Skill): Promise<void> => {
-		if (!service) {
-			return;
-		}
 		// The text on screen and the hash that is approved come from the same object, so a file edited meanwhile stays unapproved.
 		const approved = await askSkillReview(app, skill, host.approvedSkillText.get(skill.id) ?? null);
 		if (!approved) {
@@ -163,7 +160,7 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 	};
 
 	const skillRows: SettingDefinition[] = skills.map((skill, index): SettingDefinition => {
-		const status = (): SkillStatus => service?.statusOf(skill) ?? "built-in";
+		const status = (): SkillStatus => service.statusOf(skill);
 		const row = describeSkillRow(skill, status());
 		return {
 			name: labels[index] ?? row.title,
@@ -190,12 +187,12 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 						}
 					});
 				}
-				if (skill.valid && skill.source === "vault" && status() === "ready" && service?.revoke) {
+				if (skill.valid && skill.source === "vault" && status() === "ready") {
 					setting.addButton((button) => {
 						host.labelControl(button.buttonEl, `Withdraw approval for ${row.title}`);
 						button.setButtonText("Withdraw approval").onClick(() => {
 							void host.runSettingAction(async () => {
-								await service.revoke?.(skill.id);
+								await service.revoke(skill.id);
 								host.focusAfterRebuild = `skill:${skill.id}`;
 								host.update();
 							});
@@ -289,8 +286,8 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 						}
 						const [created] = await writePlannedFiles(app, create);
 						// A skill made here is text AskMate wrote itself, so it is approved as saved. Any later edit asks for a review.
-						await service?.scan();
-						await service?.trust(`vault:${template.id}`, await hashSkillText(template.content));
+						await service.scan();
+						await service.trust(`vault:${template.id}`, await hashSkillText(template.content));
 						host.setFieldFeedback(setting, `Created ${created}.`, "success");
 						if (created) {
 							await app.workspace.openLinkText(created, "", "tab");
@@ -328,12 +325,12 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 		}
 	};
 
-	const folderIssues = service?.issues?.() ?? [];
+	const folderIssues = service.issues();
 	const issueRows: SettingDefinition[] = folderIssues.map((issue) => host.noteDefinition(issue.message));
 
 	const listRows: SettingDefinition[] = skillRows.length > 0
 		? skillRows
-		: [host.noteDefinition(service ? "No skills were found." : "Skills load when AskMate finishes starting. Close and reopen this page in a moment.")];
+		: [host.noteDefinition("No skills were found.")];
 
 	return [
 		{

@@ -4,7 +4,7 @@ import type { AskRequest, DiagramRequestMetadata } from "../../../shared/types";
 import type { ChatMessageLike, SavedDiagramSummary } from "../../../threads/threadModel";
 import type { LastAnswer } from "../answerActions";
 import type { InsertableReply } from "./insertPlan";
-import type { DiagramResultInfo } from "./pluginApi";
+import type { DiagramRunResult } from "../../../requests/runTypes";
 
 /**
  * Pure rules for the diagram reply: what the card says, how a re-roll or a fix is requested, and what is kept in a
@@ -56,7 +56,7 @@ export function diagramStyleLabel(style: string): string {
 
 export type DiagramCardStatus = "drawn" | "repaired" | "fallback";
 
-export function diagramCardStatus(info: Pick<DiagramResultInfo, "status">): DiagramCardStatus {
+export function diagramCardStatus(info: Pick<DiagramRunResult, "status">): DiagramCardStatus {
 	return info.status === "valid" ? "drawn" : info.status === "repaired" ? "repaired" : "fallback";
 }
 
@@ -71,7 +71,7 @@ export interface DiagramCardCopy {
 	errors: string[];
 }
 
-export function describeDiagramCard(info: DiagramResultInfo, options: { hasNote: boolean }): DiagramCardCopy {
+export function describeDiagramCard(info: DiagramRunResult, options: { hasNote: boolean }): DiagramCardCopy {
 	const status = diagramCardStatus(info);
 	const errors = (info.errors ?? []).map((line) => line.trim()).filter(Boolean).slice(0, MAX_ERROR_LINES);
 	const style = info.style.trim() && info.style !== "auto" ? `${diagramStyleLabel(info.style)} look` : "";
@@ -124,7 +124,7 @@ export function fenceDiagram(source: string): string {
 }
 
 /** The reply as it is saved, inserted or written to a note: the model's own words, then the diagram. */
-export function canonicalDiagramText(text: string, info: DiagramResultInfo): string {
+export function canonicalDiagramText(text: string, info: DiagramRunResult): string {
 	const prose = proseAroundDiagram(text);
 	return [prose, fenceDiagram(info.source)].filter(Boolean).join("\n\n");
 }
@@ -143,7 +143,7 @@ export function proseAroundDiagram(text: string): string {
  * The question behind Fix: the diagram text and the first lines of what went wrong. It travels as the user's request
  * (the plugin's repair turn gets the same facts), so a failed diagram can be retried without retyping anything.
  */
-export function buildFixQuestion(info: DiagramResultInfo): string {
+export function buildFixQuestion(info: DiagramRunResult): string {
 	const source = info.source.length > MAX_FIX_SOURCE_CHARACTERS ? `${info.source.slice(0, MAX_FIX_SOURCE_CHARACTERS)}\n...` : info.source;
 	const errors = (info.errors ?? []).map((line) => line.trim()).filter(Boolean).slice(0, MAX_ERROR_LINES);
 	return [
@@ -154,7 +154,7 @@ export function buildFixQuestion(info: DiagramResultInfo): string {
 }
 
 /** What Insert needs to know about a diagram in a reply: whether it drew, as a fresh result or as a saved one. */
-export function insertMarkFor(status: DiagramResultInfo["status"] | SavedDiagramSummary["status"]): "drawn" | "fallback" {
+export function insertMarkFor(status: DiagramRunResult["status"] | SavedDiagramSummary["status"]): "drawn" | "fallback" {
 	return status === "fallback" ? "fallback" : "drawn";
 }
 
@@ -174,7 +174,7 @@ export function withDiagramMark(answer: LastAnswer | null, messages: readonly Ch
 export const FALLBACK_INSERT_REASON = "This diagram did not draw, so it cannot be inserted. Copy its source, or ask for it again.";
 
 /** The short outcome kept with a saved reply. The source stays in the reply text. */
-export function savedDiagramSummary(info: DiagramResultInfo): SavedDiagramSummary {
+export function savedDiagramSummary(info: DiagramRunResult): SavedDiagramSummary {
 	const recipe = info.style.trim() && info.style !== "auto" ? diagramStyleLabel(info.style) : undefined;
 	return {
 		type: info.kind,

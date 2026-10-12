@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { McpServerStatus } from "../src/mcp";
 import { createToolCallCard, renderSavedToolCalls } from "../src/ui/sidebar/components/ToolCallCard";
-import type { ToolApprovalRequest, ToolUiEvent } from "../src/ui/sidebar/components/pluginApi";
+import type { ToolApprovalCard, ToolUiEvent } from "../src/requests/runTypes";
 import {
 	buildStatusSegments,
 	createStatusSegments,
@@ -27,7 +27,7 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { createFakeEl, installDomGlobals } from "./support/fake-dom";
 
 const event = (patch: Partial<ToolUiEvent> = {}): ToolUiEvent => ({ id: "call-1", server: "Notes", tool: "search", status: "running", argumentsJson: "{\"query\":\"plan\"}", ...patch });
-const approval: ToolApprovalRequest = { id: "call-1", server: "Notes", tool: "search", argumentsJson: "{\"query\":\"plan\",\"limit\":5}", changedSinceApproval: false };
+const approval: ToolApprovalCard = { id: "call-1", server: "Notes", tool: "search", argumentsJson: "{\"query\":\"plan\",\"limit\":5}", changedSinceApproval: false };
 
 describe("tool call model", () => {
 	test("says what each status means in plain words", () => {

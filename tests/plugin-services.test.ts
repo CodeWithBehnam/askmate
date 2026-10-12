@@ -183,6 +183,62 @@ describe("MCP in the plugin", () => {
 		const { plugin } = await loadPlugin({});
 		expect(plugin.mcpService).toBeNull();
 	});
+
+	const WEB_SERVER = { id: "web", label: "Web tools", enabled: true, approval: "always-ask", trustsAnnotations: false, transport: "http", url: "https://tools.example.com/mcp", headers: {}, bearerSecretId: null, trustedConfigHash: null };
+
+	test("revokeMcpTrust forgets trust while tools are off and no service exists", async () => {
+		const { plugin, fake } = await loadPlugin({});
+		expect(plugin.mcpService).toBeNull();
+		fake.localStorage.set("askmate-mcp-trust:server:web", "hash-1");
+		fake.localStorage.set("askmate-mcp-trust:server:other", "hash-2");
+
+		await plugin.revokeMcpTrust("web");
+
+		expect(fake.localStorage.has("askmate-mcp-trust:server:web")).toBe(false);
+		// Only the named server is touched.
+		expect(fake.localStorage.get("askmate-mcp-trust:server:other")).toBe("hash-2");
+	});
+
+	test("revokeMcpTrust clears trust that was given while tools were on, so the server asks again when they come back", async () => {
+		const { plugin, fake } = await loadPlugin({ mcp: { enabled: true, servers: [WEB_SERVER] } });
+		const timer = setInterval(() => {
+			for (const modal of [...Modal.opened]) {
+				modal.contentEl.querySelector<HTMLElement>("button.mod-cta")?.click();
+			}
+		}, 1);
+		await plugin.mcpService?.trust("web");
+		clearInterval(timer);
+		expect([...fake.localStorage.keys()].some((key) => key.startsWith("askmate-mcp-trust:"))).toBe(true);
+
+		// Tools are switched off, which is the default state, so the page has no service to ask.
+		plugin.settings.mcp.enabled = false;
+		expect(plugin.mcpService).toBeNull();
+		await plugin.revokeMcpTrust("web");
+
+		expect([...fake.localStorage.keys()].some((key) => key.startsWith("askmate-mcp-trust:"))).toBe(false);
+		plugin.settings.mcp.enabled = true;
+		expect(plugin.mcpService?.status().map((server) => server.state.kind)).toEqual(["needs-trust"]);
+	});
+
+	test("revokeMcpTrust with tools on goes through the service, which also tells listeners", async () => {
+		const { plugin, fake } = await loadPlugin({ mcp: { enabled: true, servers: [WEB_SERVER] } });
+		const service = plugin.mcpService;
+		fake.localStorage.set("askmate-mcp-trust:server:web", "hash-1");
+		let changes = 0;
+		service?.onStatusChange(() => {
+			changes += 1;
+		});
+
+		await plugin.revokeMcpTrust("web");
+
+		expect(fake.localStorage.has("askmate-mcp-trust:server:web")).toBe(false);
+		expect(changes).toBeGreaterThan(0);
+	});
+
+	test("revoking trust for a server that was never trusted is not an error", async () => {
+		const { plugin } = await loadPlugin({});
+		await expect(plugin.revokeMcpTrust("never-seen")).resolves.toBeUndefined();
+	});
 });
 
 describe("skills in the plugin", () => {

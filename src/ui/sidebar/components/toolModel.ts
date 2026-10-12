@@ -1,5 +1,5 @@
 import type { SavedToolCall, SavedToolStatus } from "../../../threads/threadModel";
-import type { ToolApprovalRequest, ToolUiEvent, ToolUiStatus } from "./pluginApi";
+import type { ToolApprovalCard, ToolUiEvent, ToolUiStatus } from "../../../requests/runTypes";
 
 /** Pure rules for the tool-call cards: wording, ordering of updates, and what a saved conversation keeps. */
 
@@ -56,7 +56,7 @@ export function toolCardName(event: Pick<ToolUiEvent, "server" | "tool">): strin
  * The header while a call waits for approval. A server may supply a friendlier title, but the name that will run is
  * always shown with it, so a title can never stand in for the tool.
  */
-export function approvalCardName(request: Pick<ToolApprovalRequest, "server" | "tool" | "title">): string {
+export function approvalCardName(request: Pick<ToolApprovalCard, "server" | "tool" | "title">): string {
 	const title = (request.title ?? "").replace(/\s+/g, " ").trim();
 	const label = title && title !== request.tool ? `${title} (${request.tool})` : request.tool;
 	return showHiddenCharacters(request.server ? `${request.server}: ${label}` : label);

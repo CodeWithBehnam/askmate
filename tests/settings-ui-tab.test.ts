@@ -4,10 +4,11 @@ import type { McpServerStatus, ToolSnapshot, TrustOutcome } from "../src/mcp";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
 import { syncObjectInPlace } from "../src/settings/syncInPlace";
+import { IDLE_SETUP_TEST, deriveSetupState, type SetupStage } from "../src/setup";
 import { SkillService, hashSkillText, type SkillConfig, type SkillFileInfo, type SkillHost } from "../src/skills";
-import type { AskMateSettings, McpServerConfig } from "../src/shared/types";
+import type { AskMateSettings, McpServerConfig, TextProviderId } from "../src/shared/types";
 import { AskMateSettingTab } from "../src/ui/settings/AskMateSettingTab";
-import type { ConnectionTestView, PluginWave2Api, SkillServiceView } from "../src/ui/settings/connectionPage";
+import { planKeySave, type ConnectionTestView } from "../src/ui/settings/connectionPage";
 import { createFakeApp, type FakeApp } from "./support/fake-app";
 import { fireDomEvent, getFakeDocument, installDomGlobals } from "./support/fake-dom";
 import {
@@ -264,20 +265,49 @@ const feedbackOf = (setting: Setting): string => setting.infoEl.querySelector(".
 // Harness
 // ---------------------------------------------------------------------------------------------------------------------
 
+/**
+ * The plugin members the settings page drives directly. The harness gives every one a working default, as the real plugin has them
+ * all, and a test replaces the one it wants to watch or to make fail.
+ */
+interface PluginMembers {
+	skillService?: SkillService;
+	mcpService?: unknown;
+	getSetupState?: () => SetupStage;
+	saveProviderApiKey?: (providerId: TextProviderId, apiKey: string) => Promise<void>;
+	testProviderConnectionDetailed?: () => Promise<ConnectionTestView>;
+	openSettingsTab?: () => void;
+	revokeMcpTrust?: (serverId: string) => Promise<void>;
+}
+
 interface Harness {
 	fake: FakeApp;
 	settings: AskMateSettings;
 	tab: AskMateSettingTab;
 	counts: { saved: number; updates: number; activated: number };
-	extras: PluginWave2Api;
+	/** Servers whose trust the page asked the plugin to forget, in order. */
+	revoked: string[];
+	extras: PluginMembers;
 }
 
-function makeHarness(extrasFactory: (settings: AskMateSettings, fake: FakeApp) => PluginWave2Api = () => ({}), appVersion: string | null = "1.13.1"): Harness {
+/** A skills service with nothing in it, so a page that is not about skills lists no skill rows. */
+const NO_SKILLS = {
+	list: () => [],
+	issues: () => [],
+	statusOf: () => "built-in",
+	scan: async (): Promise<void> => undefined,
+	trust: async (): Promise<void> => undefined,
+	revoke: async (): Promise<void> => undefined,
+	onChange: () => () => undefined
+} as unknown as SkillService;
+
+function makeHarness(extrasFactory: (settings: AskMateSettings, fake: FakeApp) => PluginMembers = () => ({}), appVersion: string | null = "1.13.1"): Harness {
 	const fake = createFakeApp();
 	const settings = structuredClone(DEFAULT_SETTINGS);
 	const counts = { saved: 0, updates: 0, activated: 0 };
+	const revoked: string[] = [];
 	const extras = extrasFactory(settings, fake);
 	const provider = () => settings.providers[settings.providerRoles.chatProviderId];
+	const hasSecret = (name: string): boolean => (fake.secretStorage.getSecret(name) ?? "").trim() !== "";
 	const plugin = {
 		settings,
 		manifest: { version: "1.12.0" },
@@ -308,6 +338,24 @@ function makeHarness(extrasFactory: (settings: AskMateSettings, fake: FakeApp) =
 		getTokenUsageRecords: () => [],
 		getTodayTokenUsage: () => 0,
 		getMonthTokenUsage: () => 0,
+		skillService: NO_SKILLS,
+		mcpService: null,
+		getSetupState: (): SetupStage => deriveSetupState(settings, hasSecret, IDLE_SETUP_TEST),
+		// What saving a key does in the real plugin, as far as the page can see: the key goes to the keychain, the name into settings.
+		saveProviderApiKey: async (providerId: TextProviderId, apiKey: string): Promise<void> => {
+			const planned = planKeySave(providerId, apiKey, settings.providers[providerId].apiKeySecretName, fake.secretStorage.listSecrets());
+			if (!planned.ok) {
+				throw new Error(planned.message);
+			}
+			fake.secretStorage.setSecret(planned.secretId, planned.key);
+			settings.providers[providerId].apiKeySecretName = planned.secretId;
+			await plugin.saveSettings();
+		},
+		testProviderConnectionDetailed: async (): Promise<ConnectionTestView> => ({ ok: true, message: await plugin.testSelectedProviderConnection(), modelFound: null }),
+		openSettingsTab: (): void => undefined,
+		revokeMcpTrust: async (serverId: string): Promise<void> => {
+			revoked.push(serverId);
+		},
 		...extras
 	};
 	const tab = new AskMateSettingTab(fake.app, plugin as never, appVersion);
@@ -317,7 +365,7 @@ function makeHarness(extrasFactory: (settings: AskMateSettings, fake: FakeApp) =
 		},
 		refreshDomState: (): void => undefined
 	});
-	return { fake, settings, tab, counts, extras };
+	return { fake, settings, tab, counts, revoked, extras };
 }
 
 function connectionRows(harness: Harness): Rendered[] {
@@ -889,7 +937,7 @@ function skillHarness(initial: Record<string, string> = {}): Harness & { trusted
 		};
 		const service = new SkillService(host);
 		state = { ...state, service };
-		return { skillService: service as unknown as SkillServiceView };
+		return { skillService: service };
 	});
 	const service = state.service as SkillService;
 	// A getter, not a copied value: the trust record is replaced each time a skill is approved.
@@ -1040,10 +1088,10 @@ describe("skills page", () => {
 		expect(feedbackOf(row.setting)).toContain("hidden folder");
 	});
 
-	test("without a service the page says so instead of failing", () => {
+	test("with no skills the page says so instead of leaving the list empty", () => {
 		const harness = makeHarness();
 		const rows = skillRows(harness);
-		expect(rows.some((row) => row.setting.settingEl.textContent?.includes("Skills load when AskMate finishes starting"))).toBe(true);
+		expect(rows.some((row) => row.setting.settingEl.textContent?.includes("No skills were found."))).toBe(true);
 	});
 });
 
@@ -1088,9 +1136,6 @@ function mcpHarness(options: { trust?: TrustOutcome; status?: (id: string) => Mc
 				calls.push(`trust:${id}`);
 				return options.trust ?? { kind: "trusted" as const };
 			},
-			revokeTrust: async (id: string) => {
-				calls.push(`revoke:${id}`);
-			},
 			testConnection: async (id: string) => {
 				calls.push(`test:${id}`);
 				return options.status?.(id) ?? readyStatus(id);
@@ -1105,7 +1150,10 @@ function mcpHarness(options: { trust?: TrustOutcome; status?: (id: string) => Mc
 			snapshotTools: () => ({
 				tools: (options.tools ?? []).map((tool) => ({ serverId: "files", warnings: [], pin: "approved" as const, claimsReadOnly: false, ...tool }))
 			}) as unknown as ToolSnapshot
-		} as never
+		} as never,
+		revokeMcpTrust: async (id: string) => {
+			calls.push(`revoke:${id}`);
+		}
 	}));
 	return { ...harness, calls, listeners };
 }
@@ -1329,28 +1377,31 @@ describe("tools page", () => {
 		expect(Notice.messages).toEqual([]);
 	});
 
-	test("with tools off the delete question says that trust cannot be cleared, and the delete still works", async () => {
+	test("with tools off, deleting a server still forgets its trust through the plugin", async () => {
 		const harness = makeHarness();
 		harness.settings.mcp.servers = [stdioServer()];
 		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
 		list.onDelete?.(0);
 		await tick();
-		expect((Modal.opened.at(-1) as Modal).contentEl.textContent).toContain("Tools are off, so AskMate cannot clear any trust");
+		const question = (Modal.opened.at(-1) as Modal).contentEl.textContent;
+		expect(question).toContain("forgets the trust you gave it on this device");
+		expect(question).not.toContain("cannot clear");
 		await clickDialog("Delete server");
+		expect(harness.revoked).toEqual(["files"]);
 		expect(harness.settings.mcp.servers).toEqual([]);
 	});
 
-	test("with tools off the plugin's own revoke path clears trust and the question stays short", async () => {
-		const revoked: string[] = [];
-		const harness = makeHarness(() => ({ revokeMcpTrust: async (id: string): Promise<void> => { revoked.push(id); } }));
-		harness.settings.mcp.servers = [stdioServer()];
+	test("a failure to forget the trust stops the delete, keeps the server and says why", async () => {
+		const harness = makeHarness(() => ({ revokeMcpTrust: async (): Promise<void> => { throw new Error("storage is unavailable"); } }));
+		harness.settings.mcp.servers = [stdioServer({ env: { API_TOKEN: { kind: "secret", secretId: "askmate-mcp-files-api-token" } } })];
+		harness.fake.secretStorage.setSecret("askmate-mcp-files-api-token", "value-one");
 		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
 		list.onDelete?.(0);
-		await tick();
-		expect((Modal.opened.at(-1) as Modal).contentEl.textContent).not.toContain("Tools are off");
 		await clickDialog("Delete server");
-		expect(revoked).toEqual(["files"]);
-		expect(harness.settings.mcp.servers).toEqual([]);
+		expect(harness.settings.mcp.servers).toHaveLength(1);
+		// Nothing was wiped either, so the server is not left half deleted.
+		expect(harness.fake.secretStorage.getSecret("askmate-mcp-files-api-token")).toBe("value-one");
+		expect(Notice.messages.at(-1)).toBe("storage is unavailable");
 	});
 
 	test("cancelling the delete keeps the server", async () => {
@@ -1503,13 +1554,14 @@ describe("server page", () => {
 		expect(container.textContent).toContain("Not trusted, so the server was not started.");
 	});
 
-	test("Revoke trust asks the service to forget it", async () => {
+	test("Revoke trust asks the plugin to forget it and says so", async () => {
 		const harness = mcpHarness();
 		harness.settings.mcp.servers = [stdioServer()];
 		const container = open(harness);
 		(Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Revoke trust") as HTMLButtonElement).click();
 		await tick();
 		expect(harness.calls).toContain("revoke:files");
+		expect(container.textContent).toContain("Trust revoked.");
 	});
 
 	const clickButton = async (container: HTMLElement, label: string): Promise<void> => {
@@ -1517,36 +1569,16 @@ describe("server page", () => {
 		await tick();
 	};
 
-	test("Revoke trust does not claim success when tools are off and nothing can reach the trust record", async () => {
+	test("Revoke trust works while tools are off, because the plugin reaches the trust record without the service", async () => {
 		const harness = makeHarness();
 		harness.settings.mcp.servers = [stdioServer()];
 		const container = open(harness);
 		await clickButton(container, "Revoke trust");
-		expect(container.textContent).not.toContain("Trust revoked");
-		expect(container.textContent).toContain("Tools are off");
-		expect(container.querySelector(".askmate-settings-feedback.is-warning")).not.toBeNull();
-		expect(Notice.messages).toEqual([]);
-	});
-
-	test("Revoke trust does not tell a device without tools to turn them on", async () => {
-		// Tools are on in the settings but the plugin offers no service, as on a phone.
-		const harness = makeHarness();
-		harness.settings.mcp.enabled = true;
-		harness.settings.mcp.servers = [stdioServer()];
-		const container = open(harness);
-		await clickButton(container, "Revoke trust");
-		expect(container.textContent).toContain("Tools do not run on this device");
-		expect(container.textContent).not.toContain("Turn on tools");
-	});
-
-	test("Revoke trust uses the plugin's own path when the service does not exist", async () => {
-		const revoked: string[] = [];
-		const harness = makeHarness(() => ({ revokeMcpTrust: async (id: string): Promise<void> => { revoked.push(id); } }));
-		harness.settings.mcp.servers = [stdioServer()];
-		const container = open(harness);
-		await clickButton(container, "Revoke trust");
-		expect(revoked).toEqual(["files"]);
+		expect(harness.revoked).toEqual(["files"]);
 		expect(container.textContent).toContain("Trust revoked.");
+		expect(container.textContent).not.toContain("Tools are off");
+		expect(container.querySelector(".askmate-settings-feedback.is-warning")).toBeNull();
+		expect(Notice.messages).toEqual([]);
 	});
 
 	test("Revoke trust reports a failure from the trust record instead of success", async () => {

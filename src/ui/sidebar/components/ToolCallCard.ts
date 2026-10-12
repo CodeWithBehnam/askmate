@@ -1,5 +1,5 @@
 import type { SavedToolCall } from "../../../threads/threadModel";
-import type { ToolApprovalChoice, ToolApprovalRequest, ToolUiEvent } from "./pluginApi";
+import type { ToolApprovalCard, ToolApprovalChoice, ToolUiEvent } from "../../../requests/runTypes";
 import { approvalCardName, describeSavedToolCall, formatToolArguments, isFinalToolStatus, previewToolResult, showHiddenCharacters, toolCardName, toolStatusText } from "./toolModel";
 
 /**
@@ -12,7 +12,7 @@ export interface ToolCardHandle {
 	el: HTMLElement;
 	update(event: ToolUiEvent): void;
 	/** Shows the approval buttons and resolves with the choice. Resolves "deny" if the card is cancelled. */
-	requestApproval(request: ToolApprovalRequest, options: { canAllowForChat: boolean }): Promise<ToolApprovalChoice>;
+	requestApproval(request: ToolApprovalCard, options: { canAllowForChat: boolean }): Promise<ToolApprovalChoice>;
 	/** Turns a waiting approval into a denial, for example when the run is stopped. */
 	cancelApproval(): void;
 }

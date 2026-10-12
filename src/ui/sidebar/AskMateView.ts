@@ -85,11 +85,12 @@ import {
 	type ConsoleMentions
 } from "./consoleCommands";
 import { createScratchHost, mountSvg, nextRenderId, sourceHash } from "../../diagrams";
-import { MAX_SKILLS_PER_REQUEST, type Skill, type SkillService, type SkillSuggestion } from "../../skills";
+import { MAX_SKILLS_PER_REQUEST, type Skill, type SkillSuggestion } from "../../skills";
 import { NO_NOTE_SOURCE } from "../../context/ContextService";
+import type { ProviderConnectionTestResult } from "../../providers";
+import type { DiagramRunResult, RunPhaseEvent, RunResult, ToolApprovalCard, ToolApprovalChoice, ToolUiEvent } from "../../requests/runTypes";
 import {
 	checkApiKeyInput,
-	deriveSetupState,
 	getProviderCatalogEntry,
 	isReadyToSend,
 	mapProviderErrorToSetupCopy,
@@ -124,19 +125,6 @@ import { canUndoDraft, mergeIntoDraft, type DraftUndo } from "./components/compo
 import { runGuardedAction, type GuardedTaskContext } from "./components/guardedAction";
 import { decideLinkClick } from "./components/linkClicks";
 import { describeOutputBadge, modeAfterRun } from "./components/outputMode";
-import {
-	allowNoNote,
-	runPluginRequest,
-	wave2,
-	type ConnectionTestLike,
-	type DiagramResultInfo,
-	type RunPhaseSignal,
-	type SidebarResult,
-
-	type ToolApprovalChoice,
-	type ToolApprovalRequest,
-	type ToolUiEvent
-} from "./components/pluginApi";
 import { planReplyActions, type ReplyActionSpec } from "./components/replyActions";
 import { planRetry, selectionSignature, type RetryTicket } from "./components/retry";
 import { deriveSetupCardModel, overlayTestResult, type SetupCardError } from "./components/setupCardModel";
@@ -440,10 +428,7 @@ export class AskMateView extends ItemView {
 
 		this.register(this.plugin.threads.onDidClear(() => this.handleThreadsCleared()));
 		this.register(this.plugin.threads.onDidRewritePaths((change) => this.handlePathChange(applyPathChangeToLiveMessages(this.messages, change))));
-		const skills = wave2(this.plugin).skillService;
-		if (skills) {
-			this.register(skills.onChange(() => this.scheduleSkillChips()));
-		}
+		this.register(this.plugin.skillService.onChange(() => this.scheduleSkillChips()));
 
 		this.refreshConsoleCommands();
 		this.renderWorkflowGrid(container);
@@ -1677,8 +1662,9 @@ export class AskMateView extends ItemView {
 
 	private async buildRunRequest(spec: RunSpec, intentKind: RequestIntentKind, title: string, threadMessages: ChatMessageLike[]): Promise<AskRequest> {
 		const options = spec.options;
-		const built = await this.plugin.buildRequest(spec.question, title, allowNoNote({
+		const built = await this.plugin.buildRequest(spec.question, title, {
 			...options,
+			allowNoNote: true,
 			intentKind,
 			outputMode: normalizeOutputMode(options.outputMode ?? this.plugin.settings.outputMode),
 			privacy: options.privacy ?? this.privacyOptions,
@@ -1687,7 +1673,7 @@ export class AskMateView extends ItemView {
 			folderContext: options.folderContext ?? this.getFolderContextOptions(),
 			threadMessages,
 			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
-		}));
+		});
 		return intentKind === "diagram"
 			? withDiagramMetadata(built, spec.diagram ?? built.metadata.diagram ?? firstLook(this.plugin.settings.diagrams))
 			: built;
@@ -1695,7 +1681,7 @@ export class AskMateView extends ItemView {
 
 	/** Tools are offered on ordinary chat questions when a tool server is ready; never for diagrams, images, notes or applied answers. */
 	private shouldUseTools(request: AskRequest): boolean {
-		const mcp = wave2(this.plugin).mcpService;
+		const mcp = this.plugin.mcpService;
 		if (!mcp || request.metadata.outputMode !== "chat" || request.metadata.modelCapability !== "text") {
 			return false;
 		}
@@ -1819,7 +1805,7 @@ export class AskMateView extends ItemView {
 				this.onceSkillIds = [];
 				this.refreshSkillChips();
 			}
-			const result: SidebarResult = await runPluginRequest(this.plugin, request, {
+			const result: RunResult = await this.plugin.runOpenAIRequest(request, {
 				onTextDelta: (delta) => {
 					if (!this.isRunActive(run)) {
 						return;
@@ -2132,7 +2118,7 @@ export class AskMateView extends ItemView {
 	}
 
 	/** Asks inside the answer, with the full arguments, and waits. Stopping the run or closing the sidebar answers "deny". */
-	private async confirmToolCall(run: RunRecord, message: MessageElements, request: ToolApprovalRequest): Promise<ToolApprovalChoice> {
+	private async confirmToolCall(run: RunRecord, message: MessageElements, request: ToolApprovalCard): Promise<ToolApprovalChoice> {
 		if (!this.isRunActive(run)) {
 			return "deny";
 		}
@@ -2161,7 +2147,7 @@ export class AskMateView extends ItemView {
 		}
 	}
 
-	private handleRunPhase(run: RunRecord, message: MessageElements, phase: RunPhaseSignal): void {
+	private handleRunPhase(run: RunRecord, message: MessageElements, phase: RunPhaseEvent): void {
 		if (!this.isRunActive(run)) {
 			return;
 		}
@@ -2468,7 +2454,7 @@ export class AskMateView extends ItemView {
 			answer: InsertableReply;
 			spec: RunSpec;
 			skillsUsed: ReadonlyArray<{ id: string; name: string; source: "built-in" | "vault"; channel: string }>;
-			diagram: DiagramResultInfo | null;
+			diagram: DiagramRunResult | null;
 		}
 	): void {
 		const { request, getText, model, answer, spec, diagram } = input;
@@ -2575,7 +2561,7 @@ export class AskMateView extends ItemView {
 	/** The diagram, drawn through Obsidian's own Mermaid, with Insert (through the Apply preview), New note, Copy source, Fix and Another look. */
 	private renderDiagramReply(
 		message: MessageElements,
-		input: { request: AskRequest; diagram: DiagramResultInfo; getText: () => string; model: string; spec: RunSpec }
+		input: { request: AskRequest; diagram: DiagramRunResult; getText: () => string; model: string; spec: RunSpec }
 	): DiagramCardHandle {
 		const { request, diagram, getText, model, spec } = input;
 		const hasNote = !isNoNoteSource(request.context.source);
@@ -2641,7 +2627,7 @@ export class AskMateView extends ItemView {
 				if (cached !== undefined) {
 					return mountSvg(target, cached) ? "drawn" : "failed";
 				}
-				const api = await wave2(this.plugin).loadMermaidApi?.();
+				const api = await this.plugin.loadMermaidApi();
 				if (!api) {
 					return "unavailable";
 				}
@@ -3530,7 +3516,7 @@ export class AskMateView extends ItemView {
 			}),
 			stage: this.readSetupStage(),
 			stickySkills: this.threadMeta.skillIds?.length ?? 0,
-			mcp: wave2(this.plugin).mcpService?.status() ?? null,
+			mcp: this.plugin.mcpService?.status() ?? null,
 			busy: Boolean(this.activeRun)
 		}));
 		const modeButton = this.statusSegments.buttons.mode;
@@ -3766,6 +3752,23 @@ export class AskMateView extends ItemView {
 		return this.lastAnswer;
 	}
 
+	/**
+	 * Starts a new conversation and keeps the old one in Saved conversations. Commands call this in every composer layout, because
+	 * only the Console layout reads slash commands. It rejects, with the reason, while a request is running.
+	 */
+	async startNewConversation(): Promise<void> {
+		await this.startNewThread();
+	}
+
+	/**
+	 * Draws a Mermaid diagram of the remembered note, or of what `prompt` asks for. The same in every composer layout, and the
+	 * composer text is left alone. It rejects when diagrams are off or the model cannot write text; a missing connection opens the
+	 * Connect card instead.
+	 */
+	async startDiagram(prompt?: string): Promise<void> {
+		await this.runDiagram(prompt?.trim() ?? "");
+	}
+
 	private openModelPicker(): void {
 		if (this.activeRun) {
 			this.notify("Wait for the current AskMate request to finish, or stop it first.");
@@ -3943,7 +3946,7 @@ export class AskMateView extends ItemView {
 				return;
 			case "mcp":
 				this.commitConsoleCommand(raw);
-				this.printConsoleOutput(formatMcpStatus(wave2(this.plugin).mcpService?.status()));
+				this.printConsoleOutput(formatMcpStatus(this.plugin.mcpService?.status()));
 				this.refreshConsoleStatus();
 				return;
 			case "test": {
@@ -3968,7 +3971,7 @@ export class AskMateView extends ItemView {
 				return;
 			}
 			case "skill": {
-				const found = lookUpSkill(this.requireSkillService(), action.name);
+				const found = lookUpSkill(this.plugin.skillService, action.name);
 				if (!found.ok) {
 					throw new Error(found.message);
 				}
@@ -4064,7 +4067,7 @@ export class AskMateView extends ItemView {
 
 	/** One answer to "is AskMate set up?", shared with the status bar and the settings page when the plugin provides it. */
 	private readSetupStage(): SetupStage {
-		const stage = wave2(this.plugin).getSetupState?.() ?? deriveSetupState(this.plugin.settings, this.hasSecret);
+		const stage = this.plugin.getSetupState();
 		// A test run here counts for ten minutes; after that the plugin's own record is the only answer.
 		const fresh = this.setup.test && Date.now() - this.setup.test.at < LOCAL_TEST_MAX_AGE_MS ? this.setup.test : null;
 		const overlaid = overlayTestResult(stage, fresh);
@@ -4081,8 +4084,7 @@ export class AskMateView extends ItemView {
 		const stage = this.readSetupStage();
 		// The chat provider is what the card is about until the person picks another chip, whichever provider it is. A chip
 		// picked in an earlier visit does not outlive the visit, or a later gap in the chat provider would go unseen.
-		const choosing = this.setup.flowOpen || this.setup.welcomeOpen;
-		const selected = (choosing ? this.setup.provider : null) ?? stage.providerId;
+		const selected = this.chipInUse(stage);
 		const model = deriveSetupCardModel({
 			stage,
 			selectedProvider: selected,
@@ -4126,6 +4128,15 @@ export class AskMateView extends ItemView {
 		if (hadFocus) {
 			this.setupHandle.focusKey();
 		}
+	}
+
+	/**
+	 * The provider chip the Connect card is on: the one picked during this visit, otherwise the chat provider. A chip picked in
+	 * an earlier visit does not count, or a later gap in the chat provider would go unseen.
+	 */
+	private chipInUse(stage: SetupStage): TextProviderId {
+		const choosing = this.setup.flowOpen || this.setup.welcomeOpen;
+		return (choosing ? this.setup.provider : null) ?? stage.providerId;
 	}
 
 	/** The draft belongs to one provider: a key typed for OpenAI must never reach the Anthropic field or be saved under it. */
@@ -4212,14 +4223,9 @@ export class AskMateView extends ItemView {
 					this.failSetup(checked.message, "update-key");
 					return;
 				}
-				const api = wave2(this.plugin);
-				if (!api.saveProviderApiKey) {
-					this.failSetup("This version of AskMate cannot store a key from here. Open settings to add it.", "open-settings");
-					return;
-				}
 				applyChatSelection(settings, providerId);
 				await this.plugin.saveSettings();
-				await api.saveProviderApiKey(providerId, checked.key);
+				await this.plugin.saveProviderApiKey(providerId, checked.key);
 				// Stored now: the typed copy goes from the field and from memory before anything redraws the card.
 				this.clearSetupKey();
 			} else if (this.hasStoredKey(providerId)) {
@@ -4256,14 +4262,11 @@ export class AskMateView extends ItemView {
 		this.setup.localError = null;
 		this.refreshSetupCard();
 		this.refreshConsoleStatus();
-		let result: ConnectionTestLike;
+		let result: Pick<ProviderConnectionTestResult, "ok" | "message" | "modelFound">;
 		try {
-			const api = wave2(this.plugin);
-			result = api.testProviderConnectionDetailed
-				? await api.testProviderConnectionDetailed()
-				: { ok: true, message: await this.plugin.testSelectedProviderConnection() };
+			result = await this.plugin.testProviderConnectionDetailed();
 		} catch (error) {
-			result = { ok: false, message: this.plugin.getErrorMessage(error) };
+			result = { ok: false, message: this.plugin.getErrorMessage(error), modelFound: null };
 		}
 		this.setup.testing = false;
 		if (this.isClosed) {
@@ -4313,13 +4316,18 @@ export class AskMateView extends ItemView {
 			case "choose-model":
 				this.openModelPicker();
 				return;
-			case "check-address":
-				if (this.plugin.getChatProviderId() === "openai-compatible") {
-					this.openSetupFlow({ provider: "openai-compatible" });
+			case "check-address": {
+				// Like Update key, the card stays on the chip in use: a local error belongs to the chip the person typed on, which is
+				// not necessarily the chat provider yet. Only a local server's address can be fixed in the card; the address of any other
+				// provider (a custom OpenAI address, Azure) is edited in settings.
+				const chip = getProviderCatalogEntry(this.chipInUse(this.readSetupStage()));
+				if (!chip.needsKey) {
+					this.openSetupFlow();
 				} else {
 					this.openSettings();
 				}
 				return;
+			}
 			case "start-server":
 			case "retry":
 			case "test":
@@ -4334,12 +4342,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private openSettings(): void {
-		const api = wave2(this.plugin);
-		if (api.openSettingsTab) {
-			api.openSettingsTab();
-		} else {
-			this.notify("Open Obsidian settings, then choose AskMate under Community plugins.");
-		}
+		this.plugin.openSettingsTab();
 	}
 
 	private runStarter(chip: StarterChip): void {
@@ -4372,18 +4375,10 @@ export class AskMateView extends ItemView {
 
 	// ----- Skills ----------------------------------------------------------------------------------------------------
 
-	private requireSkillService(): SkillService {
-		const service = wave2(this.plugin).skillService;
-		if (!service) {
-			throw new Error("Skills are not available in this build of AskMate.");
-		}
-		return service;
-	}
-
 	/** Skills that /skill and @skill: can complete: the ones that can be used right now. */
 	private listUsableSkillsForCompletion(): Array<{ name: string; description: string }> {
-		const service = wave2(this.plugin).skillService;
-		if (!service || !this.plugin.settings.skills.enabled) {
+		const service = this.plugin.skillService;
+		if (!this.plugin.settings.skills.enabled) {
 			return [];
 		}
 		return service.list()
@@ -4393,7 +4388,7 @@ export class AskMateView extends ItemView {
 
 	/** The id a request carries for a skill the person named by id or by plain name. A name that matches nothing is passed on and noticed by the resolver. */
 	private skillIdFor(ref: string): string {
-		return wave2(this.plugin).skillService?.find(ref)?.id ?? ref;
+		return this.plugin.skillService.find(ref)?.id ?? ref;
 	}
 
 	/** Refuses a skill that does not exist or cannot be used yet, with a sentence that says what to do. Nothing is sent. */
@@ -4402,7 +4397,7 @@ export class AskMateView extends ItemView {
 		if (needed.length === 0) {
 			return;
 		}
-		const service = this.requireSkillService();
+		const service = this.plugin.skillService;
 		for (const ref of needed) {
 			const found = lookUpSkill(service, ref);
 			if (!found.ok) {
@@ -4433,10 +4428,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private describeSkills(): string {
-		const service = wave2(this.plugin).skillService;
-		if (!service) {
-			return "Skills are not available in this build of AskMate.";
-		}
+		const service = this.plugin.skillService;
 		return formatSkillsListing(service.list(), (skill) => service.statusOf(skill), this.threadMeta.skillIds ?? []);
 	}
 
@@ -4454,10 +4446,10 @@ export class AskMateView extends ItemView {
 		if (!host || this.isClosed) {
 			return;
 		}
-		const service = wave2(this.plugin).skillService;
-		const enabled = Boolean(service) && this.plugin.settings.skills.enabled;
+		const service = this.plugin.skillService;
+		const enabled = this.plugin.settings.skills.enabled;
 		this.skillPickerButton?.toggleAttribute("hidden", !enabled);
-		if (!service || !enabled) {
+		if (!enabled) {
 			if (this.skillChipsSignature !== "") {
 				this.skillChipsSignature = "";
 				renderSkillChips(host, [], { onRemove: () => undefined, onAccept: () => undefined });
@@ -4516,10 +4508,7 @@ export class AskMateView extends ItemView {
 
 	/** Skills the person can keep on for this conversation. A skill that needs review is listed but cannot be picked. */
 	private openSkillPicker(event: MouseEvent, anchor: HTMLElement): void {
-		const service = wave2(this.plugin).skillService;
-		if (!service) {
-			return;
-		}
+		const service = this.plugin.skillService;
 		const menu = new Menu();
 		const sticky = this.threadMeta.skillIds ?? [];
 		const skills = service.list().filter((skill) => skill.valid && skill.manifest.userInvocable);

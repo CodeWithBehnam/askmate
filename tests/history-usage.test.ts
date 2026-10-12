@@ -116,6 +116,16 @@ describe("HistoryService review queue", () => {
 		expect(item.beforeText).toBe("");
 	});
 
+	test("an item carries the tool-derived flag only when it is told the reply came from tool results", async () => {
+		const settings = createSettings();
+		const { service } = createHistory(settings);
+		const plain = await service.queueReviewItemFromRequest(createRequest("Note.md"), "plain", "gpt-5.5", "append");
+		const flagged = await service.queueReviewItemFromRequest(createRequest("Note.md"), "from a tool", "gpt-5.5", "append", { toolDerived: true });
+		expect("toolDerived" in plain).toBe(false);
+		expect(flagged.toolDerived).toBe(true);
+		expect(settings.reviewQueue.map((item) => item.toolDerived)).toEqual([undefined, true]);
+	});
+
 	test("queues a selected-block item after the note was renamed", async () => {
 		const settings = createSettings();
 		const { service } = createHistory(settings);

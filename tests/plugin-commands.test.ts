@@ -300,19 +300,37 @@ describe("commands that start something in the sidebar", () => {
 		expect(Notice.messages.join(" ")).not.toContain("cannot start");
 	});
 
-	test("a sidebar without the entry points is told so, with what to do instead, and nothing is typed for the person", async () => {
+	test("a sidebar leaf that never became the AskMate view is reported, not ignored, and nothing is typed for the person", async () => {
 		const { plugin, fake } = await loadPlugin(null);
-		const sidebar = addSidebar(fake, {});
+		const state: FakeSidebar = { calls: [], composerText: [] };
+		const placeholder = { focusComposer: (text: string) => state.composerText.push(text) };
+		fake.workspace.leaves.push(Object.assign(leafFor(placeholder, ASKMATE_VIEW_TYPE, null), { loadIfDeferred: () => Promise.resolve() }));
+		Object.assign(fake.workspace, { revealLeaf: () => Promise.resolve() });
 
 		await runCommand(plugin, "new-conversation");
-		expect(Notice.messages.join(" ")).toContain("cannot start a conversation from a command");
-		expect(Notice.messages.join(" ")).toContain("New conversation button");
+		expect(Notice.messages.join(" ")).toContain("could not reach its sidebar");
 
 		Notice.clear();
 		await runCommand(plugin, "draw-diagram");
-		expect(Notice.messages.join(" ")).toContain("cannot start a diagram from a command");
-		expect(Notice.messages.join(" ")).toContain("Draw a diagram of this note");
-		expect(sidebar.composerText).toEqual([]);
+		expect(Notice.messages.join(" ")).toContain("could not reach its sidebar");
+		expect(state.composerText).toEqual([]);
+	});
+
+	test("Draw a diagram asks for the default diagram of the note, and New conversation takes no arguments", async () => {
+		const { plugin, fake } = await loadPlugin(null);
+		const received: Array<[string, unknown[]]> = [];
+		const view = Object.create(AskMateView.prototype) as AskMateView;
+		Object.assign(view, {
+			startNewConversation: (...args: unknown[]) => { received.push(["startNewConversation", args]); return Promise.resolve(); },
+			startDiagram: (...args: unknown[]) => { received.push(["startDiagram", args]); return Promise.resolve(); }
+		});
+		fake.workspace.leaves.push(Object.assign(leafFor(view, ASKMATE_VIEW_TYPE, null), { loadIfDeferred: () => Promise.resolve() }));
+		Object.assign(fake.workspace, { revealLeaf: () => Promise.resolve() });
+
+		await runCommand(plugin, "new-conversation");
+		await runCommand(plugin, "draw-diagram");
+
+		expect(received).toEqual([["startNewConversation", []], ["startDiagram", []]]);
 	});
 
 	test("a refusal from the sidebar is shown, not lost", async () => {
@@ -362,6 +380,49 @@ describe("deferred sidebar views", () => {
 		await plugin.commands.get("copy-last-answer")?.callback?.();
 
 		expect(Notice.messages.join(" ")).toContain("no AskMate answer to copy");
+	});
+});
+
+describe("Insert last answer at cursor", () => {
+	function sidebarWithAnswer(fake: FakeApp, answer: { text: string; incompleteReason: string | null }): void {
+		const view = Object.create(AskMateView.prototype) as AskMateView;
+		view.getLastAnswer = () => answer;
+		fake.workspace.leaves.push(Object.assign(leafFor(view, ASKMATE_VIEW_TYPE, null), { loadIfDeferred: () => Promise.resolve() }));
+	}
+
+	test("writes at the cursor, names the note it went into and warns about an incomplete reply", async () => {
+		const { plugin, fake } = await loadPlugin();
+		sidebarWithAnswer(fake, { text: "Hello", incompleteReason: "max_output_tokens" });
+		const editor = new FakeEditor("Note");
+
+		await plugin.commands.get("insert-last-answer")?.editorCallback?.(editor, { file: new TFile("Notes/Source.md") });
+
+		expect(editor.value).toBe("HelloNote");
+		expect(Notice.messages.at(-1)).toBe("Inserted at the cursor in Notes/Source.md. This reply may be incomplete: the provider stopped at its output token limit.");
+	});
+
+	test("keeps selected text and checks the reply: active content goes in as its safe version", async () => {
+		const { plugin, fake } = await loadPlugin();
+		sidebarWithAnswer(fake, { text: "Chart: ![x](https://evil.example/a.png)", incompleteReason: null });
+		const editor = new FakeEditor("Keep this");
+		editor.select("Keep this");
+		Object.assign(editor, { setCursor: () => { editor.selectionStart = editor.selectionEnd; } });
+
+		await plugin.commands.get("insert-last-answer")?.editorCallback?.(editor, { file: new TFile("Notes/Source.md") });
+
+		expect(editor.value.startsWith("Keep this")).toBe(true);
+		expect(editor.value).not.toContain("![x](https://evil.example");
+		expect(Notice.messages.at(-1)).toContain("safe version at the cursor in Notes/Source.md");
+	});
+
+	test("says so when there is no answer to insert", async () => {
+		const { plugin } = await loadPlugin();
+		const editor = new FakeEditor("Note");
+
+		await plugin.commands.get("insert-last-answer")?.editorCallback?.(editor, { file: new TFile("Notes/Source.md") });
+
+		expect(editor.value).toBe("Note");
+		expect(Notice.messages.at(-1)).toBe("There is no AskMate answer to insert yet.");
 	});
 });
 

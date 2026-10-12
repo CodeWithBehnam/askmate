@@ -1,5 +1,5 @@
 import type { Skill, SkillService, SkillStatus } from "../../../skills";
-import type { SkillSelection, SkillUsed } from "./pluginApi";
+import type { SkillSelection, SkillUsed } from "../../../requests/runTypes";
 
 /**
  * Pure rules for choosing skills from the sidebar: validating what the person typed, building the selection a run

@@ -2,7 +2,7 @@
  * Public surface of the MCP client. launch.ts is deliberately not re-exported: it is the only module that imports child_process,
  * and only the desktop wiring in the plugin imports it directly.
  */
-export { McpService, type TrustOutcome } from "./McpService";
+export { McpService, forgetServerTrust, type TrustOutcome } from "./McpService";
 export { McpClient, DEFAULT_CLIENT_CONFIG, type McpClientConfig, type EraHint, type ServerSession, type ToolCatalogue } from "./McpClient";
 export {
 	DEFAULT_MCP_SETTINGS,

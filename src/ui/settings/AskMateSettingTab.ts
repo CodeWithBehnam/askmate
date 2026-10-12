@@ -52,7 +52,6 @@ import {
 	type ConnectionState,
 	type DefinitionExtras,
 	type FeedbackKind,
-	type PluginWave2Api,
 	type SettingsPageHost
 } from "./connectionPage";
 import { renderInstructionsPage } from "./instructionsPage";
@@ -225,13 +224,6 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		this.summariesSupported = supportsPageSummaries(appVersion);
 	}
 
-	/** Members the wave 2 plugin adds. Each is optional, so this tab works before and after they exist. */
-	get extras(): PluginWave2Api {
-		// Read through a structural type, so a member that does not exist yet is simply absent instead of a compile error.
-		const plugin: unknown = this.plugin;
-		return plugin as PluginWave2Api;
-	}
-
 	/** Whether this device's keychain holds a value for the saved key name. A name alone is not a key. */
 	hasSecret(secretName: string): boolean {
 		try {
@@ -246,8 +238,9 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 	 * page prefers its own result once it has run a test here.
 	 */
 	currentStage(): SetupStage {
-		const shared = this.connection.lastTest.status === "idle" ? this.extras.getSetupState?.() : undefined;
-		return shared ?? deriveSetupState(this.plugin.settings, (name) => this.hasSecret(name), this.connection.lastTest);
+		return this.connection.lastTest.status === "idle"
+			? this.plugin.getSetupState()
+			: deriveSetupState(this.plugin.settings, (name) => this.hasSecret(name), this.connection.lastTest);
 	}
 
 	async saveUiSetting(refreshViews = true): Promise<void> {
@@ -533,11 +526,11 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 
 	private skillsAndToolsSummary(): { displayValue: string; status: SettingsPageStatus } {
 		const settings = this.plugin.settings;
-		const skillService = this.extras.skillService ?? null;
-		const statuses = this.extras.mcpService?.status() ?? [];
+		const skillService = this.plugin.skillService;
+		const statuses = this.plugin.mcpService?.status() ?? [];
 		return summarizeSkillsAndTools({
 			skillsEnabled: settings.skills.enabled,
-			skills: skillService ? countSkills(skillService.list(), (skill) => skillService.statusOf(skill)) : { total: 0, needsReview: 0, invalid: 0 },
+			skills: countSkills(skillService.list(), (skill) => skillService.statusOf(skill)),
 			mcpEnabled: settings.mcp.enabled,
 			servers: summarizeServerStatuses(settings.mcp, statuses)
 		});

@@ -131,7 +131,7 @@ import { registerAnswerCommands } from "./answerCommands";
 import { AskMateSettingTab } from "../ui/settings/AskMateSettingTab";
 import { ASKMATE_ICON_SVG } from "../brand/icons";
 import { SkillService, type SkillConfig, type SkillHost } from "../skills";
-import { McpService, type McpHost, type TrustRequest } from "../mcp";
+import { McpService, forgetServerTrust, type McpHost, type TrustRequest } from "../mcp";
 import { createScratchHost, supportedDiagrams, toMermaidApi, type MermaidApi } from "../diagrams";
 import { guardSafetyCheck } from "../requests/diagramRun";
 import { deriveSetupState, mapProviderErrorToSetupCopy, planConnect, shouldShowFirstRunNotice, FIRST_RUN_NOTICE, IDLE_SETUP_TEST, type SetupErrorCopy, type SetupStage, type SetupTestState } from "../setup";
@@ -160,12 +160,6 @@ const KEY_APPROVAL_PREFIX = "askmate-key-approval:";
 const NOTICE_SECONDS = 1000;
 const FIRST_RUN_NOTICE_SECONDS = 15;
 
-/**
- * Public methods a sidebar view offers to commands, and which work in every composer layout:
- * `startNewConversation(): Promise<void>` and `startDiagram(prompt?: string): Promise<void>`.
- * The view is built in another work package, so each one is looked up at run time and a missing one is reported.
- */
-type SidebarShortcutName = "startNewConversation" | "startDiagram";
 const SETTINGS_TAB_ID = "askmate";
 
 export interface BatchWorkflowRunSummary extends BatchWorkflowSummary {
@@ -232,6 +226,19 @@ export class AskMatePlugin extends Plugin {
 			void this.ensureLauncher();
 		}
 		return this.mcpInstance;
+	}
+
+	/**
+	 * Forgets a server's trust on this device and stops it if it runs. It works whether tools are on or off, on the desktop or
+	 * not: with no service it removes the trust record directly, so Revoke trust and Delete server never depend on tools being on.
+	 */
+	async revokeMcpTrust(serverId: string): Promise<void> {
+		// The instance outlives switching tools off, so a server that is still running is stopped too.
+		if (this.mcpInstance) {
+			await this.mcpInstance.revokeTrust(serverId);
+			return;
+		}
+		forgetServerTrust(createDeviceTrustStore(this.app), serverId);
 	}
 
 	private getProviderRuntime(): ProviderRuntime {
@@ -1003,29 +1010,25 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	/**
-	 * Calls a public entry point of the sidebar view, in whichever layout it is. Typing a console command into the composer is
-	 * not an option: only the Console layout reads slash commands, and the default layout for new installs is Compact. A view
-	 * without the entry point gets a Notice that says what to do instead, so the command never fails silently.
+	 * Runs one of the sidebar view's public entry points, in whichever composer layout it is. Typing a console command into the
+	 * composer is not an option: only the Console layout reads slash commands, and the default layout for new installs is Compact.
+	 * A refusal from the view (a request is running, diagrams are off) is shown as a Notice, and so is a sidebar that cannot be
+	 * reached, so a command never fails silently.
 	 */
-	private async runSidebarShortcut(name: SidebarShortcutName, args: readonly unknown[], missingMessage: string): Promise<void> {
+	private async withSidebarView(run: (view: AskMateView) => Promise<void>): Promise<void> {
 		try {
 			await this.activateView();
-			let sawView = false;
-			for (const leaf of this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE)) {
+			const leaves = this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE);
+			for (const leaf of leaves) {
 				await leaf.loadIfDeferred();
-				if (!(leaf.view instanceof AskMateView)) {
-					continue;
-				}
-				sawView = true;
-				const shortcut: unknown = Reflect.get(leaf.view, name);
-				if (typeof shortcut === "function") {
-					await Reflect.apply(shortcut, leaf.view, args);
+				if (leaf.view instanceof AskMateView) {
+					await run(leaf.view);
 					return;
 				}
 			}
-			// With no view at all, activateView has already said why the sidebar did not open.
-			if (sawView) {
-				new Notice(missingMessage);
+			// With no leaf at all, activateView has already said why the sidebar did not open.
+			if (leaves.length > 0) {
+				new Notice("AskMate could not reach its sidebar. Close the AskMate sidebar, open it again from the ribbon, then try again.");
 			}
 		} catch (error) {
 			new Notice(this.getErrorMessage(error));
@@ -1033,19 +1036,11 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	private startNewConversation(): Promise<void> {
-		return this.runSidebarShortcut(
-			"startNewConversation",
-			[],
-			"This version of the sidebar cannot start a conversation from a command. Use the New conversation button at the top of the AskMate sidebar."
-		);
+		return this.withSidebarView((view) => view.startNewConversation());
 	}
 
 	private startDiagram(): Promise<void> {
-		return this.runSidebarShortcut(
-			"startDiagram",
-			[],
-			"This version of the sidebar cannot start a diagram from a command. Ask for one in the sidebar, for example: Draw a diagram of this note."
-		);
+		return this.withSidebarView((view) => view.startDiagram());
 	}
 
 	/** The key can leave the device only for an address this device approved for it, so the first use asks. */
@@ -1894,7 +1889,8 @@ export class AskMatePlugin extends Plugin {
 		targetLabel,
 		before,
 		after,
-		warning
+		warning,
+		toolDerived = false
 	}: {
 		/** The request the reply answers, when there is one. A review-queue item has none. */
 		request?: AskRequest;
@@ -1903,8 +1899,10 @@ export class AskMatePlugin extends Plugin {
 		before: string;
 		after: string;
 		warning?: string;
+		/** The reply was written from tool results. A queued item carries this itself, because it has no request. */
+		toolDerived?: boolean;
 	}): Promise<boolean> {
-		const forceDiff = request !== undefined && this.requestRunner.getRunFacts(request).toolDerived;
+		const forceDiff = toolDerived || (request !== undefined && this.requestRunner.getRunFacts(request).toolDerived);
 		const notice = forceDiff ? joinWarnings(warning, "This reply was written from tool results, so check it before it is applied.") : warning;
 		if (this.shouldUseDiffApproval(scope, forceDiff)) {
 			return await askMateDiffConfirm(this.app, {
@@ -2077,12 +2075,6 @@ export class AskMatePlugin extends Plugin {
 		this.assertOutputIsApplicable(proposedText.trim());
 		this.assertTargetAcceptsText(request);
 		this.assertDiagramWritable(request);
-		// A reply built from tool results is always reviewed as a diff, in every approval mode. A queue item does not remember
-		// where its text came from (the run facts belong to the request, and the saved item has no such field), so applying it
-		// later would skip that diff. It is refused here, and Apply on the reply itself shows the diff.
-		if (this.requestRunner.getRunFacts(request).toolDerived) {
-			throw new Error("This reply was written from tool results, so it cannot be queued for later. Apply it directly, which shows the changes before anything is written.");
-		}
 		// A suggestion that replaces the note or the selection keeps what that text already held; one that is appended has no source.
 		const effective = resolveApplyScope(scope, request.context.source);
 		const replaced = effective === "full-note"
@@ -2091,7 +2083,10 @@ export class AskMatePlugin extends Plugin {
 				? request.context.selectionIdentity?.text ?? request.context.content
 				: undefined;
 		const prepared = this.prepareForWrite(request, proposedText, replaced);
-		return await this.historyService.queueReviewItemFromRequest(request, prepared.text, model, scope);
+		// The run facts belong to the request, so the item carries the flag: applying it later still shows the diff first.
+		return await this.historyService.queueReviewItemFromRequest(request, prepared.text, model, scope, {
+			toolDerived: this.requestRunner.getRunFacts(request).toolDerived
+		});
 	}
 
 	/** Excalidraw files hold drawing data in Markdown; writing model text into them can corrupt the drawing. */
@@ -2170,7 +2165,8 @@ export class AskMatePlugin extends Plugin {
 				targetLabel: file.path,
 				before: content,
 				after: nextContent,
-				warning: joinWarnings(planWarning, describeWriteChanges(prepared), describeActiveContentAdded(content, nextContent))
+				warning: joinWarnings(planWarning, describeWriteChanges(prepared), describeActiveContentAdded(content, nextContent)),
+				toolDerived: item.toolDerived === true
 			}))) {
 				return "Review item apply cancelled. No note was changed.";
 			}

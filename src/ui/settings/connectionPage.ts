@@ -14,8 +14,6 @@ import {
 	type SetupStage,
 	type SetupTestState
 } from "../../setup";
-import type { McpServerStatus, TrustOutcome } from "../../mcp";
-import type { Diagnostic, Skill, SkillStatus } from "../../skills";
 import {
 	DEFAULT_LOCAL_BASE_URL,
 	DEFAULT_PROVIDER_SETTINGS,
@@ -34,36 +32,11 @@ import { pluralise } from "./settingsSummaries";
 import { resolveBaseUrlInput, type IntegerBounds, type SettingControlKey } from "./settingsInputs";
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The surface of the settings tab that the page builders use, and the wave 2 members of the plugin
+// The surface of the settings tab that the page builders use
 // ---------------------------------------------------------------------------------------------------------------------
 
 export type FeedbackKind = "error" | "warning" | "success" | "info";
 export type DefinitionExtras = { aliases?: string[]; visible?: boolean | (() => boolean) };
-
-/**
- * What the skills service offers the settings page. The real SkillService satisfies it; the page reaches it through the plugin
- * with optional chaining, so it also works in a build where the service does not exist yet.
- */
-export interface SkillServiceView {
-	list(): readonly Skill[];
-	issues?(): readonly Diagnostic[];
-	statusOf(skill: Skill): SkillStatus;
-	scan(): Promise<void>;
-	trust(id: string, hash: string): Promise<void>;
-	revoke?(id: string): Promise<void>;
-	onChange(callback: () => void): () => void;
-}
-
-/** What the MCP service offers the settings page. */
-export interface McpServiceView {
-	status(): readonly McpServerStatus[];
-	trust(serverId: string): Promise<TrustOutcome>;
-	revokeTrust(serverId: string): Promise<void>;
-	testConnection(serverId: string, signal?: AbortSignal): Promise<McpServerStatus | null>;
-	reconcile(): Promise<void>;
-	onStatusChange(callback: () => void): () => void;
-	snapshotTools?(): { tools: ReadonlyArray<{ serverId: string; toolName: string; title: string; description: string; warnings: readonly string[]; pin: "new" | "approved" | "changed"; claimsReadOnly: boolean }> };
-}
 
 /** The result of a connection test, as far as this page needs it. */
 export interface ConnectionTestView {
@@ -71,24 +44,6 @@ export interface ConnectionTestView {
 	message: string;
 	modelFound?: boolean | null;
 	suggestedModel?: string | null;
-}
-
-/**
- * Plugin members that arrive with the wave 2 integration. Each is optional, so this page compiles and runs without them and
- * uses them once they exist.
- */
-export interface PluginWave2Api {
-	skillService?: SkillServiceView | null;
-	mcpService?: McpServiceView | null;
-	getSetupState?: () => SetupStage;
-	saveProviderApiKey?: (providerId: TextProviderId, apiKey: string) => Promise<void>;
-	testProviderConnectionDetailed?: () => Promise<ConnectionTestView>;
-	openSettingsTab?: () => void;
-	/**
-	 * Forgets a server's device trust without the running service, which does not exist while tools are off. Not in the wave 2
-	 * contract yet: the page uses it when the plugin offers it and otherwise says that trust cannot be revoked.
-	 */
-	revokeMcpTrust?: (serverId: string) => Promise<void>;
 }
 
 /** State the Connection page keeps across redraws of the page. */
@@ -101,7 +56,6 @@ export interface ConnectionState {
 export interface SettingsPageHost {
 	readonly app: App;
 	readonly plugin: AskMatePlugin;
-	readonly extras: PluginWave2Api;
 	readonly connection: ConnectionState;
 	/** Skill text approved in this session, so a later review can show what changed. Not stored: it ends with the session. */
 	readonly approvedSkillText: Map<string, string>;
@@ -372,9 +326,7 @@ export function buildConnectionItems(host: SettingsPageHost): SettingDefinitionI
 			paintStatus();
 			let result: ConnectionTestView;
 			try {
-				result = host.extras.testProviderConnectionDetailed
-					? await host.extras.testProviderConnectionDetailed()
-					: { ok: true, message: await plugin.testSelectedProviderConnection(), modelFound: null };
+				result = await plugin.testProviderConnectionDetailed();
 			} catch (error) {
 				result = { ok: false, message: plugin.getErrorMessage(error) };
 			}
@@ -404,14 +356,8 @@ export function buildConnectionItems(host: SettingsPageHost): SettingDefinitionI
 			return;
 		}
 		try {
-			if (host.extras.saveProviderApiKey) {
-				await host.extras.saveProviderApiKey(providerId, plan.key);
-			} else {
-				// setSecret throws for an id the keychain refuses, so a failure is reported here instead of being lost.
-				app.secretStorage.setSecret(plan.secretId, plan.key);
-				provider.apiKeySecretName = plan.secretId;
-				await host.saveUiSetting();
-			}
+			// setSecret throws for an id the keychain refuses, so a failure is reported here instead of being lost.
+			await plugin.saveProviderApiKey(providerId, plan.key);
 		} catch (error) {
 			host.setFieldFeedback(setting, `AskMate could not save the key. ${plugin.getErrorMessage(error)}`);
 			return;

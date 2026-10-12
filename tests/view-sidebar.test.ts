@@ -1,15 +1,18 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
+import { deriveSetupState } from "../src/setup";
 import type { AskMateSettings, AskRequest, NoteContext, RunRequestOptions, TextProviderId } from "../src/shared/types";
 import { ThreadService } from "../src/threads/ThreadService";
 import { assembleDiagram, designFromRecipe, STYLE_RECIPES } from "../src/diagrams";
+import { DEFAULT_DIAGRAM_QUESTION } from "../src/ui/sidebar/components/diagramModel";
+import { BUSY_RUN_MESSAGE } from "../src/ui/sidebar/runController";
 import { hashSkillText, SkillService, type SkillConfig, type SkillFileInfo, type SkillHost, type SkillMatchMode } from "../src/skills";
 import type { AskMatePlugin } from "../src/plugin/AskMatePlugin";
 import { WORKFLOWS } from "../src/workflows/builtInWorkflows";
 import { createFakeApp, FakeEditor, openFakeMarkdownView, type FakeApp } from "./support/fake-app";
 import { createFakeMouseEvent, fireDomEvent, getFakeWindow, installDomGlobals } from "./support/fake-dom";
 import { MarkdownRenderer, Menu, Notice, WorkspaceLeaf, type TFile } from "./support/obsidian-fakes";
-import type { SidebarResult, Wave2RunOptions } from "../src/ui/sidebar/components/pluginApi";
+import type { RunOptions, RunResult } from "../src/requests/runTypes";
 
 const { AskMateView } = await import("../src/ui/sidebar/AskMateView");
 const { ContextService } = await import("../src/context/ContextService");
@@ -93,7 +96,7 @@ interface TestLifecycle {
 
 const lifecycle = (view: unknown): TestLifecycle => view as TestLifecycle;
 
-type RunHandler = (request: AskRequest, options: Wave2RunOptions) => Promise<SidebarResult>;
+type RunHandler = (request: AskRequest, options: RunOptions) => Promise<RunResult>;
 
 interface Harness {
 	fake: FakeApp;
@@ -103,7 +106,7 @@ interface Harness {
 	root: HTMLElement;
 	context: InstanceType<typeof ContextService>;
 	built: Array<{ question: string; title: string; options: RunRequestOptions }>;
-	ran: Array<{ request: AskRequest; options: Wave2RunOptions }>;
+	ran: Array<{ request: AskRequest; options: RunOptions }>;
 	applied: Array<{ text: string; scope: string | undefined }>;
 	run: { handler: RunHandler };
 	models: { name: string };
@@ -111,8 +114,8 @@ interface Harness {
 	skills: { service: SkillService; host: SkillTestHost };
 }
 
-function textResult(text: string, extra: Partial<SidebarResult> = {}): SidebarResult {
-	return { kind: "text", model: MODEL, text, ...extra } as SidebarResult;
+function textResult(text: string, extra: Partial<RunResult> = {}): RunResult {
+	return { kind: "text", model: MODEL, text, ...extra } as RunResult;
 }
 
 function makeRequest(question: string, title: string, options: RunRequestOptions & { intentKind?: string }, context: NoteContext, model: string): AskRequest {
@@ -204,7 +207,7 @@ async function createHarness(options: { configured?: boolean; layout?: "compact"
 			return makeRequest(question, title, requestOptions, noteContext as NoteContext, models.name);
 		},
 		confirmUsageGuardrails: () => Promise.resolve(),
-		runOpenAIRequest: (request: AskRequest, runOptions: Wave2RunOptions) => {
+		runOpenAIRequest: (request: AskRequest, runOptions: RunOptions) => {
 			ran.push({ request, options: runOptions });
 			return run.handler(request, runOptions);
 		},
@@ -224,6 +227,18 @@ async function createHarness(options: { configured?: boolean; layout?: "compact"
 		},
 		queueReviewItemFromRequest: () => Promise.resolve({ sourcePath: "A.md" }),
 		testSelectedProviderConnection: () => Promise.resolve("ok"),
+		// The members the real plugin has for the sidebar, with working defaults. A test replaces the one it wants to watch.
+		skillService: undefined,
+		mcpService: null,
+		getSetupState: () => deriveSetupState(settings, (name: string) => (fake.secretStorage.getSecret(name) ?? "") !== ""),
+		saveProviderApiKey: (providerId: TextProviderId, key: string) => {
+			settings.providers[providerId].apiKeySecretName = `askmate-${providerId}-key`;
+			fake.secretStorage.setSecret(`askmate-${providerId}-key`, key);
+			return Promise.resolve();
+		},
+		testProviderConnectionDetailed: async () => ({ ok: true, message: await plugin.testSelectedProviderConnection(), modelFound: null, latencyMs: 0, suggestedModel: null, copy: null }),
+		openSettingsTab: () => undefined,
+		loadMermaidApi: () => Promise.resolve(null),
 		setReasoningEffort: () => Promise.resolve(),
 		openEvidenceSource: () => Promise.resolve(),
 		createConversationNote: () => Promise.resolve({ path: "AskMate/Chat.md" }),
@@ -233,14 +248,13 @@ async function createHarness(options: { configured?: boolean; layout?: "compact"
 	Object.defineProperty(plugin, "setConfigured", { value: (value: boolean) => (configured = value) });
 	const skillHost = new SkillTestHost();
 	const service = new SkillService(skillHost);
-	if (options.skills) {
-		skillHost.config = { ...skillHost.config, matchMode: options.skills };
-		for (const [path, text] of Object.entries(options.skillFiles ?? {})) {
-			skillHost.files.set(`AskMate/Skills/${path}`, text);
-		}
-		await service.scan();
-		Object.assign(plugin, { skillService: service });
+	// Nothing is suggested or started on its own unless a test asks for a matching mode.
+	skillHost.config = { ...skillHost.config, matchMode: options.skills ?? "off" };
+	for (const [path, text] of Object.entries(options.skillFiles ?? {})) {
+		skillHost.files.set(`AskMate/Skills/${path}`, text);
 	}
+	await service.scan();
+	Object.assign(plugin, { skillService: service });
 	const leaf = new WorkspaceLeaf(fake.app);
 	const view = new AskMateView(leaf as never, plugin);
 	activeDocument.body.appendChild(view.containerEl);
@@ -544,6 +558,81 @@ describe("the Connect card and the key it is given", () => {
 		expect(saved).toEqual([["google-gemini", "AIzaSyGeminiKey1234567"]]);
 	});
 
+	describe("Check the address", () => {
+		const addressField = (harness: Harness): HTMLInputElement => {
+			const field = harness.root.querySelector<HTMLInputElement>(".askmate-setup-key-row input[type=\"text\"]");
+			if (!field) {
+				throw new Error("expected the address field");
+			}
+			return field;
+		};
+		const selectedChip = (harness: Harness): string | undefined => harness.root.querySelector(".askmate-setup-provider.is-selected")?.textContent ?? undefined;
+		const errorButton = (harness: Harness): HTMLButtonElement | null => harness.root.querySelector<HTMLButtonElement>(".askmate-setup-error button");
+
+		test("after a bad local address it stays on the Local chip, keeps what was typed and does not leave for settings", async () => {
+			const harness = await start({ configured: false });
+			const opened: string[] = [];
+			Object.assign(harness.plugin, { openSettingsTab: () => opened.push("settings") });
+			chip(harness, "Local")?.click();
+			await settle();
+			addressField(harness).value = "ftp://localhost:11434";
+			fireDomEvent(addressField(harness), "input");
+			await pressConnect(harness);
+			expect(harness.root.querySelector(".askmate-setup-error")?.textContent).toContain("The address must start with http://");
+			expect(errorButton(harness)?.textContent).toBe("Check the address");
+			// The chat provider is still OpenAI; the chip in use is not.
+			expect(selectedChip(harness)).toBe("Local");
+
+			errorButton(harness)?.click();
+			await settle();
+
+			expect(opened).toEqual([]);
+			expect(selectedChip(harness)).toBe("Local");
+			expect(addressField(harness).value).toBe("ftp://localhost:11434");
+			expect(activeDocument.activeElement).toBe(addressField(harness));
+		});
+
+		test("after the chat provider itself failed on its address it opens the card on that provider", async () => {
+			const harness = await start({ configured: false, layout: "console", saved: chatProviderSaved("openai-compatible") });
+			const opened: string[] = [];
+			Object.assign(harness.plugin, {
+				openSettingsTab: () => opened.push("settings"),
+				getChatProviderId: () => "openai-compatible",
+				getChatProviderModelRef: () => ({ providerId: "openai-compatible", providerName: "Local", model: harness.settings.providers["openai-compatible"].model, capability: "text" }),
+				getProviderSettings: (id: TextProviderId) => harness.settings.providers[id],
+				testProviderConnectionDetailed: () => Promise.resolve({ ok: false, message: "Base URL must start with http:// or https://", modelFound: null })
+			});
+			// The Local server has a default address, so nothing is missing and the card opens only when asked for.
+			ask(harness, "/setup");
+			await send(harness);
+			await pressConnect(harness);
+			expect(errorButton(harness)?.textContent).toBe("Check the address");
+
+			errorButton(harness)?.click();
+			await settle();
+
+			expect(opened).toEqual([]);
+			expect(selectedChip(harness)).toBe("Local");
+			expect(addressField(harness)).toBeDefined();
+		});
+
+		test("a provider whose address the card cannot edit is sent to settings", async () => {
+			const harness = await start({ configured: false });
+			const opened: string[] = [];
+			storeKeys(harness, [], { ok: false, message: "Base URL must start with https://" });
+			Object.assign(harness.plugin, { openSettingsTab: () => opened.push("settings") });
+			typeKey(harness, "sk-live-abcdefgh");
+			await pressConnect(harness);
+			expect(errorButton(harness)?.textContent).toBe("Check the address");
+			expect(selectedChip(harness)).toBe("OpenAI");
+
+			errorButton(harness)?.click();
+			await settle();
+
+			expect(opened).toEqual(["settings"]);
+		});
+	});
+
 	test("switching back to a provider does not bring its old draft back", async () => {
 		const harness = await start({ configured: false });
 		storeKeys(harness, [], { ok: true, message: "ok" });
@@ -806,7 +895,7 @@ describe("Retry", () => {
 describe("diagrams", () => {
 	const SOURCE = "---\nconfig:\n  theme: base\n---\nflowchart TD\n  A[Start] --> B[End]";
 
-	function diagramResult(status: "valid" | "repaired" | "fallback" = "valid"): SidebarResult {
+	function diagramResult(status: "valid" | "repaired" | "fallback" = "valid"): RunResult {
 		return textResult("Here is the flow.\n\n```mermaid\nflowchart TD\n  A --> B\n```", {
 			diagram: { status, kind: "flowchart", style: "blueprint", source: SOURCE, ...(status === "fallback" ? { errors: ["Parse error on line 2"] } : {}) }
 		});
@@ -944,6 +1033,65 @@ describe("diagrams", () => {
 		expect(harness.root.querySelector(".askmate-diagram-placeholder")).toBeNull();
 	});
 
+	for (const layout of ["compact", "expanded", "console"] as const) {
+		test(`startDiagram draws a diagram of the note in the ${layout} layout and leaves the composer alone`, async () => {
+			const harness = await start({ layout });
+			harness.run.handler = () => Promise.resolve(diagramResult());
+			ask(harness, "a draft that is still being written");
+
+			await harness.view.startDiagram();
+			await settle();
+
+			const request = harness.ran[0]?.request;
+			expect(harness.ran).toHaveLength(1);
+			expect(request?.metadata.intentKind).toBe("diagram");
+			expect(request?.metadata.diagram).toEqual({ kind: "auto", style: "auto", nonce: 0 });
+			expect(request?.question).toBe(DEFAULT_DIAGRAM_QUESTION);
+			expect(harness.ran[0]?.options.skillSelection?.explicitIds).toContain("built-in:mermaid-diagrams");
+			expect(harness.root.querySelector(".askmate-diagram-card")).not.toBeNull();
+			expect(box(harness).value).toBe("a draft that is still being written");
+		});
+	}
+
+	test("startDiagram takes what to draw, trimmed", async () => {
+		const harness = await start();
+		harness.run.handler = () => Promise.resolve(diagramResult());
+		await harness.view.startDiagram("  the login flow \n");
+		expect(harness.ran[0]?.request.question).toBe("the login flow");
+	});
+
+	test("startDiagram says so when diagrams are off, and runs nothing", async () => {
+		const harness = await start({ saved: { diagrams: { ...normalizeAskMateSettings({}, "load").diagrams, enabled: false } } });
+		await expect(harness.view.startDiagram()).rejects.toThrow("Diagrams are turned off");
+		expect(harness.ran).toHaveLength(0);
+	});
+
+	test("startDiagram without a connected provider opens the Connect card and keeps the person where they are", async () => {
+		const harness = await start({ configured: false });
+		await harness.view.startDiagram();
+		expect(harness.ran).toHaveLength(0);
+		expect(harness.root.querySelector(".askmate-setup-card")).not.toBeNull();
+		expect(Notice.messages.at(-1)).toBe("Connect an AI provider before drawing a diagram.");
+	});
+
+	test("startDiagram while a request runs does not start a second one", async () => {
+		const harness = await start();
+		const pending: { release: (() => void) | null } = { release: null };
+		harness.run.handler = () => new Promise((resolve) => {
+			pending.release = () => resolve(textResult("Done."));
+		});
+		ask(harness, "A slow question");
+		harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+		await settle();
+
+		await harness.view.startDiagram();
+
+		expect(harness.ran).toHaveLength(1);
+		expect(Notice.messages.at(-1)).toBe(BUSY_RUN_MESSAGE);
+		pending.release?.();
+		await settle();
+	});
+
 	test("a diagram request does not offer tools", async () => {
 		const harness = await start({ layout: "console" });
 		Object.assign(harness.plugin, { mcpService: { status: () => [{ id: "a", label: "A", transport: "http", state: { kind: "ready", tools: 2, hidden: 0, era: "x", version: "1", serverName: "S" } }] } });
@@ -955,6 +1103,55 @@ describe("diagrams", () => {
 		ask(harness, "/chat Plain question");
 		await send(harness);
 		expect(harness.ran[1]?.options.toolsEnabled).toBe(true);
+	});
+});
+
+describe("starting a conversation from a command", () => {
+	for (const layout of ["compact", "expanded", "console"] as const) {
+		test(`startNewConversation clears the transcript and says so in the ${layout} layout, with the draft left alone`, async () => {
+			const harness = await start({ layout });
+			ask(harness, "First question");
+			await send(harness);
+			expect(bubbles(harness, "user")).toHaveLength(1);
+			expect(bubbles(harness, "assistant")).toHaveLength(1);
+			ask(harness, "A draft not yet sent");
+
+			await harness.view.startNewConversation();
+
+			expect(bubbles(harness, "user")).toHaveLength(0);
+			expect(bubbles(harness, "assistant")).toHaveLength(0);
+			expect(harness.root.querySelector(".askmate-console-output .askmate-message-body")?.textContent).toContain("Started a new conversation");
+			expect(box(harness).value).toBe("A draft not yet sent");
+		});
+	}
+
+	test("startNewConversation keeps the old conversation in Saved conversations", async () => {
+		const harness = await start();
+		ask(harness, "First question");
+		await send(harness);
+		const before = (harness.plugin.threads as ThreadService).listThreads().length;
+		await harness.view.startNewConversation();
+		// The next question lands in a conversation of its own.
+		ask(harness, "Second question");
+		await send(harness);
+		expect((harness.plugin.threads as ThreadService).listThreads().length).toBe(before + 1);
+	});
+
+	test("startNewConversation refuses, with the reason, while a request is running", async () => {
+		const harness = await start();
+		const pending: { release: (() => void) | null } = { release: null };
+		harness.run.handler = () => new Promise((resolve) => {
+			pending.release = () => resolve(textResult("Done."));
+		});
+		ask(harness, "A slow question");
+		harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+		await settle();
+
+		await expect(harness.view.startNewConversation()).rejects.toThrow("Stop the current request before starting a new conversation.");
+
+		expect(bubbles(harness, "user")).toHaveLength(1);
+		pending.release?.();
+		await settle();
 	});
 });
 
@@ -1334,9 +1531,14 @@ describe("skills in the sidebar", () => {
 		expect(harness.root.querySelector(".askmate-skill-chip.is-active")).not.toBeNull();
 	});
 
-	test("the picker is hidden when skills are not available", async () => {
-		const harness = await start();
+	test("the picker is hidden when skills are turned off", async () => {
+		const harness = await start({ saved: { skills: { ...normalizeAskMateSettings({}, "load").skills, enabled: false } } });
 		expect(harness.root.querySelector<HTMLButtonElement>(".askmate-skill-picker")?.hidden).toBe(true);
+	});
+
+	test("the picker is shown when skills are on", async () => {
+		const harness = await start();
+		expect(harness.root.querySelector<HTMLButtonElement>(".askmate-skill-picker")?.hidden).toBe(false);
 	});
 });
 

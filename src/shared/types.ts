@@ -825,6 +825,8 @@ export interface ReviewQueueItem {
 	model: string;
 	workflowId: string | null;
 	workflowName: string | null;
+	/** The reply was written from tool results. Applying the item always shows the diff first, in every approval mode. */
+	toolDerived?: boolean;
 }
 
 export interface BatchWorkflowRunOptions {
