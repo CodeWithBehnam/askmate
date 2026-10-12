@@ -3,8 +3,9 @@ import type { MermaidApi, ScratchHost } from "../src/diagrams";
 import type { ProviderRequestOptions, ProviderRuntime } from "../src/providers/types";
 import { MERMAID_SKILL_ID, guardSafetyCheck } from "../src/requests/diagramRun";
 import { RequestRunner, type RequestRunnerHost } from "../src/requests/RequestRunner";
-import type { DiagramPort, RunPhaseEvent } from "../src/requests/runTypes";
+import type { DiagramPort, RunPhaseEvent, SkillResolverPort } from "../src/requests/runTypes";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { hashSkillText, loadBuiltInSkills, parseSkillFile, resolveSkills } from "../src/skills";
 import type { AskMateHttpResponse, AskMateSettings, NoteContext, ProviderModelRef, Workflow } from "../src/shared/types";
 
 type UsageParams = Parameters<RequestRunnerHost["recordOperationUsage"]>[0];
@@ -30,12 +31,15 @@ interface Options {
 	canSendRepair?: boolean;
 	diagramsEnabled?: boolean;
 	mermaid?: boolean;
+	/** Replaces the fake skill resolver, for example with the real one. */
+	resolver?: SkillResolverPort;
 }
 
 function createRig(options: Options) {
 	const queue = [...options.replies];
 	const bodies: Array<Record<string, unknown>> = [];
 	const records: UsageParams[] = [];
+	const notices: string[] = [];
 	const settings: AskMateSettings = { ...DEFAULT_SETTINGS };
 	const runtime: ProviderRuntime = {
 		getProviderSettings: () => ({ apiKeySecretName: "", model: "gpt-5.5", modelOptions: [], baseUrl: "https://example.test/v1" }),
@@ -78,9 +82,12 @@ function createRig(options: Options) {
 		getFileNoteContext: () => Promise.resolve(noteContext("Note.")),
 		getFullNoteContext: () => Promise.resolve(noteContext("Note.")),
 		buildContextAttachments: () => Promise.resolve([]),
+		notify: (message) => {
+			notices.push(message);
+		},
 		extensions: {
 			diagrams,
-			skills: {
+			skills: options.resolver ?? {
 				resolve: (input) => ({
 					skills: (input.workflow ?? []).includes(MERMAID_SKILL_ID)
 						? [{ id: MERMAID_SKILL_ID, name: "mermaid-diagrams", source: "built-in", version: "1", hash: "h", body: "Pick the diagram type from the content.", activation: "workflow", characters: 40 }]
@@ -97,7 +104,7 @@ function createRig(options: Options) {
 			}
 		}
 	};
-	return { runner: new RequestRunner(host), bodies, records };
+	return { runner: new RequestRunner(host), bodies, records, notices };
 }
 
 describe("diagram requests", () => {
@@ -200,6 +207,105 @@ describe("diagram requests", () => {
 
 		expect(result.kind === "text" ? result.diagram?.status : "").toBe("valid");
 		expect(String(bodies[0]?.input)).toContain("<diagram_brief>");
+	});
+
+	test("a prose answer on a diagram run is shown as written and blocks nothing", async () => {
+		const prose = "The note has too little structure for a useful diagram. It has one heading and no steps.";
+		const { runner, bodies, records } = createRig({ replies: [answer(prose)] });
+		const request = await runner.buildRequest("Draw a flowchart of the release process", "Diagram");
+		expect(request.metadata.intentKind).toBe("diagram");
+
+		const result = await runner.runOpenAIRequest(request);
+
+		expect(result.kind).toBe("text");
+		expect(result.kind === "text" ? result.text : "").toBe(prose);
+		expect(result.kind === "text" ? result.text : "").not.toContain("```");
+		expect(result.kind === "text" ? result.diagram : "missing").toBeUndefined();
+		expect(runner.getRunFacts(request)).toMatchObject({ diagramBlocked: false, diagramValid: false });
+		// No diagram was claimed, so there is nothing to repair and no extra turn.
+		expect(bodies).toHaveLength(1);
+		expect(records.map((record) => record.operationKind)).toEqual(["text_response"]);
+	});
+
+	test("an answer with a prose sentence and a broken diagram is still a blocked diagram", async () => {
+		const { runner } = createRig({ replies: [answer(`Here is the flow.\n\n${BROKEN}`)], allowRepair: false });
+		const request = await runner.buildRequest("Draw a flowchart of the release process", "Diagram");
+		const result = await runner.runOpenAIRequest(request);
+
+		expect(result.kind === "text" ? result.diagram?.status : "").toBe("fallback");
+		expect(runner.getRunFacts(request)).toMatchObject({ diagramBlocked: true, diagramValid: false });
+	});
+
+	test("with Use skills off, a diagram request still carries the built-in diagram guidance", async () => {
+		const builtIns = await loadBuiltInSkills((text) => Bun.YAML.parse(text), (text) => hashSkillText(text));
+		const resolver: SkillResolverPort = { resolve: (input) => resolveSkills({ ...input, skills: builtIns, enabled: false }) };
+		const { runner, bodies } = createRig({ replies: [answer(GOOD)], resolver });
+		const request = await runner.buildRequest("Draw a flowchart of the release process", "Diagram");
+		const result = await runner.runOpenAIRequest(request);
+
+		expect(request.skills?.map((skill) => skill.id)).toEqual([MERMAID_SKILL_ID]);
+		expect(String(bodies[0]?.instructions)).toContain("# Syntax rules");
+		expect(result.kind === "text" ? result.diagram?.status : "").toBe("valid");
+	});
+
+	test("with Use skills off, a /skill or pinned skill asked in the sidebar is reported, and the diagram chip stays quiet", async () => {
+		const builtIns = await loadBuiltInSkills((text) => Bun.YAML.parse(text), (text) => hashSkillText(text));
+		const raw = "---\nname: meeting-minutes\ndescription: Writes meeting minutes.\n---\n# Goal\nWrite the minutes.\n";
+		const minutes = await parseSkillFile({
+			path: "AskMate/Skills/meeting-minutes/SKILL.md",
+			raw,
+			hash: await hashSkillText(raw),
+			source: "vault",
+			fallbackName: "meeting-minutes",
+			parseYaml: (text) => Bun.YAML.parse(text)
+		});
+		const resolver: SkillResolverPort = { resolve: (input) => resolveSkills({ ...input, skills: [...builtIns, minutes], trusted: { [minutes.id]: minutes.hash }, enabled: false }) };
+
+		const question = createRig({ replies: [answer("Plain answer.")], resolver });
+		const asked = await question.runner.buildRequest("Summarise this note", "Question");
+		await question.runner.runOpenAIRequest(asked, { skillSelection: { explicitIds: ["vault:meeting-minutes"], stickyIds: ["vault:meeting-minutes"], autoEnabled: true } });
+		expect(asked.skills).toBeUndefined();
+		expect(question.notices).toEqual(['Skills are turned off in settings, so "meeting-minutes" was skipped.']);
+
+		const diagram = createRig({ replies: [answer(GOOD)], resolver });
+		const drawn = await diagram.runner.buildRequest("Draw a flowchart of the release process", "Diagram");
+		await diagram.runner.runOpenAIRequest(drawn, { skillSelection: { explicitIds: [MERMAID_SKILL_ID], stickyIds: [], autoEnabled: true } });
+		expect(drawn.skills?.map((skill) => skill.id)).toEqual([MERMAID_SKILL_ID]);
+		expect(diagram.notices).toEqual([]);
+	});
+
+	test("a pinned skill that cannot be used is announced instead of dropped without a word", async () => {
+		const resolver: SkillResolverPort = {
+			resolve: () => ({
+				skills: [],
+				notices: [{ kind: "needs-review", ref: "vault:minutes", activation: "sticky", message: 'Skill "minutes" needs review before it can be used.' }],
+				suggestion: null,
+				totalCharacters: 0
+			})
+		};
+		const { runner, notices } = createRig({ replies: [answer("Plain answer."), answer("Plain answer.")], resolver });
+		const request = await runner.buildRequest("What changed in this note?", "Question");
+		await runner.runOpenAIRequest(request, { skillSelection: { explicitIds: [], stickyIds: ["vault:minutes"], autoEnabled: true } });
+
+		expect(notices).toEqual(['Skill "minutes" needs review before it can be used.']);
+		// The same message is not repeated within one run.
+		expect(new Set(notices).size).toBe(notices.length);
+	});
+
+	test("a command run says nothing about skills, so a batch of notes does not repeat the notice for every note", async () => {
+		const resolver: SkillResolverPort = {
+			resolve: () => ({
+				skills: [],
+				notices: [{ kind: "missing", ref: "vault:minutes", activation: "workflow", message: 'Skill "minutes" is not available and was skipped.' }],
+				suggestion: null,
+				totalCharacters: 0
+			})
+		};
+		const { runner, notices } = createRig({ replies: [answer("Plain answer.")], resolver });
+		const request = await runner.buildRequest("Summarise this note", "Summary", { commandSource: "command_palette" });
+		await runner.runOpenAIRequest(request);
+
+		expect(notices).toEqual([]);
 	});
 
 	test("running the same request again starts from nothing: an earlier failure no longer blocks it", async () => {

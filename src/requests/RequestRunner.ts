@@ -73,9 +73,9 @@ import { truncateAtCodePoint } from "./promptSafety";
 import type { DetailedContextAttachments, NoNoteContext } from "../context/ContextService";
 import { detectDiagramIntent } from "../shared/imageIntent";
 import type { RepairRequest } from "../diagrams";
-import type { ResolvedSkill } from "../skills";
+import type { ResolvedSkill, SkillNotice } from "../skills";
 import { DIAGRAM_AUTO, MERMAID_SKILL_ID, finishDiagram, planDiagram, withDiagramBrief, type DiagramPlan } from "./diagramRun";
-import { runToolsTurn } from "./toolRun";
+import { createTurnStreaming, runToolsTurn } from "./toolRun";
 import type {
 	DiagramPort,
 	DiagramRunResult,
@@ -159,8 +159,12 @@ export type RequestRunnerHost = {
 export const WORKFLOW_SELECTED_TEXT_REFERENCE = "[the selected text, provided in the note context above]";
 
 const NO_SKILL_SELECTION: SkillSelection = { explicitIds: [], stickyIds: [], autoEnabled: false };
-/** Tool rounds are capped by the loop at this many model turns whatever the setting allows. */
-const MAX_TOOL_LOOP_TURNS = DEFAULT_TOOL_LOOP_LIMITS.maxTurns;
+/**
+ * The "Longest tool result" setting caps the text a tool returned. AskMate wraps that text in a <tool_result> tag, with
+ * the server and tool names, and may add a cut notice. The loop's own cap leaves room for both, so it never cuts the
+ * closing tag off a result that already fits the setting.
+ */
+const TOOL_RESULT_WRAPPER_ALLOWANCE = 1_000;
 const NO_FACTS: RunFacts = { diagramBlocked: false, diagramValid: false, toolDerived: false };
 
 // The repair prompt carries its own rules and the failing diagram, so this only frames the turn.
@@ -194,6 +198,8 @@ export class RequestRunner {
 	/** What each finished run learnt about its reply, by request object. Weak, so a dropped request frees its entry. */
 	private readonly facts = new WeakMap<AskRequest, RunFacts>();
 	private readonly contextReports = new WeakMap<AskRequest, ContextReport>();
+	/** Skills a request asked for and did not get, as the resolver worded them. */
+	private readonly skillNotices = new WeakMap<AskRequest, readonly SkillNotice[]>();
 	private readonly toolMemory = createToolTurnMemory();
 
 	constructor(private readonly host: RequestRunnerHost) {}
@@ -261,6 +267,7 @@ export class RequestRunner {
 			suppressAuto: !selection.autoEnabled || hasWorkflow
 		});
 		const skills = [...resolution.skills];
+		this.skillNotices.set(request, resolution.notices);
 		request.skills = skills.map((skill) => ({
 			id: skill.id,
 			name: skill.name,
@@ -441,6 +448,7 @@ export class RequestRunner {
 		if (options.skillSelection) {
 			this.applySkills(request, options.skillSelection, this.host.getWorkflowSkillIds?.(request.metadata.workflowId) ?? []);
 		}
+		this.announceSkillNotices(request);
 		const plan = await this.planDiagramFor(request);
 		const skillsUsed = describeSkillsUsed(request);
 
@@ -451,8 +459,11 @@ export class RequestRunner {
 		if (withTools) {
 			text = withTools.answer;
 			incompleteReason = null;
-			// A tool answer arrives in one piece: only the last, tool-free turn is the answer, and text beside tool calls is progress.
-			onDelta(text);
+			// Only the last, tool-free turn is the answer and text beside tool calls is progress. When that turn streamed, the
+			// caller already has the answer; otherwise (no streaming, or a buffered fallback) it arrives here in one piece.
+			if (!withTools.streamed) {
+				onDelta(text);
+			}
 		} else {
 			const input = withDiagramBrief(buildRequestInput(request, { purpose: "answer" }), plan);
 			const result = providerId === "openai"
@@ -482,8 +493,11 @@ export class RequestRunner {
 				onPhase: options.onPhase
 			});
 			text = finished.text;
-			diagram = finished.result;
-			this.updateFacts(request, { diagramBlocked: finished.blocked, diagramValid: !finished.blocked });
+			// A reply with no diagram in it is an ordinary answer: no diagram card, and nothing is blocked.
+			if (finished.kind === "diagram") {
+				diagram = finished.result;
+				this.updateFacts(request, { diagramBlocked: finished.blocked, diagramValid: !finished.blocked });
+			}
 		}
 
 		request.metadata.outputIncompleteReason = incompleteReason;
@@ -497,6 +511,19 @@ export class RequestRunner {
 			...(withTools && withTools.toolCalls.length > 0 ? { toolCalls: withTools.toolCalls } : {}),
 			...(diagram ? { diagram } : {})
 		};
+	}
+
+	/**
+	 * A skill that was named for this run but not used (it needs review, was turned off, was deleted) is left out of the
+	 * prompt. Say so once per run, or a pinned skill keeps looking active while every answer ignores it. Only a question
+	 * asked in the sidebar says so: a batch of notes would repeat the same notice for every note.
+	 */
+	private announceSkillNotices(request: AskRequest): void {
+		if (request.metadata.commandSource !== "sidebar") {
+			return;
+		}
+		const messages = new Set((this.skillNotices.get(request) ?? []).map((notice) => notice.message));
+		messages.forEach((message) => this.host.notify?.(message));
 	}
 
 	/** Loads Mermaid and works out the look, but only for a diagram request on a build that can draw. */
@@ -552,7 +579,7 @@ export class RequestRunner {
 		providerRef: ProviderModelRef,
 		options: RunOptions,
 		plan: DiagramPlan | null
-	): Promise<{ answer: string; toolCalls: ToolUiEvent[] } | null> {
+	): Promise<{ answer: string; toolCalls: ToolUiEvent[]; streamed: boolean } | null> {
 		const tools = this.host.extensions?.tools;
 		const service = tools?.getService() ?? null;
 		if (!tools || !service) {
@@ -564,12 +591,16 @@ export class RequestRunner {
 			return null;
 		}
 		const settings = this.host.getSettings();
+		// The settings are the limits. A tool round is one model turn that asks for tools, and the turn after the last round
+		// always answers, so the loop gets one more turn than the setting names.
+		const rounds = Math.max(1, Math.floor(settings.mcp.maxToolRoundsPerTurn));
 		const limits: ToolLoopLimits = {
-			// A tool round is one model turn that asks for tools; the last turn always answers.
-			maxTurns: Math.min(MAX_TOOL_LOOP_TURNS, Math.max(2, settings.mcp.maxToolRoundsPerTurn + 1)),
-			maxToolCalls: DEFAULT_TOOL_LOOP_LIMITS.maxToolCalls,
-			maxResultChars: Math.min(DEFAULT_TOOL_LOOP_LIMITS.maxResultChars, settings.mcp.maxOutputChars)
+			maxTurns: rounds + 1,
+			// Calls run one at a time, so the call budget only matters to a provider that ignores that. It never ends a run sooner than the rounds do.
+			maxToolCalls: Math.max(rounds, DEFAULT_TOOL_LOOP_LIMITS.maxToolCalls),
+			maxResultChars: settings.mcp.maxOutputChars + TOOL_RESULT_WRAPPER_ALLOWANCE
 		};
+		const toolPromptLimits = { maxRounds: rounds, maxCalls: limits.maxToolCalls };
 		// Stop must reach an MCP call that is waiting on a server, so the run owns a signal that follows the caller's.
 		const controller = new AbortController();
 		const forwardAbort = (): void => controller.abort();
@@ -579,6 +610,10 @@ export class RequestRunner {
 		options.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
 		const input = withDiagramBrief(buildRequestInput(request, { purpose: "answer" }), plan);
 		let instructions = buildRequestInstructions(request, { purpose: "answer" });
+		// A caller that listens for text and can clear progress text (onTextReset) gets the final answer as it streams. Any other
+		// caller gets it in one piece, so narration beside tool calls is never glued onto its answer. The sender streams only
+		// when the runtime can, which is when Stream replies is on.
+		const streaming = createTurnStreaming({ onTextDelta: options.onTextDelta, onTextReset: options.onTextReset });
 
 		try {
 			this.host.throwIfAborted(controller.signal);
@@ -589,15 +624,16 @@ export class RequestRunner {
 				limits,
 				userText: input,
 				prepare: (snapshot, specs) => {
-					request.tools = { toolCount: snapshot.tools.length, serverLabels: snapshot.servers.map((server) => server.label), maxRounds: limits.maxTurns - 1 };
+					request.tools = { toolCount: snapshot.tools.length, serverLabels: snapshot.servers.map((server) => server.label), ...toolPromptLimits };
 					request.metadata.toolsEnabled = true;
+					// The request carries the same limits, so instructions rebuilt from it later match what was sent.
 					instructions = buildRequestInstructions(request, {
 						purpose: "answer",
-						tools: { toolCount: snapshot.tools.length, maxCalls: limits.maxToolCalls, requiresApproval: true }
+						tools: { toolCount: snapshot.tools.length, ...toolPromptLimits, requiresApproval: true }
 					});
 					return {
-						sendTurn: createToolTurnSender(
-							{ runtime: this.host.getProviderRuntime(), providerRef, memory: this.toolMemory },
+						sendTurn: streaming.wrap(createToolTurnSender(
+							{ runtime: this.host.getProviderRuntime(), providerRef, memory: this.toolMemory, ...(streaming.onDelta ? { onDelta: streaming.onDelta } : {}) },
 							{
 								model,
 								instructions,
@@ -606,7 +642,7 @@ export class RequestRunner {
 								maxOutputTokens: getToolTurnMaxOutputTokens(providerId, model),
 								reasoningEffort: getToolTurnReasoningEffort(providerId, model, request.metadata.reasoningEffort)
 							}
-						)
+						))
 					};
 				},
 				recordRound: async (round) => {
@@ -644,7 +680,7 @@ export class RequestRunner {
 			if (outcome.end !== "answered") {
 				throw new Error(outcome.endMessage);
 			}
-			return { answer: outcome.answer, toolCalls: outcome.toolCalls };
+			return { answer: outcome.answer, toolCalls: outcome.toolCalls, streamed: streaming.answerStreamed() };
 		} catch (error) {
 			if (error instanceof ToolsUnsupportedError) {
 				delete request.tools;

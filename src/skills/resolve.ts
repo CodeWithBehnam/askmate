@@ -1,3 +1,4 @@
+import { MERMAID_DIAGRAMS_SKILL, builtInSkillId } from "./builtin";
 import { MAX_SKILLS_PER_REQUEST, MAX_TOTAL_SKILL_CHARACTERS } from "./limits";
 import { matchSkill } from "./match";
 import { slugifySkillName } from "./parse";
@@ -69,6 +70,55 @@ function startsOnItsOwn(mode: SkillMatchMode, source: SkillSource): boolean {
 
 const compareIds =(left: ResolvedSkill, right: ResolvedSkill): number => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 
+/** The built-in skill that Diagram Studio gives every diagram request. It belongs to that feature, so naming it never needs a notice. */
+const DIAGRAM_SKILL_ID = builtInSkillId(MERMAID_DIAGRAMS_SKILL.name);
+
+/**
+ * With "Use skills" off nothing the person manages runs: no slash command, mention, pinned skill or automatic match. A built-in
+ * skill that a workflow or a diagram request names still applies, because it belongs to a feature with its own switch and
+ * the diagram prompt is written to rely on it. Skills from the vault are never part of this path. A skill that was named
+ * and skipped because of the switch is reported, so a `/skill` command does not look as if it worked.
+ */
+function resolveBuiltInsOnly(input: ResolveInput): SkillResolution {
+	const builtIns = (input.skills ?? []).filter((skill) => skill.source === "built-in");
+	const kept = resolveSkills({
+		...input,
+		enabled: true,
+		skills: builtIns,
+		explicit: [],
+		sticky: [],
+		workflow: (input.workflow ?? []).filter((ref) => findSkill(builtIns, ref).skill !== null),
+		suppressAuto: true
+	});
+	return { ...kept, notices: [...kept.notices, ...skippedBySwitch(input, kept)] };
+}
+
+/** One notice for each skill that was named on a channel but is not in the result because "Use skills" is off. */
+function skippedBySwitch(input: ResolveInput, kept: SkillResolution): SkillNotice[] {
+	const catalogue = input.skills ?? [];
+	const idOf = (ref: string): string => findSkill(catalogue, ref).skill?.id ?? ref;
+	// A skill an earlier notice already names (a built-in turned off by id) is not announced a second time.
+	const handled = new Set([...kept.skills.map((skill) => skill.id), ...kept.notices.map((item) => idOf(item.ref)), DIAGRAM_SKILL_ID]);
+	const channels: ReadonlyArray<readonly [SkillActivation, readonly string[]]> = [
+		["explicit", input.explicit ?? []],
+		["workflow", input.workflow ?? []],
+		["sticky", input.sticky ?? []]
+	];
+	const notices: SkillNotice[] = [];
+	for (const [activation, refs] of channels) {
+		for (const ref of refs) {
+			const id = idOf(ref);
+			if (handled.has(id)) {
+				continue;
+			}
+			handled.add(id);
+			const name = findSkill(catalogue, ref).skill?.name ?? ref;
+			notices.push(notice("disabled", ref, activation, `Skills are turned off in settings, so ${quote(name)} was skipped.`));
+		}
+	}
+	return notices;
+}
+
 /**
  * Chooses the skills for one request. Channels, in priority order: explicit (slash, @skill, chip), workflow,
  * sticky (pinned to the thread) and auto (the matcher). Rules:
@@ -81,9 +131,8 @@ const compareIds =(left: ResolvedSkill, right: ResolvedSkill): number => (left.i
  * - the result is sorted by id so the instructions are identical between requests.
  */
 export function resolveSkills(input: ResolveInput): SkillResolution {
-	const empty: SkillResolution = { skills: [], notices: [], suggestion: null, totalCharacters: 0 };
 	if (input.enabled === false) {
-		return empty;
+		return resolveBuiltInsOnly(input);
 	}
 	const catalogue = input.skills ?? [];
 	const trusted = input.trusted ?? {};

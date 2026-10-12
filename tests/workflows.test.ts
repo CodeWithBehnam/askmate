@@ -294,6 +294,17 @@ describe("mermaid diagram workflow", () => {
 		expect(prompt()).toContain(NOTE_LANGUAGE_RULE);
 	});
 
+	test("agrees with the diagram skill: one block, an optional plain sentence, the line break allowed, quoting left to the skill", () => {
+		const text = prompt();
+		expect(text).toContain("<br/> line break");
+		expect(text).not.toMatch(/links or HTML\./);
+		expect(text).toContain("only if you assumed something or left something out");
+		expect(text).toContain("nothing to draw, say so in one sentence without a code block");
+		expect(text).toContain("Follow the diagram skill and the design brief");
+		expect(text).not.toContain("Quote any label");
+		expect(text).not.toMatch(/Shows:|Assumptions:/);
+	});
+
 	test("is the only built-in workflow that names skills", () => {
 		const withSkills = WORKFLOWS.filter((item) => item.skillIds !== undefined).map((item) => item.id);
 		expect(withSkills).toEqual(["mermaid-diagram"]);

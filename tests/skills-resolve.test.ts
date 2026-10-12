@@ -103,9 +103,67 @@ describe("resolveSkills channels", () => {
 		});
 	});
 
-	test("the master switch off returns nothing, not even a notice", async () => {
+	test("the master switch off uses no skill and says which named skill it skipped", async () => {
 		const skill = await make("alpha");
-		expect(resolveSkills({ request: "x", skills: [skill], trusted: trustAll([skill]), explicit: ["alpha"], enabled: false })).toEqual({ skills: [], notices: [], suggestion: null, totalCharacters: 0 });
+		expect(resolveSkills({ request: "x", skills: [skill], trusted: trustAll([skill]), explicit: ["alpha"], enabled: false })).toEqual({
+			skills: [],
+			notices: [{ kind: "disabled", ref: "alpha", activation: "explicit", message: 'Skills are turned off in settings, so "alpha" was skipped.' }],
+			suggestion: null,
+			totalCharacters: 0
+		});
+	});
+
+	test("with the master switch off, nothing is announced when no skill was named", async () => {
+		const skill = await make("alpha", { triggers: ["minutes"] });
+		const result = resolveSkills({ request: "write the minutes", skills: [skill], trusted: trustAll([skill]), enabled: false });
+		expect(result).toEqual({ skills: [], notices: [], suggestion: null, totalCharacters: 0 });
+	});
+
+	test("with the master switch off, a built-in skill a workflow or diagram request names still applies", async () => {
+		const vault = await make("alpha");
+		const builtIns = await loadBuiltInSkills(parseYaml, (text) => hashSkillText(text));
+		const skills = [...builtIns, vault];
+		const off = { request: "draw the release flow", skills, trusted: trustAll(skills), enabled: false } as const;
+
+		const diagram = resolveSkills({ ...off, workflow: ["built-in:mermaid-diagrams"] });
+		expect(diagram.skills.map((skill) => [skill.id, skill.activation])).toEqual([["built-in:mermaid-diagrams", "workflow"]]);
+		expect(diagram.notices).toEqual([]);
+
+		// Everything the person manages stays off: slash commands, pinned skills, automatic matching and vault skills.
+		// The diagram skill belongs to Diagram Studio, so naming it (the Make a diagram chip does) is not reported.
+		const managed = resolveSkills({ ...off, explicit: ["built-in:mermaid-diagrams", "alpha"], sticky: ["built-in:mermaid-diagrams"] });
+		expect(managed.skills).toEqual([]);
+		expect(managed.notices).toEqual([{ kind: "disabled", ref: "alpha", activation: "explicit", message: 'Skills are turned off in settings, so "alpha" was skipped.' }]);
+		expect(resolveSkills({ ...off, request: "turn this note into a flowchart", matchMode: "builtin-auto" })).toEqual({ skills: [], notices: [], suggestion: null, totalCharacters: 0 });
+		const workflow = resolveSkills({ ...off, workflow: ["alpha"] });
+		expect(workflow.skills).toEqual([]);
+		expect(workflow.notices.map((item) => [item.kind, item.ref, item.activation])).toEqual([["disabled", "alpha", "workflow"]]);
+	});
+
+	test("with the master switch off, a pinned, mentioned or unknown skill is reported once each by the name it was given", async () => {
+		const [alpha, bravo] = await Promise.all([make("alpha"), make("bravo")]);
+		const result = resolveSkills({
+			request: "x",
+			skills: [alpha, bravo],
+			trusted: trustAll([alpha, bravo]),
+			enabled: false,
+			explicit: ["vault:alpha", "no-such-skill"],
+			sticky: ["alpha", "bravo"]
+		});
+		expect(result.skills).toEqual([]);
+		// Alpha is named twice (once by id, once pinned) and is reported once, under the first channel that named it.
+		expect(result.notices.map((item) => [item.activation, item.message])).toEqual([
+			["explicit", 'Skills are turned off in settings, so "alpha" was skipped.'],
+			["explicit", 'Skills are turned off in settings, so "no-such-skill" was skipped.'],
+			["sticky", 'Skills are turned off in settings, so "bravo" was skipped.']
+		]);
+	});
+
+	test("with the master switch off, a built-in skill the user turned off by id stays off", async () => {
+		const skills = await loadBuiltInSkills(parseYaml, (text) => hashSkillText(text));
+		const result = resolveSkills({ request: "x", skills, enabled: false, workflow: ["built-in:mermaid-diagrams"], disabledIds: ["built-in:mermaid-diagrams"] });
+		expect(result.skills).toEqual([]);
+		expect(result.notices.map((notice) => notice.kind)).toEqual(["disabled"]);
 	});
 
 	test("missing catalogue and trust default to nothing usable", () => {

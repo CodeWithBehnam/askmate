@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { feedSse, flushSse, INITIAL_SSE_STATE, type SseEvent } from "../src/providers/sse";
-import { fetchSse, StreamIdleError, type FetchLike } from "../src/providers/sseTransport";
+import { fetchSse, formatIdleDuration, StreamIdleError, type FetchLike } from "../src/providers/sseTransport";
 import { isAbortError } from "../src/shared/core";
 
 function parseAll(chunks: string[]): SseEvent[] {
@@ -170,6 +170,16 @@ describe("fetchSse", () => {
 		};
 		const run = fetchSse(fetchFn, "https://example.test", { idleTimeoutMs: 20 }, () => undefined);
 		await expect(run).rejects.toBeInstanceOf(StreamIdleError);
+	});
+
+	test("the idle error names the limit in a unit that is not rounded to nothing", () => {
+		expect(new StreamIdleError(20).message).toBe("The connection went quiet for 20 ms, so AskMate stopped waiting.");
+		expect(new StreamIdleError(499).message).toContain("499 ms");
+		expect(new StreamIdleError(1000).message).toBe("The connection went quiet for 1 second, so AskMate stopped waiting.");
+		expect(new StreamIdleError(45000).message).toContain("45 seconds");
+		expect(new StreamIdleError(120000).message).toContain("2 minutes");
+		expect(formatIdleDuration(0)).toBe("0 ms");
+		expect(new StreamIdleError(20).message).not.toContain("0 seconds");
 	});
 
 	test("errors thrown by the event handler stop the read and propagate", async () => {

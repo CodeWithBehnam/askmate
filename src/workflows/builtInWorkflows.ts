@@ -213,12 +213,11 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Do not add relationships the note does not state or clearly imply.",
-				"Follow the diagram skill for the type, syntax and style when one is provided.",
-				"Quote any label that contains brackets, quotes, pipes or other punctuation, so the diagram parses.",
+				"Follow the diagram skill and the design brief for the type, syntax, quoting and style when they are provided.",
 				NOTE_LANGUAGE_RULE
 			],
-			output: "One fenced code block with the language mermaid. Add one short sentence after it only if the note is too thin or an assumption was necessary. No source IDs such as [S1], links or HTML.",
-			stopRules: "Stop after the Mermaid block and that optional sentence. If the note has too little structure to draw, say so in one sentence and stop."
+			output: "One fenced code block with the language mermaid. Add one short sentence after it only if you assumed something or left something out, and say which. No source IDs such as [S1], links, or HTML other than the <br/> line break.",
+			stopRules: "Stop after the Mermaid block and that optional sentence. If the note has nothing to draw, say so in one sentence without a code block and stop."
 		})
 	},
 	{

@@ -25,9 +25,10 @@ export interface DiagramBriefInput {
 	readonly kind?: Kind;
 }
 
+/** The one place the role meanings are written. The diagram skill and the repair prompt point here instead of repeating them. */
 const ROLE_MEANING: Readonly<Record<Role, string>> = {
 	primary: "the main subject or step",
-	accent: "a decision, hand-off or key idea",
+	accent: "the one decision, hand-off or key idea to notice",
 	success: "a good outcome",
 	warn: "a risk or caution",
 	danger: "a failure or blocker",
@@ -49,12 +50,16 @@ function pickRecipe(order: readonly StyleRecipe[], nonce: number): StyleRecipe {
 	return order[index];
 }
 
+/**
+ * A chosen type is only asked for when this build can draw it. A type saved on another device may not exist here, and asking
+ * for it would fail the first attempt and spend the repair turn on a limit AskMate already knows.
+ */
 function typeLine(kind: Kind | undefined, supported: readonly Kind[] | undefined): string {
-	if (kind !== undefined) {
+	if (kind !== undefined && (supported === undefined || supported.includes(kind))) {
 		return `Diagram type: draw a ${kind} diagram. First line: ${FIRST_LINE[kind]}`;
 	}
 	const choices = (supported ?? DIAGRAM_KINDS).map((name) => FIRST_LINE[name]);
-	return `Diagram type: pick the one that fits the content best. First line is one of: ${choices.join(", ")}`;
+	return `Diagram type: pick the one that fits the content best, unless the request names a type or asks you to fix, restyle or extend a diagram, which keeps its own type. First line is one of: ${choices.join(", ")}`;
 }
 
 export function buildDiagramBrief(input: DiagramBriefInput): DiagramBrief {
@@ -65,8 +70,8 @@ export function buildDiagramBrief(input: DiagramBriefInput): DiagramBrief {
 		"<diagram_brief>",
 		`Look: ${recipe.name}. ${recipe.description} AskMate builds the header and the colours; write only the diagram body.`,
 		typeLine(input.kind, input.supported),
-		"Size: about 12 nodes or fewer. If the content needs more, draw the most important part and say what was left out.",
-		"Colour roles: tag nodes with a role instead of choosing colours. Never write frontmatter, %% directives or classDef lines.",
+		"Size: about 12 nodes or fewer. If the content needs more, draw the most important part and name what was left out in one sentence after the diagram.",
+		"Colour roles: tag nodes with a role instead of choosing colours. Use at most three roles in one diagram and one role per meaning. Never write frontmatter, %% directives or classDef lines.",
 		...ROLES.map((role) => `- ${role}: ${ROLE_MEANING[role]}`),
 		TAGGING,
 		"</diagram_brief>"

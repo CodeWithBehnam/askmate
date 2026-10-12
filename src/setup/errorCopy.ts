@@ -45,7 +45,7 @@ export const SETUP_ACTIONS: Readonly<Record<SetupActionKind, SetupAction>> = {
 	"update-key": { kind: "update-key", label: "Update key" },
 	"choose-model": { kind: "choose-model", label: "Choose another model" },
 	"check-address": { kind: "check-address", label: "Check the address" },
-	"start-server": { kind: "start-server", label: "Restart server" },
+	"start-server": { kind: "start-server", label: "Test again" },
 	retry: { kind: "retry", label: "Try again" },
 	test: { kind: "test", label: "Test connection" },
 	"open-settings": { kind: "open-settings", label: "Open settings" }
@@ -192,7 +192,7 @@ export function mapProviderErrorToSetupCopy(error: unknown, context: ErrorCopyCo
 			return build(category, `${name} is limiting requests or your quota is used up. Wait a moment, or check your plan and billing.`, SETUP_ACTIONS.retry);
 		case "timeout":
 			return local
-				? build(category, `The server at ${where} took too long to answer. Check that it is running, then try again.`, SETUP_ACTIONS["start-server"])
+				? build(category, `The server at ${where} took too long to answer. Check that it is running, then choose Test again.`, SETUP_ACTIONS["start-server"])
 				: build(category, `${name} took too long to answer. Try again, or send less context.`, SETUP_ACTIONS.retry);
 		case "server":
 			return build(category, `${name} is having trouble right now. Try again in a minute.`, SETUP_ACTIONS.retry);
@@ -200,7 +200,7 @@ export function mapProviderErrorToSetupCopy(error: unknown, context: ErrorCopyCo
 			return build(category, `The address for ${name} is not valid. It must start with https://, or http:// for a server on this computer or network.`, SETUP_ACTIONS["check-address"]);
 		case "network":
 			return local
-				? build("local-unreachable", `AskMate could not reach the local server at ${where}. Start it, then try again.`, SETUP_ACTIONS["start-server"])
+				? build("local-unreachable", `AskMate could not reach the local server at ${where}. Start it, then choose Test again.`, SETUP_ACTIONS["start-server"])
 				: build(category, `AskMate could not reach ${where}. Check your internet connection, then try again.`, SETUP_ACTIONS.retry);
 		case "local-unreachable":
 		case "unknown":

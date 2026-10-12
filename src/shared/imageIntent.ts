@@ -254,10 +254,14 @@ const DRAW_LIKE_DIAGRAM = new RegExp(
 // "Diagram this" and "visualise the data" name the output in the verb, so any object will do.
 const DIAGRAM_VERB = new RegExp(`^${POLITE_PREFIX}(?:diagram|visuali[sz]e)\\s+(?!(?:how|what|why|when|where|which|whether|if)\\b)[a-z0-9]`);
 
+// A diagram noun that modifies a longer noun phrase names something else: "chart of accounts", "graph theory", "diagram caption".
+// Without this, a creation verb in front of it would send ordinary writing to Mermaid.
+const NOUN_IS_MODIFIER = "(?!\\s+(?:of\\s+(?:accounts?|thoughts?)|theory|neural|database|description|caption|alt|legend|library|essay|explainer|tutorial)\\b)";
+
 // Creation verbs need an indefinite object whose head is a diagram noun: "create a flowchart of login", not "make the chart bigger".
 const CREATE_LIKE_VERB = "(?:create|make|generate|build|produce|design|draft|prepare|write|compose|construct|give|show)";
 const CREATE_DIAGRAM = new RegExp(
-	`^${POLITE_PREFIX}${CREATE_LIKE_VERB}\\s+${RECIPIENT}${INDEFINITE_DETERMINER}${MODIFIERS}${STRONG_DIAGRAM_NOUN}\\b`
+	`^${POLITE_PREFIX}${CREATE_LIKE_VERB}\\s+${RECIPIENT}${INDEFINITE_DETERMINER}${MODIFIERS}${STRONG_DIAGRAM_NOUN}\\b${NOUN_IS_MODIFIER}`
 );
 
 // "Turn this note into a flowchart", "show the steps as a timeline".
@@ -267,7 +271,7 @@ const TRANSFORM_DIAGRAM = new RegExp(
 );
 
 // "I need a flowchart of the login".
-const NEED_DIAGRAM = new RegExp(`^(?:i\\s+(?:want|need)|i'd like|we\\s+need)\\s+(?:(?:an?|some|one)\\s+)?${MODIFIERS}${STRONG_DIAGRAM_NOUN}\\b`);
+const NEED_DIAGRAM = new RegExp(`^(?:i\\s+(?:want|need)|i'd like|we\\s+need)\\s+(?:(?:an?|some|one)\\s+)?${MODIFIERS}${STRONG_DIAGRAM_NOUN}\\b${NOUN_IS_MODIFIER}`);
 
 function normalizeQuestion(question: string): string {
 	return question.toLowerCase().replace(/\s+/g, " ").trim();

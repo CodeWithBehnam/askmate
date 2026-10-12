@@ -82,13 +82,20 @@ function fenced(source: string): string {
 	return `${fence}mermaid\n${source.trim()}\n${fence}`;
 }
 
-export interface DiagramFinish {
-	/** The reply to show and save: the validated diagram, or the best source with a note, then the model's own sentences. */
-	text: string;
-	result: DiagramRunResult;
-	/** True when the diagram failed validation. Apply, Insert and Save as note stay blocked for the reply. */
-	blocked: boolean;
-}
+/**
+ * What a diagram run made of the model's reply. A reply with no diagram in it is an ordinary answer: the model may
+ * decline a thin note, or answer a question that only mentions a diagram. It is shown as written and blocks nothing.
+ */
+export type DiagramFinish =
+	| {
+		kind: "diagram";
+		/** The reply to show and save: the validated diagram, or the best source with a note, then the model's own sentences. */
+		text: string;
+		result: DiagramRunResult;
+		/** True when the diagram failed validation. Apply, Insert and Save as note stay blocked for the reply. */
+		blocked: boolean;
+	}
+	| { kind: "prose"; text: string };
 
 export interface FinishDiagramDeps {
 	plan: DiagramPlan;
@@ -103,14 +110,19 @@ function describeOutcome(outcome: DiagramOutcome, plan: DiagramPlan, raw: string
 	if (outcome.status === "valid") {
 		const repaired = outcome.repairs.length > 0 || outcome.modelRepairs > 0;
 		return {
+			kind: "diagram",
 			text: [fenced(outcome.source), outcome.prose.trim()].filter(Boolean).join("\n\n"),
 			result: { status: repaired ? "repaired" : "valid", kind: outcome.kind, style: plan.style, source: outcome.source },
 			blocked: false
 		};
 	}
+	if (outcome.stage === "no-diagram") {
+		return { kind: "prose", text: raw };
+	}
 	const lines = outcome.message.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, MAX_ERROR_LINES);
 	return {
-		// With no diagram at all the model's own answer is the most useful thing to show.
+		kind: "diagram",
+		// A failed attempt with no source at all (the pipeline itself broke) keeps the model's own answer visible.
 		text: outcome.body ? [fenced(outcome.body), outcome.prose.trim()].filter(Boolean).join("\n\n") : raw,
 		result: { status: "fallback", kind: outcome.kind ?? "unknown", style: plan.style, source: outcome.body, errors: lines.length > 0 ? lines : [outcome.message] },
 		blocked: true

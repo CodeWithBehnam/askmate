@@ -13,6 +13,12 @@ export interface SkillTemplate {
 	content: string;
 }
 
+/**
+ * Written out here because nothing in src/skills may import from outside the folder. tests/skills-builtin.test.ts compares it
+ * with TABLE_CELL_RULE in src/workflows/promptRules.ts, so the two cannot drift.
+ */
+const TABLE_CELL_RULE = "Keep each table cell on one line: write a pipe inside a cell as \\| (including the alias pipe in a wikilink, as in `[[Note\\|alias]]`) and use <br> for a line break.";
+
 const EXAMPLES: readonly SkillDefinition[] = [
 	{
 		name: "meeting-minutes",
@@ -104,7 +110,7 @@ const EXAMPLES: readonly SkillDefinition[] = [
 			"- The summary is two or three sentences in the user's likely own words.",
 			"",
 			"# Output",
-			"A two-column Markdown table with the header Cue | Notes, then a Summary heading and the summary.",
+			`A two-column Markdown table with the header Cue | Notes, then a Summary heading and the summary. ${TABLE_CELL_RULE}`,
 			"",
 			"# Stop rules",
 			"If the material is shorter than a paragraph, say so and ask for more instead of stretching it."

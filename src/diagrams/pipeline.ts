@@ -147,15 +147,17 @@ function failed(kind: Kind | null, body: string, failure: Failure, repairs: read
 async function attempt(deps: DiagramDeps, parts: ExtractedDiagram): Promise<Attempt> {
 	const body = parts.body;
 	const kind = detectKind(body);
+	// Nothing in the answer claims to be a diagram, so the whole text is prose. It is never kept as a diagram body, because
+	// a caller that fenced it would turn an ordinary answer into a failed drawing.
+	if (!parts.taggedMermaid && (body === "" || kind === null)) {
+		return failed(null, "", { stage: "no-diagram", message: "No diagram found in the answer.", lines: [] }, [], false);
+	}
 	if (body === "") {
-		return failed(kind, body, { stage: "extract", message: "No diagram found in the answer.", lines: [] }, [], false);
+		return failed(kind, body, { stage: "extract", message: "The mermaid block is empty.", lines: [] }, [], false);
 	}
 	if (body.length > MAX_DIAGRAM_CHARS) {
 		const message = `The diagram is too large (${body.length} characters, limit ${MAX_DIAGRAM_CHARS}).`;
 		return failed(kind, body, { stage: "extract", message, lines: [message] }, [], false);
-	}
-	if (kind === null && !parts.taggedMermaid) {
-		return failed(kind, body, { stage: "extract", message: "No diagram found in the answer.", lines: [] }, [], false);
 	}
 
 	const first = await validateBody(deps, body, kind);
@@ -238,7 +240,8 @@ async function run(deps: DiagramDeps): Promise<DiagramOutcome> {
 	const second = await attempt(deps, secondParts);
 	if (second.ok) return toValid(second, 1, prose);
 	// Show the best text we have: the repair turn's attempt when it produced a diagram, otherwise the first attempt.
-	return second.failure.stage === "extract" ? toFallback(first, 1, prose) : toFallback(second, 1, prose);
+	const producedNoDiagram = second.failure.stage === "extract" || second.failure.stage === "no-diagram";
+	return producedNoDiagram ? toFallback(first, 1, prose) : toFallback(second, 1, prose);
 }
 
 /**

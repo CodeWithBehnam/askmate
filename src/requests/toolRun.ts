@@ -27,6 +27,47 @@ import type { RunPhaseEvent, ToolApprovalCard, ToolApprovalChoice, ToolRunHost, 
 
 export type SendTurn = (history: readonly HistoryItem[], toolChoice: ToolChoice, signal: AbortSignal) => Promise<TurnResult>;
 
+export interface TurnStreaming {
+	/** The delta callback for the turn sender. Absent when nobody listens, so the turns are not streamed at all. */
+	readonly onDelta: ((delta: string) => void) | undefined;
+	/** Wraps the turn sender so each turn is judged when it ends. */
+	wrap(send: SendTurn): SendTurn;
+	/** True when the text of the final, tool-free turn was already passed on as it arrived. */
+	answerStreamed(): boolean;
+}
+
+/**
+ * Passes the text of a tool run on as it streams. Whether a turn is the answer is only known when it ends: a turn that
+ * asks for tools wrote narration, which the listener is told to clear, and a tool-free turn is the answer, already shown.
+ * A listener that cannot clear that narration gets no streaming at all, so its progress text never piles up in front of
+ * the answer; it receives the answer in one piece when the run ends.
+ */
+export function createTurnStreaming(listener: { onTextDelta?: (delta: string) => void; onTextReset?: () => void }): TurnStreaming {
+	let turnStreamed = false;
+	let answerStreamed = false;
+	const onTextDelta = listener.onTextReset === undefined ? undefined : listener.onTextDelta;
+	return {
+		onDelta: onTextDelta === undefined ? undefined : (delta) => {
+			turnStreamed = true;
+			onTextDelta(delta);
+		},
+		wrap: (send) => async (history, toolChoice, signal) => {
+			turnStreamed = false;
+			answerStreamed = false;
+			const turn = await send(history, toolChoice, signal);
+			if (turnStreamed) {
+				if (turn.stop === "tool_calls" && turn.toolCalls.length > 0) {
+					listener.onTextReset?.();
+				} else {
+					answerStreamed = turn.stop === "end";
+				}
+			}
+			return turn;
+		},
+		answerStreamed: () => answerStreamed
+	};
+}
+
 /** What one model round cost, in the shape the usage recorder takes. */
 export interface RoundRecord {
 	status: OperationStatus;

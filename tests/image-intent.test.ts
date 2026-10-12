@@ -197,6 +197,9 @@ const diagramRequests = [
 	"Visualize this note as a graph",
 	"Create a flowchart of the login",
 	"Make a state machine for the order lifecycle",
+	"Generate a chart of the sales data",
+	"Create a graph of sales by month",
+	"I need a chart of the sales data",
 	"Generate a gantt chart for the release plan",
 	"Build a mind map from these headings",
 	"Give me a diagram of how the modules fit together",
@@ -349,6 +352,17 @@ const notDiagramRequests = [
 	"Generate an image of a cat",
 	"/image a roadmap",
 	"/diagrams are great",
+	// A diagram noun that modifies a longer noun phrase is ordinary writing, not a drawing request.
+	"Generate a chart of accounts template",
+	"Generate a chart of accounts template for this note",
+	"Create a chart of accounts for a bakery",
+	"Create a diagram description for alt text",
+	"Write a diagram caption",
+	"write a graph of thoughts essay",
+	"Write a graph theory summary",
+	"Draft a graph neural network explainer",
+	"Create a graph database schema",
+	"I need a diagram caption for the figure",
 	"",
 	"   "
 ];

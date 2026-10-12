@@ -1,6 +1,7 @@
 import { closeOpenFence } from "../safety/markdownFences";
 import { prepareModelOutputForWrite } from "../safety/writePath";
 import type { ChatMessage } from "../shared/types";
+import type { SavedDiagramSummary } from "../threads/threadModel";
 
 export { closeOpenFence };
 
@@ -21,8 +22,11 @@ export interface ConversationExportMeta {
 
 const DEFAULT_EXPORT_TITLE = "AskMate conversation";
 
+/** A transcript message as the sidebar keeps it: a drawn diagram reply carries the outcome of its diagram. */
+export type ExportableMessage = ChatMessage & { diagram?: SavedDiagramSummary };
+
 /** User and assistant turns with text. System lines (status, errors, console output) are deliberately left out. */
-export function getExportableTurns(messages: readonly ChatMessage[]): ChatMessage[] {
+export function getExportableTurns<T extends ChatMessage>(messages: readonly T[]): T[] {
 	return messages.filter((message) => (message.role === "user" || message.role === "assistant") && message.text.trim().length > 0);
 }
 
@@ -49,7 +53,16 @@ function describeMessageModel(message: ChatMessage, fallbackModel?: string): str
 	return model ? ` (${toSingleLine(model)})` : "";
 }
 
-function renderTurn(message: ChatMessage, meta: ConversationExportMeta): string {
+/**
+ * A reply whose diagram drew carries the strict header AskMate built (frontmatter and classDef lines). Only that outcome
+ * lets the header through the write guard, which still checks it against its closed schema. A reply that did not draw, or
+ * that is not a diagram, keeps the strict rules.
+ */
+function holdsDrawnDiagram(message: ExportableMessage): boolean {
+	return message.role === "assistant" && message.diagram !== undefined && message.diagram.status !== "fallback";
+}
+
+function renderTurn(message: ExportableMessage, meta: ConversationExportMeta): string {
 	const fallbackModel = meta.model;
 	const lines: string[] = [];
 	if (message.role === "user") {
@@ -61,7 +74,8 @@ function renderTurn(message: ChatMessage, meta: ConversationExportMeta): string 
 		return lines.join("\n");
 	}
 	// Assistant text is model output, and the exported note is vault content other plugins will read and run.
-	lines.push(`## AskMate${describeMessageModel(message, fallbackModel)}`, "", closeOpenFence(prepareModelOutputForWrite(message.text.trim()).text));
+	const safe = prepareModelOutputForWrite(message.text.trim(), { allowPluginMermaidHeader: holdsDrawnDiagram(message) });
+	lines.push(`## AskMate${describeMessageModel(message, fallbackModel)}`, "", closeOpenFence(safe.text));
 	if (message.image) {
 		const safePath = message.imagePath && !/[\][|\n]/.test(message.imagePath) ? message.imagePath : null;
 		lines.push("", safePath ? `![[${safePath}]]` : "_Image generated in AskMate and not saved to the vault._");
@@ -77,7 +91,7 @@ function renderTurn(message: ChatMessage, meta: ConversationExportMeta): string 
  * blocks, template tags and other active constructs are neutralised) but otherwise kept as written, source notes become links,
  * and incomplete replies and unsaved images are marked. Error and status lines are omitted.
  */
-export function conversationToMarkdown(messages: readonly ChatMessage[], meta: ConversationExportMeta): string {
+export function conversationToMarkdown(messages: readonly ExportableMessage[], meta: ConversationExportMeta): string {
 	const turns = getExportableTurns(messages);
 	const title = toSingleLine(meta.title) || DEFAULT_EXPORT_TITLE;
 	const frontmatter = [

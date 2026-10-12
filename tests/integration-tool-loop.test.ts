@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { McpService } from "../src/mcp";
 import { McpApprovalRouter } from "../src/plugin/mcpHost";
+import { fetchSse, type FetchLike } from "../src/providers/sseTransport";
 import type { ProviderRequestOptions, ProviderRuntime } from "../src/providers/types";
 import { RequestRunner, type RequestRunnerHost } from "../src/requests/RequestRunner";
+import { buildRequestInstructions } from "../src/requests/requestBuilders";
 import type { RunOptions, ToolApprovalChoice, ToolUiEvent } from "../src/requests/runTypes";
 import { previewToolResult } from "../src/requests/toolRun";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -86,19 +88,30 @@ interface Rig {
 	toolName: string;
 }
 
+interface RigOptions {
+	hangToolCall?: boolean;
+	/** The "Tool rounds per answer" and "Longest tool result" settings, applied to the runner and to the MCP service alike. */
+	mcp?: { maxToolRoundsPerTurn?: number; maxOutputChars?: number };
+	/** What the fake tool returns. */
+	callText?: string;
+	/** One entry per streamed request: its SSE frames. With any entry the runtime can stream, like Stream replies on. */
+	streams?: (toolName: string) => string[][];
+}
+
 /** A real McpService behind a fake server, a real runner, and a provider that plays back the replies it is given. */
 async function createRig(
 	replies: (toolName: string) => AskMateHttpResponse<unknown>[],
 	model = "gpt-5.5",
-	options: { hangToolCall?: boolean } = {}
+	options: RigOptions = {}
 ): Promise<Rig> {
-	const server = fakeServer();
+	const server = fakeServer(options.callText === undefined ? {} : { callResult: () => ({ content: [{ type: "text", text: options.callText ?? "" }] }) });
 	const front = fakeHttp(server);
 	// A server that takes the tools/call and never answers, so a call is still running when the person presses Stop.
 	const http = options.hangToolCall
 		? { ...front, send: ((request) => (String(request.body).includes('"tools/call"') ? new Promise<never>(() => undefined) : front.send(request))) satisfies typeof front.send }
 		: front;
 	const harness = createHarness({ servers: [httpServer("fake")], http: { fake: http } });
+	harness.settings = { ...harness.settings, ...options.mcp };
 	const router = new McpApprovalRouter();
 	const service = new McpService({ ...harness.host, confirmCall: (card, signal) => router.confirm(card, signal) });
 	await service.trust("fake");
@@ -108,7 +121,22 @@ async function createRig(
 	const bodies: Array<Record<string, unknown>> = [];
 	const records: UsageParams[] = [];
 	const notices: string[] = [];
-	const settings: AskMateSettings = { ...DEFAULT_SETTINGS };
+	const settings: AskMateSettings = { ...DEFAULT_SETTINGS, mcp: { ...DEFAULT_SETTINGS.mcp, ...options.mcp } };
+	const streamQueue = [...(options.streams?.(toolName) ?? [])];
+	const streamFetch: FetchLike = (_url, init) => {
+		bodies.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
+		const frames = streamQueue.shift();
+		if (!frames) {
+			return Promise.reject(new Error("Unexpected streamed provider request"));
+		}
+		const encoder = new TextEncoder();
+		return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				frames.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+				controller.close();
+			}
+		}), { headers: { "content-type": "text/event-stream" } }));
+	};
 	const runtime: ProviderRuntime = {
 		getProviderSettings: () => ({ apiKeySecretName: "", model, modelOptions: [], baseUrl: "https://example.test/v1" }),
 		getProviderApiKey: () => Promise.resolve("sk-test"),
@@ -116,7 +144,8 @@ async function createRig(
 			bodies.push(JSON.parse(options?.body ?? "{}") as Record<string, unknown>);
 			const next = queue.shift();
 			return next ? Promise.resolve(next as AskMateHttpResponse<T>) : Promise.reject(new Error("Unexpected provider request"));
-		}
+		},
+		...(options.streams ? { streamSse: (url, init, onEvent) => fetchSse(streamFetch, url, init, onEvent) } : {})
 	};
 	const host: RequestRunnerHost = {
 		getSettings: () => settings,
@@ -299,6 +328,153 @@ describe("a tool run end to end", () => {
 		expect(error.message).toMatch(/model turns|tool call/);
 		expect(error.message).toMatch(/already ran/);
 		expect(error.message).not.toMatch(/Try again/);
+	});
+});
+
+describe("the tool settings are the limits", () => {
+	const allow = (): Promise<ToolApprovalChoice> => Promise.resolve("allow-once");
+
+	test("the rounds setting is honoured exactly, up to its maximum", async () => {
+		const rounds = 12;
+		const rig = await createRig(
+			(tool) => [...Array.from({ length: rounds }, () => toolCallReply(tool, { q: "again" })), answerReply("Enough looking.")],
+			"gpt-5.5",
+			{ mcp: { maxToolRoundsPerTurn: rounds } }
+		);
+		const result = await rig.runner.runOpenAIRequest(makeRequest(), { toolsEnabled: true, confirmToolCall: allow });
+
+		expect(result.kind === "text" ? result.text : "").toBe("Enough looking.");
+		expect(rig.server.calls).toHaveLength(rounds);
+		// Twelve rounds of tools, then one answering turn without them.
+		expect(rig.bodies).toHaveLength(rounds + 1);
+		expect(rig.bodies.at(-1)?.tool_choice).toBe("none");
+	});
+
+	test("a low rounds setting ends the tool rounds there", async () => {
+		const rig = await createRig(
+			(tool) => [toolCallReply(tool, { q: "one" }), toolCallReply(tool, { q: "two" }), answerReply("Done after two.")],
+			"gpt-5.5",
+			{ mcp: { maxToolRoundsPerTurn: 2 } }
+		);
+		await rig.runner.runOpenAIRequest(makeRequest(), { toolsEnabled: true, confirmToolCall: allow });
+
+		expect(rig.bodies.map((body) => body.tool_choice)).toEqual(["auto", "auto", "none"]);
+	});
+
+	test("a long result reaches the model whole when the setting allows it", async () => {
+		const text = "A".repeat(50_000);
+		const rig = await createRig((tool) => [toolCallReply(tool, { q: "long" }), answerReply("Read it all.")], "gpt-5.5", {
+			mcp: { maxOutputChars: 100_000 },
+			callText: text
+		});
+		await rig.runner.runOpenAIRequest(makeRequest(), { toolsEnabled: true, confirmToolCall: allow });
+
+		const sent = JSON.stringify(rig.bodies[1]);
+		expect(sent).toContain("A".repeat(50_000));
+		expect(sent).not.toContain("AskMate cut this tool result");
+	});
+
+	test("a result cut by the setting keeps its closing tag and says it was cut once", async () => {
+		const rig = await createRig((tool) => [toolCallReply(tool, { q: "long" }), answerReply("Read part of it.")], "gpt-5.5", {
+			mcp: { maxOutputChars: 2_000 },
+			callText: "B".repeat(9_000)
+		});
+		await rig.runner.runOpenAIRequest(makeRequest(), { toolsEnabled: true, confirmToolCall: allow });
+
+		const output = String(JSON.stringify(rig.bodies[1]));
+		expect(output).toContain("[Output cut after 2000 characters.]");
+		expect(output).toContain("</tool_result>");
+		expect(output).not.toContain("AskMate cut this tool result");
+		expect(output.includes("B".repeat(2_001))).toBe(false);
+	});
+
+	test("the tools section states the rounds and the calls the run really has, and a rebuilt request says the same", async () => {
+		const rig = await createRig(() => [answerReply("No tools needed.")], "gpt-5.5", { mcp: { maxToolRoundsPerTurn: 3 } });
+		const request = makeRequest();
+		await rig.runner.runOpenAIRequest(request, { toolsEnabled: true, confirmToolCall: allow });
+
+		const sent = String(rig.bodies[0]?.instructions);
+		expect(sent).toContain("You have at most 3 rounds of tool calls");
+		expect(sent).toContain("The turn after the last round has no tools");
+		expect(sent).toContain("Use at most 12 tool calls in one run.");
+		expect(request.tools).toMatchObject({ maxRounds: 3, maxCalls: 12 });
+		expect(buildRequestInstructions(request, { purpose: "answer" })).toBe(sent);
+	});
+});
+
+describe("a tool run streams its answer", () => {
+	const allow = (): Promise<ToolApprovalChoice> => Promise.resolve("allow-once");
+	const frame = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
+	const completed = frame({ type: "response.completed", response: { status: "completed", output: [], usage: USAGE } });
+	const callTurn = (tool: string): string[] => [
+		frame({ type: "response.output_text.delta", output_index: 0, delta: "Checking." }),
+		frame({ type: "response.output_item.done", output_index: 0, item: { type: "message", phase: "commentary", content: [{ type: "output_text", text: "Checking." }] } }),
+		frame({ type: "response.output_item.done", output_index: 1, item: { type: "function_call", call_id: "call_1", name: tool, arguments: "{\"q\":\"roadmap\"}", status: "completed" } }),
+		completed
+	];
+	const answerTurn = [
+		frame({ type: "response.output_text.delta", output_index: 0, delta: "We ship " }),
+		frame({ type: "response.output_text.delta", output_index: 0, delta: "on Friday." }),
+		frame({ type: "response.output_item.done", output_index: 0, item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "We ship on Friday." }] } }),
+		completed
+	];
+
+	test("the final turn arrives as it is written, and progress text before a tool call is cleared", async () => {
+		const rig = await createRig(() => [], "gpt-5.5", { streams: (tool) => [callTurn(tool), answerTurn] });
+		const events: string[] = [];
+		const result = await rig.runner.runOpenAIRequest(makeRequest(), {
+			toolsEnabled: true,
+			confirmToolCall: allow,
+			onTextDelta: (delta) => events.push(`delta:${delta}`),
+			onTextReset: () => events.push("reset")
+		});
+
+		expect(result.kind === "text" ? result.text : "").toBe("We ship on Friday.");
+		// The answer is not sent a second time at the end.
+		expect(events).toEqual(["delta:Checking.", "reset", "delta:We ship ", "delta:on Friday."]);
+		expect(rig.bodies.every((body) => body.stream === true)).toBe(true);
+	});
+
+	test("without a listener the turns stay buffered, as before", async () => {
+		const rig = await createRig((tool) => [toolCallReply(tool, { q: "roadmap" }), answerReply("We ship on Friday.")], "gpt-5.5", { streams: () => [] });
+		const result = await rig.runner.runOpenAIRequest(makeRequest(), { toolsEnabled: true, confirmToolCall: allow });
+
+		expect(result.kind === "text" ? result.text : "").toBe("We ship on Friday.");
+		expect(rig.bodies.some((body) => body.stream === true)).toBe(false);
+	});
+
+	test("a caller that cannot clear progress text gets the answer in one piece, so narration never piles up in front of it", async () => {
+		// The runtime can stream and the model narrates before its tool call, but this caller has no onTextReset.
+		const rig = await createRig(
+			(tool) => [toolCallReply(tool, { q: "roadmap" }), answerReply("We ship on Friday.")],
+			"gpt-5.5",
+			{ streams: (tool) => [callTurn(tool), answerTurn] }
+		);
+		const deltas: string[] = [];
+		const result = await rig.runner.runOpenAIRequest(makeRequest(), {
+			toolsEnabled: true,
+			confirmToolCall: allow,
+			onTextDelta: (delta) => deltas.push(delta)
+		});
+
+		expect(result.kind === "text" ? result.text : "").toBe("We ship on Friday.");
+		expect(deltas).toEqual(["We ship on Friday."]);
+		expect(rig.bodies.some((body) => body.stream === true)).toBe(false);
+	});
+
+	test("a runtime that cannot stream still delivers the answer in one piece", async () => {
+		const rig = await createRig((tool) => [toolCallReply(tool, { q: "roadmap" }), answerReply("We ship on Friday.")]);
+		const deltas: string[] = [];
+		const resets: number[] = [];
+		await rig.runner.runOpenAIRequest(makeRequest(), {
+			toolsEnabled: true,
+			confirmToolCall: allow,
+			onTextDelta: (delta) => deltas.push(delta),
+			onTextReset: () => resets.push(1)
+		});
+
+		expect(deltas).toEqual(["We ship on Friday."]);
+		expect(resets).toEqual([]);
 	});
 });
 

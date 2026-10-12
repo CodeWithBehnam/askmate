@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { assembleDiagram } from "../src/diagrams/header";
+import { designFromRecipe, STYLE_RECIPES } from "../src/diagrams/recipes";
 import { closeOpenFence, conversationToMarkdown, hasExportableTurns, resolveExportTitle } from "../src/output/conversationExport";
 import type { ChatMessage } from "../src/shared/types";
 
@@ -50,6 +52,44 @@ describe("conversationToMarkdown", () => {
 		const unsaved = conversationToMarkdown([{ role: "assistant", text: "Generated image with gpt-image-2.", image: true }], meta);
 		expect(unsaved).not.toContain("![[");
 		expect(unsaved).toContain("not saved to the vault");
+	});
+
+	describe("a drawn diagram", () => {
+		const design = designFromRecipe(STYLE_RECIPES[0], 1);
+		const drawn = `\`\`\`mermaid\n${assembleDiagram("flowchart TD\n  A[Start]:::primary --> B[Finish]", "flowchart", design)}\n\`\`\`\n\nShows: two steps.`;
+
+		test("keeps its plugin header and stays a mermaid block in the export", () => {
+			const markdown = conversationToMarkdown(
+				[{ role: "assistant", text: drawn, diagram: { type: "flowchart", status: "rendered" } }],
+				meta
+			);
+			expect(markdown).toContain("```mermaid\n---\nconfig:");
+			expect(markdown).not.toContain("```text");
+			expect(markdown).toContain("flowchart TD\n  A[Start]:::primary --> B[Finish]");
+		});
+
+		test("is downgraded to inert text when it did not draw or carries no diagram outcome", () => {
+			const fallback = conversationToMarkdown(
+				[{ role: "assistant", text: drawn, diagram: { type: "flowchart", status: "fallback" } }],
+				meta
+			);
+			expect(fallback).toContain("```text\n---\nconfig:");
+			expect(fallback).not.toContain("```mermaid");
+			const untagged = conversationToMarkdown([{ role: "assistant", text: drawn }], meta);
+			expect(untagged).toContain("```text\n---\nconfig:");
+		});
+
+		test("never lets a user turn or a header with unknown keys through", () => {
+			const user = conversationToMarkdown([{ role: "user", text: drawn, diagram: { type: "flowchart", status: "rendered" } }], meta);
+			expect(user).toContain("## You");
+			const forged = "```mermaid\n---\nconfig:\n  securityLevel: loose\n---\nflowchart TD\n  A --> B\n```";
+			const markdown = conversationToMarkdown(
+				[{ role: "assistant", text: forged, diagram: { type: "flowchart", status: "rendered" } }],
+				meta
+			);
+			expect(markdown).toContain("```text");
+			expect(markdown).not.toContain("```mermaid");
+		});
 	});
 
 	test("does not link a source path that would break the wikilink", () => {

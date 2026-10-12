@@ -47,11 +47,19 @@ describe("mapProviderErrorToSetupCopy", () => {
 		expect(mapProviderErrorToSetupCopy(httpError(500), { providerId: "openai" }).action.kind).toBe("retry");
 	});
 
-	test("a refused connection to localhost offers to restart the server", () => {
+	test("a refused connection to localhost asks to start the server and test again", () => {
 		const copy = mapProviderErrorToSetupCopy(new Error("net::ERR_CONNECTION_REFUSED"), { providerId: "openai-compatible", baseUrl: "http://localhost:11434/v1" });
 		expect(copy.category).toBe("local-unreachable");
-		expect(copy.message).toBe("AskMate could not reach the local server at localhost:11434. Start it, then try again.");
-		expect(copy.action).toEqual({ kind: "start-server", label: "Restart server" });
+		expect(copy.message).toBe("AskMate could not reach the local server at localhost:11434. Start it, then choose Test again.");
+		expect(copy.action).toEqual({ kind: "start-server", label: "Test again" });
+	});
+
+	test("a slow local server is not promised a restart either: the button only tests again", () => {
+		const copy = mapProviderErrorToSetupCopy(httpError(504), { providerId: "openai-compatible", baseUrl: "http://localhost:11434/v1" });
+		expect(copy.category).toBe("timeout");
+		expect(copy.message).toBe("The server at localhost:11434 took too long to answer. Check that it is running, then choose Test again.");
+		expect(copy.action).toEqual({ kind: "start-server", label: "Test again" });
+		expect(JSON.stringify(copy)).not.toMatch(/restart/i);
 	});
 
 	test("a local address is recognised even when the provider id is not the local one", () => {

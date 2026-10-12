@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { buildDiagramBrief } from "../src/diagrams/brief";
 import { contrast } from "../src/diagrams/color";
-import { KIND_KEYWORDS } from "../src/diagrams/header";
+import { CLASSDEF_KINDS, KIND_KEYWORDS } from "../src/diagrams/header";
 import { makePalette, ROLES } from "../src/diagrams/palette";
 import { DENSITY_PADDING, designFromRecipe, findRecipe, noteSeed, recipeOrder, STYLE_RECIPES } from "../src/diagrams/recipes";
 import { DIAGRAM_KINDS, type StyleRecipe } from "../src/diagrams/types";
+import { MERMAID_DIAGRAMS_SKILL } from "../src/skills";
 
 const HEADINGS = ["Goals", "Plan", "Risks"];
 const brief = (nonce: number, title = "Projects/Roadmap", headings: readonly string[] = HEADINGS) => buildDiagramBrief({ title, headings, nonce });
@@ -93,6 +94,39 @@ describe("buildDiagramBrief", () => {
 		const chosen = buildDiagramBrief({ title: "t", headings: [], nonce: 0, kind: "state" });
 		expect(chosen.text).toContain("First line: stateDiagram-v2");
 		expect(chosen.text).not.toContain("pick the one that fits");
+	});
+
+	test("does not ask for a chosen family this build cannot draw: it falls back to the supported list", () => {
+		const unsupported = buildDiagramBrief({ title: "t", headings: [], nonce: 0, kind: "venn", supported: ["flowchart", "sequence"] });
+		expect(unsupported.text).not.toContain("venn");
+		expect(unsupported.text).toContain("pick the one that fits the content best");
+		expect(unsupported.text).toContain("First line is one of: flowchart TD (or LR), sequenceDiagram");
+		const supported = buildDiagramBrief({ title: "t", headings: [], nonce: 0, kind: "sequence", supported: ["flowchart", "sequence"] });
+		expect(supported.text).toContain("Diagram type: draw a sequence diagram. First line: sequenceDiagram");
+	});
+
+	test("Auto yields to a type the request names and to a fix, which keeps its own type, as the skill says", () => {
+		const { text } = buildDiagramBrief({ title: "t", headings: [], nonce: 0 });
+		expect(text).toContain("unless the request names a type or asks you to fix, restyle or extend a diagram, which keeps its own type");
+	});
+
+	test("is the one place for role meanings and the roles cap, and the diagram skill points here instead of repeating them", () => {
+		const { text } = buildDiagramBrief({ title: "t", headings: [], nonce: 0 });
+		expect(text).toContain("Use at most three roles in one diagram and one role per meaning.");
+		expect(text).toContain("- accent: the one decision, hand-off or key idea to notice");
+		expect(text).toContain("- ink: a start, an end or an outside actor");
+		expect(MERMAID_DIAGRAMS_SKILL.body).not.toContain("a start, an end or an outside actor");
+		expect(MERMAID_DIAGRAMS_SKILL.body).not.toMatch(/\bat most three roles\b/i);
+	});
+
+	test("lists as taggable exactly the families the plugin writes classDef lines for", () => {
+		const { text } = buildDiagramBrief({ title: "t", headings: [], nonce: 0 });
+		const tagging = text.split("\n").find((line) => line.startsWith("Tags work in")) ?? "";
+		expect(tagging).not.toBe("");
+		DIAGRAM_KINDS.forEach((kind) => {
+			const named = tagging.includes(KIND_KEYWORDS[kind]);
+			expect({ kind, named }).toEqual({ kind, named: CLASSDEF_KINDS.has(kind) });
+		});
 	});
 });
 

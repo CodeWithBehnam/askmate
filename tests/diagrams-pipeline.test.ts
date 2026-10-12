@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_DIAGRAM_CHARS, runDiagramPipeline, type DiagramDeps } from "../src/diagrams/pipeline";
+import { CLASSDEF_KINDS, KIND_KEYWORDS } from "../src/diagrams/header";
 import { createIdFactory, nextRenderId } from "../src/diagrams/ids";
 import { buildRepairPrompt, escapeDiagramPromptText } from "../src/diagrams/prompts";
 import { designFromRecipe, STYLE_RECIPES } from "../src/diagrams/recipes";
@@ -233,7 +234,7 @@ describe("runDiagramPipeline: parse failures", () => {
 		expect(requests[0]?.kind).toBeNull();
 
 		const prose = await runDiagramPipeline(deps(spy, "I could not find enough structure in the note.", { requestRepair: repair }));
-		expect(prose).toMatchObject({ status: "fallback", stage: "extract" });
+		expect(prose).toMatchObject({ status: "fallback", stage: "no-diagram" });
 		expect(requests).toHaveLength(1);
 	});
 
@@ -370,8 +371,9 @@ describe("runDiagramPipeline: nothing to draw", () => {
 		["an empty answer", ""],
 		["whitespace", "  \n\n "],
 		["prose only", "Sorry, I cannot draw that."],
-		["an empty fence", "```mermaid\n```"]
-	])("%s ends in an extract fallback without a model turn", async (_name, raw) => {
+		["prose with an untagged code block that is not a diagram", "The script is:\n\n```\nprint('hi')\n```"],
+		["a long prose answer", "The note covers the release process. ".repeat(600)]
+	])("%s is no diagram at all: no body, no model turn", async (_name, raw) => {
 		const spy = fake();
 		let asked = 0;
 		const outcome = await runDiagramPipeline(
@@ -382,9 +384,24 @@ describe("runDiagramPipeline: nothing to draw", () => {
 				}
 			})
 		);
-		expect(outcome.status).toBe("fallback");
-		if (outcome.status === "fallback") expect(["extract", "parse"]).toContain(outcome.stage);
-		expect(asked).toBe(outcome.status === "fallback" && outcome.stage === "extract" ? 0 : 1);
+		expect(outcome).toMatchObject({ status: "fallback", stage: "no-diagram", kind: null, body: "" });
+		expect(asked).toBe(0);
+		expect(spy.rendered).toEqual([]);
+	});
+
+	test("an empty mermaid block is a failed diagram, not prose", async () => {
+		const spy = fake();
+		let asked = 0;
+		const outcome = await runDiagramPipeline(
+			deps(spy, "```mermaid\n```", {
+				requestRepair: async () => {
+					asked += 1;
+					return GOOD;
+				}
+			})
+		);
+		expect(outcome).toMatchObject({ status: "fallback", stage: "extract" });
+		expect(asked).toBe(0);
 		expect(spy.rendered).toEqual([]);
 	});
 
@@ -558,6 +575,34 @@ describe("buildRepairPrompt", () => {
 		expect(prompt).toContain("Write the diagram body only");
 		expect(prompt).toContain("One fenced mermaid block");
 		expect(prompt).not.toContain(String.fromCharCode(0x2014));
+	});
+
+	test("the quoting rule is scoped by type, so a sequence message is never steered into a quote that fails to parse", () => {
+		const prompt = buildRepairPrompt(base);
+		expect(prompt).toContain("in flowchart, state, class and ER diagrams, put a label");
+		expect(prompt).toContain("In a sequence diagram never quote message text: write a semicolon as #59; and a hash as #35;.");
+		expect(prompt).toContain("In every other type, remove or replace the character the error points to instead of quoting.");
+		expect(prompt).not.toContain("Quote labels that contain");
+	});
+
+	test("an unsupported type is a problem to solve by changing the type, not by keeping it", () => {
+		const prompt = buildRepairPrompt({ ...base, kind: "venn", errorLines: ["This Obsidian build cannot draw venn-beta diagrams. Use one of: flowchart, sequenceDiagram."] });
+		expect(prompt).toContain("When the error says this build cannot draw the diagram type, the problem is the type: keep the content and draw it as one of the types the error lists.");
+		expect(prompt).toContain("in the same type unless the type is the problem");
+		expect(prompt).not.toContain("smaller diagram of the same type that you can support");
+	});
+
+	test("names the types that take role tags from the set the plugin writes classDef lines for", () => {
+		const prompt = buildRepairPrompt(base);
+		const line = prompt.split("\n").find((text) => text.startsWith("- Role tags")) ?? "";
+		const tagged = [...CLASSDEF_KINDS].map((kind) => KIND_KEYWORDS[kind]);
+		tagged.forEach((keyword) => expect(line).toContain(keyword));
+		expect(line).not.toContain("sequenceDiagram");
+		expect(line).not.toContain("mindmap");
+	});
+
+	test("allows the line break and nothing else in HTML, like the diagram skill", () => {
+		expect(buildRepairPrompt(base)).toContain("The only HTML allowed is the <br/> line break.");
 	});
 });
 

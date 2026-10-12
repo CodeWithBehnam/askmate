@@ -113,7 +113,11 @@ export interface DiagramValid {
 	readonly prose: string;
 }
 
-export type FallbackStage = DiagramStage | "repair" | "aborted" | "internal";
+/**
+ * "no-diagram" means the answer holds nothing that claims to be a diagram, for example a prose reply. It is not a failure to
+ * draw, so callers show the model's own words and block nothing.
+ */
+export type FallbackStage = DiagramStage | "no-diagram" | "repair" | "aborted" | "internal";
 
 export interface DiagramFallback {
 	readonly status: "fallback";

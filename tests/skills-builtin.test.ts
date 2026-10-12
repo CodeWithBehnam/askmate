@@ -20,6 +20,7 @@ import {
 	slugifySkillName,
 	type Skill
 } from "../src/skills";
+import { TABLE_CELL_RULE } from "../src/workflows/promptRules";
 
 const parseYaml = (text: string): unknown => Bun.YAML.parse(text);
 const builtIns = await loadBuiltInSkills(parseYaml, (text) => hashSkillText(text));
@@ -120,21 +121,44 @@ describe("mermaid-diagrams body", () => {
 		}
 	});
 
-	test("hands styling to the plugin: roles are named, colours are forbidden", () => {
-		for (const role of ["primary", "accent", "success", "warn", "danger", "muted", "ink"]) {
-			expect(body).toContain(role);
-		}
-		expect(body).toMatch(/Never write colours, fill or stroke values/);
+	test("hands styling to the plugin: colours are forbidden and the role meanings live in the design brief", () => {
+		expect(body).toMatch(/Never write colours, fill or stroke values, style or classDef lines/);
 		expect(body).toMatch(/write the body only/);
 		expect(body).toMatch(/accTitle and accDescr/);
+		expect(body).toMatch(/the colour roles with their meanings, and the types that take role tags/);
+		// The example shows real role names. Their meanings and the list of taggable types belong to the brief alone.
+		for (const role of ["primary", "success", "warn"]) {
+			expect(body).toContain(`:::${role}`);
+		}
+		expect(body).not.toMatch(/\b(?:primary|accent|success|warn|danger|muted|ink) for\b/);
+		expect(body).not.toMatch(/\bworks in flowchart, stateDiagram-v2/);
+		expect(body).not.toMatch(/at most three roles/i);
 	});
 
-	test("asks for the exact output shape and says when to stop", () => {
-		expect(body).toMatch(/Return one fenced mermaid code block, then these two lines and nothing else/);
-		expect(body).toMatch(/Shows:/);
-		expect(body).toMatch(/Assumptions:/);
+	test("asks for one block and at most one plain sentence, and says when to stop", () => {
+		const output = body.split(/^# /m).find((part) => part.startsWith("Output\n")) ?? "";
+		expect(output).toMatch(/Return one fenced mermaid code block\. After it, add one plain sentence only when you assumed something or left something out/);
+		expect(output).toMatch(/No labels, no headings and no offers of further help/);
+		// A labelled caption would be written into the note by Insert, New note and Apply.
+		expect(body).not.toMatch(/Shows:|Assumptions:/);
+		expect(body).not.toMatch(/offer (?:the|to)/i);
 		expect(body).toMatch(/fix only that error/);
 		expect(body).toMatch(/not asking for a diagram, skip this skill/);
+	});
+
+	test("a thin note gets the smallest supported diagram, and plain prose only when there is nothing to draw", () => {
+		const stop = body.split(/^# /m).find((part) => part.startsWith("Stop rules\n")) ?? "";
+		expect(stop).toMatch(/draw the smallest diagram it supports/);
+		expect(stop).toMatch(/Only when there is nothing to draw, answer in one or two plain sentences/);
+	});
+
+	test("the type the user asks for wins, in the request or in the brief", () => {
+		expect(body).toMatch(/If the user names a type, in the request or in the design brief, and it can show the content, use it/);
+	});
+
+	test("scopes the quoting rule: node labels are quoted, sequence message text is not", () => {
+		expect(body).toMatch(/Put quotes around any node label \(not sequence message text\)/);
+		expect(body).toMatch(/Sequence message text is never quoted and has no semicolons or hash characters \(write #59; and #35;\)/);
 	});
 
 	test("never asks for more than one diagram, so the answer stays inside the one block the plugin validates", () => {
@@ -148,12 +172,13 @@ describe("mermaid-diagrams body", () => {
 		expect(output.match(/```mermaid/g) ?? []).toEqual([]);
 	});
 
-	test("larger content stays in the one diagram and what was left out is named under Assumptions", () => {
+	test("larger content stays in the one diagram and what was left out is named in the sentence after it", () => {
 		const criteria = body.split(/^# /m).find((part) => part.startsWith("Success criteria\n")) ?? "";
 		const sizeRule = criteria.split("\n").find((line) => /12 nodes/.test(line)) ?? "";
 		expect(sizeRule).toMatch(/one diagram/);
 		expect(sizeRule).toMatch(/left out/);
-		expect(sizeRule).toMatch(/Assumptions/);
+		expect(sizeRule).toMatch(/sentence after the block/);
+		expect(sizeRule).not.toMatch(/Assumptions|offer/i);
 	});
 
 	test("names every type the research found, with the exact keywords", () => {
@@ -284,6 +309,15 @@ describe("starter templates", () => {
 			expect(BUILT_IN_SKILL_NAMES.has(skill.name)).toBe(false);
 			expect(template.content).not.toMatch(/\{\{|%%|<!--/);
 			expect(sanitiseSkillText(skill.body).text).toBe(skill.body);
+		}
+	});
+
+	test("the template that outputs a Markdown table carries the table cell rule every table workflow carries", () => {
+		const cornell = EXAMPLE_SKILL_TEMPLATES.find((template) => template.id === "cornell-notes");
+		expect(cornell?.content).toContain(TABLE_CELL_RULE);
+		// Only the Cornell template writes a table, so no other starter needs the rule.
+		for (const template of EXAMPLE_SKILL_TEMPLATES.filter((item) => item.id !== "cornell-notes")) {
+			expect({ id: template.id, table: /Markdown table/i.test(template.content) }).toEqual({ id: template.id, table: false });
 		}
 	});
 

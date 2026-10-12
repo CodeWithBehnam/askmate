@@ -64,6 +64,12 @@ export interface DiagramRunResult {
 
 export interface RunOptions {
 	onTextDelta?: (delta: string) => void;
+	/**
+	 * A tool run streams every turn, and only the last one is the answer. When a turn ends in tool calls, the text it streamed
+	 * was progress, so this asks the caller to clear what it showed. A tool run streams only to a caller that passes this
+	 * along with onTextDelta; without it the answer arrives in one piece when the run ends.
+	 */
+	onTextReset?: () => void;
 	abortSignal?: AbortSignal;
 	forceImage?: boolean;
 	skillSelection?: SkillSelection;

@@ -331,7 +331,10 @@ export interface RequestToolsInfo {
 	toolCount: number;
 	/** Labels of the servers that contributed tools, in a stable order. */
 	serverLabels: string[];
+	/** Rounds of tool calls the run allows. The turn after the last round has no tools. */
 	maxRounds: number;
+	/** Tool calls the run allows in total. Optional, so a request built before this field existed still reads. */
+	maxCalls?: number;
 }
 
 /** The diagram look and type behind a diagram request, kept so "Another look" and saved threads can reproduce it. */

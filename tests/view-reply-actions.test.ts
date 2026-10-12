@@ -95,7 +95,7 @@ describe("presentRunError", () => {
 		const local = { providerId: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "llama" };
 		const presented = presentRunError(new Error("net::ERR_CONNECTION_REFUSED"), "net::ERR_CONNECTION_REFUSED", "provider", local);
 		expect(presented.message).toContain("localhost:11434");
-		expect(presented.fix?.label).toBe("Restart server");
+		expect(presented.fix?.label).toBe("Test again");
 		expect(presented.message).not.toContain("ERR_CONNECTION_REFUSED");
 	});
 

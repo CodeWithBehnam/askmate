@@ -1,4 +1,5 @@
 import { createAbortError } from "../settings/normalize";
+import { formatTimeoutDuration } from "./common";
 import { feedSse, flushSse, INITIAL_SSE_STATE, type SseEvent } from "./sse";
 
 export interface SseRequestInit {
@@ -28,9 +29,14 @@ export type FetchLike = (url: string, init: {
 	signal: AbortSignal;
 }) => Promise<Response>;
 
+/** Names the limit in the unit it was set in. A limit under a second is not rounded down to "0 seconds". */
+export function formatIdleDuration(idleMs: number): string {
+	return idleMs < 1000 ? `${Math.max(0, Math.round(idleMs))} ms` : formatTimeoutDuration(idleMs);
+}
+
 export class StreamIdleError extends Error {
 	constructor(idleMs: number) {
-		super(`The connection went quiet for ${Math.round(idleMs / 1000)} seconds, so AskMate stopped waiting.`);
+		super(`The connection went quiet for ${formatIdleDuration(idleMs)}, so AskMate stopped waiting.`);
 		this.name = "StreamIdleError";
 	}
 }
