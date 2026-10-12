@@ -1,4 +1,5 @@
-// Golden parse tests against the real Mermaid 11.13.0 parser (dev dependency only; nothing from mermaid is imported by src).
+// Golden parse tests against the real Mermaid parser (dev dependency only; nothing from mermaid is imported by src). At runtime the
+// diagram pipeline validates every diagram with the Mermaid that Obsidian itself bundles.
 // happy-dom stands in for the browser. It is enough for `parse`, which is all the golden tests need; the render step is faked.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -14,7 +15,7 @@ import { DIAGRAM_KINDS, type Design, type Kind, type MermaidApi } from "../src/d
 
 const GLOBALS = ["window", "document", "navigator", "DOMParser", "Element", "HTMLElement", "SVGElement", "Node", "getComputedStyle"] as const;
 
-/** Each body parses and renders on Obsidian's bundled Mermaid 11.13.0. One per family. */
+/** Each body parses and renders on Obsidian's bundled Mermaid (11.13.0) and on the dev dependency. One per family. */
 const GOLD: Readonly<Record<Kind, string>> = {
 	flowchart: `flowchart TD
   accTitle: Safe apply workflow
@@ -295,7 +296,7 @@ afterAll(() => {
 	});
 });
 
-describe("capability probe against Mermaid 11.13.0", () => {
+describe("capability probe against the real Mermaid parser", () => {
 	test("every diagram family is supported by the bundled build", async () => {
 		expect([...(await supportedDiagrams(api))].sort()).toEqual([...DIAGRAM_KINDS].sort());
 	});
@@ -306,7 +307,7 @@ describe("capability probe against Mermaid 11.13.0", () => {
 	});
 
 	test("an unsupported family is reported as unsupported", async () => {
-		expect(await api.parse("wardley-beta\n  title X\n  component A [0.5, 0.5]", { suppressErrors: true })).toBe(false);
+		expect(await api.parse("notARealDiagram-beta\n  title X\n  component A", { suppressErrors: true })).toBe(false);
 	});
 });
 

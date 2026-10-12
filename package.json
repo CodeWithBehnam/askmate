@@ -10,13 +10,14 @@
 		"eslint": "9.39.5",
 		"eslint-plugin-obsidianmd": "0.4.2",
 		"happy-dom": "20.14.5",
-		"mermaid": "11.13.0",
+		"mermaid": "11.17.2",
 		"obsidian": "1.13.1",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "8.70.1"
 	},
 	"overrides": {
-		"moment": "2.31.0"
+		"moment": "2.31.0",
+		"katex": "0.18.8"
 	},
 	"description": "Chat with your notes, draw Mermaid diagrams, use MCP tools with approval and apply safe edits, with any AI provider or a local model.",
 	"keywords": [
