@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER_SETTINGS } from "../../settings/constants";
 import { formatTokenCount, getProviderLabel, normalizeProviderRoleSettings } from "../../settings/normalize";
 import type { ApplyApprovalMode, AskMateSettings, ComposerLayout, OutputMode, ProviderSettings, TextProviderId } from "../../shared/types";
+import { ASSUME_SECRET_PRESENT, listSetupIssues, type SecretPredicate } from "../../setup/setupState";
 
 export type SettingsPageStatus = "warning" | null;
 
@@ -28,13 +29,6 @@ const APPROVAL_MODE_LABELS: Record<ApplyApprovalMode, string> = {
 	manual: "Manual approval"
 };
 
-// Providers where the address is user-supplied, so an empty one means setup is incomplete. Each issue names the field as the UI does.
-const MISSING_ENDPOINT_ISSUES: Partial<Record<TextProviderId, string>> = {
-	"azure-openai": "Set the Azure OpenAI base URL.",
-	"azure-ai": "Set the Azure AI Foundry endpoint.",
-	"openai-compatible": "Set the local or self-hosted base URL."
-};
-
 export function pluralise(count: number, singular: string, plural: string = `${singular}s`): string {
 	return `${count.toLocaleString("en-GB")} ${count === 1 ? singular : plural}`;
 }
@@ -47,16 +41,15 @@ function resolveChatProvider(settings: AskMateSettings): { providerId: TextProvi
 	return { providerId, provider, model };
 }
 
-export function summarizeProviderSetup(settings: AskMateSettings): ProviderSetupSummary {
-	const { providerId, provider, model } = resolveChatProvider(settings);
+/**
+ * What is missing before the chat provider can answer, worded by the shared setup rules so this page agrees with the
+ * sidebar and the provider list. `hasSecret` asks the secret store whether a saved key name has a value on this device;
+ * without it a saved name is taken to have one.
+ */
+export function summarizeProviderSetup(settings: AskMateSettings, hasSecret: SecretPredicate = ASSUME_SECRET_PRESENT): ProviderSetupSummary {
+	const { providerId, model } = resolveChatProvider(settings);
 	const label = getProviderLabel(providerId);
-	const endpointIssue = MISSING_ENDPOINT_ISSUES[providerId];
-
-	const issues = [
-		!provider.apiKeySecretName.trim() && providerId !== "openai-compatible" ? `Add an API key for ${label}.` : null,
-		endpointIssue && !provider.baseUrl.trim() ? endpointIssue : null,
-		providerId === "azure-openai" && !model ? "Enter your Azure OpenAI deployment name." : null
-	].filter((issue): issue is string => issue !== null);
+	const issues = listSetupIssues(providerId, settings, hasSecret).map((issue) => issue.message);
 
 	const modelLabel = model || (providerId === "azure-openai" ? "no deployment" : "no model");
 	return {

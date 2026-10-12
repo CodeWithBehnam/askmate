@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	MAX_NOTES_PER_VAULT_MENTION,
+	MAX_RECENT_COUNT,
 	VaultMentionError,
 	describeVaultMentionResolutions,
 	noteHasTag,
@@ -58,10 +59,25 @@ describe("parseRecentCount", () => {
 		expect(parseRecentCount(undefined)).toBe(5);
 		expect(parseRecentCount("")).toBe(5);
 		expect(parseRecentCount("3")).toBe(3);
-		expect(parseRecentCount("500")).toBe(20);
+		expect(parseRecentCount("500")).toBe(MAX_RECENT_COUNT);
 		expect(parseRecentCount("0")).toBeNull();
 		expect(parseRecentCount("abc")).toBeNull();
 		expect(parseRecentCount("2.5")).toBeNull();
+	});
+
+	test("the largest count it accepts is the number of notes one mention can attach (CTX-02)", () => {
+		expect(MAX_RECENT_COUNT).toBe(MAX_NOTES_PER_VAULT_MENTION);
+	});
+
+	test("every count it returns is honoured in full by resolveVaultMentions", () => {
+		const many = Array.from({ length: 40 }, (_, index) => note(`N${String(index).padStart(2, "0")}.md`, index));
+		for (let requested = 1; requested <= MAX_RECENT_COUNT + 15; requested += 1) {
+			const count = parseRecentCount(String(requested));
+			expect(count).not.toBeNull();
+			const [resolution] = resolveVaultMentions([{ kind: "recent", count: count ?? 1 }], "Current.md", { resolvedLinks: {}, orderedLinkTargets: [], notes: many });
+			expect(resolution?.included).toHaveLength(count ?? 0);
+			expect(resolution?.dropped).toEqual([]);
+		}
 	});
 });
 
@@ -124,6 +140,8 @@ describe("selectRecentPaths", () => {
 	test("clamps the count", () => {
 		expect(selectRecentPaths(0, "Current.md", notes)).toHaveLength(1);
 		expect(selectRecentPaths(99, "Current.md", notes)).toHaveLength(4);
+		const many = Array.from({ length: 30 }, (_, index) => note(`M${index}.md`, index));
+		expect(selectRecentPaths(99, "Current.md", many)).toHaveLength(MAX_RECENT_COUNT);
 	});
 });
 
@@ -141,11 +159,32 @@ describe("resolveVaultMentions", () => {
 	});
 
 	test("caps each mention and reports what was left out", () => {
-		const many = Array.from({ length: 14 }, (_, index) => note(`N${String(index).padStart(2, "0")}.md`, index));
-		const result = resolveVaultMentions([{ kind: "recent", count: 20 }], "Current.md", { resolvedLinks: {}, orderedLinkTargets: [], notes: many });
+		const many = Array.from({ length: 14 }, (_, index) => note(`N${String(index).padStart(2, "0")}.md`, index, ["#bulk"]));
+		const result = resolveVaultMentions([{ kind: "tag", tag: "bulk" }], "Current.md", { resolvedLinks: {}, orderedLinkTargets: [], notes: many });
 		expect(result[0].included).toHaveLength(MAX_NOTES_PER_VAULT_MENTION);
 		expect(result[0].dropped).toHaveLength(4);
 		expect(result[0].included[0]).toBe("N13.md");
+	});
+
+	test("notes already attached elsewhere are skipped and reported, not attached again (CTX-01)", () => {
+		const taken = new Set(["B.md"]);
+		const result = resolveVaultMentions([{ kind: "links" }], "Current.md", data, MAX_NOTES_PER_VAULT_MENTION, taken);
+		expect(result[0].included).toEqual(["A.md"]);
+		expect(result[0].duplicates).toEqual(["B.md"]);
+		expect(taken.has("A.md")).toBe(true);
+	});
+
+	test("a mention whose notes are all attached elsewhere is not an error", () => {
+		const result = resolveVaultMentions([{ kind: "backlinks" }], "A.md", data, MAX_NOTES_PER_VAULT_MENTION, new Set(["Current.md", "D.md"]));
+		expect(result[0].included).toEqual([]);
+		expect(result[0].duplicates).toEqual(["Current.md", "D.md"]);
+	});
+
+	test("a note selected by an earlier mention is reported as a duplicate of the later one", () => {
+		const result = resolveVaultMentions([{ kind: "links" }, { kind: "tag", tag: "project" }], "Current.md", data);
+		expect(result[0].included).toEqual(["B.md", "A.md"]);
+		expect(result[1].included).toEqual([]);
+		expect(result[1].duplicates).toEqual(["B.md", "A.md"]);
 	});
 
 	test("zero results are an error that names the mention", () => {

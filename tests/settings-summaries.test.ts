@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
-import { formatTokenCount } from "../src/settings/normalize";
+import { formatTokenCount, validateAzureOpenAIBaseUrl } from "../src/settings/normalize";
 import type { AskMateSettings, CustomWorkflow, ProviderSettings, TextProviderId } from "../src/shared/types";
 import {
 	getUsageGuardrailStatus,
@@ -138,12 +138,39 @@ describe("summarizeProviderSetup", () => {
 	test("accepts a fully configured Azure OpenAI deployment", () => {
 		const summary = summarizeProviderSetup(makeProviderSettings("azure-openai", {
 			apiKeySecretName: "azure-key",
-			baseUrl: "https://example.openai.azure.com",
+			baseUrl: "https://example.openai.azure.com/openai/v1",
 			model: "my-deployment"
 		}));
 		expect(summary.displayValue).toBe("Azure OpenAI · my-deployment");
 		expect(summary.issues).toEqual([]);
 		expect(summary.status).toBeNull();
+	});
+
+	test("agrees with the provider: an Azure OpenAI address it rejects is an issue (CTX-07)", () => {
+		// A path the validator can never complete, so the fixture does not depend on whether a bare resource address is accepted.
+		const summary = summarizeProviderSetup(makeProviderSettings("azure-openai", {
+			apiKeySecretName: "azure-key",
+			baseUrl: "https://example.openai.azure.com/openai",
+			model: "my-deployment"
+		}));
+		expect(summary.displayValue).toBe("Azure OpenAI · setup needed");
+		expect(summary.issues).toHaveLength(1);
+		expect(summary.issues[0]).toContain("/openai/v1");
+	});
+
+	test("a bare Azure OpenAI resource address is judged by the provider's own validator, whichever way it rules", () => {
+		const bare = "https://example.openai.azure.com";
+		const accepted = (() => {
+			try {
+				validateAzureOpenAIBaseUrl(bare, "");
+				return true;
+			} catch {
+				return false;
+			}
+		})();
+		const summary = summarizeProviderSetup(makeProviderSettings("azure-openai", { apiKeySecretName: "azure-key", baseUrl: bare, model: "my-deployment" }));
+		expect(summary.displayValue).toBe(accepted ? "Azure OpenAI · my-deployment" : "Azure OpenAI · setup needed");
+		expect(summary.issues.length === 0).toBe(accepted);
 	});
 
 	test("does not ask built-in endpoint providers for a base URL", () => {
@@ -156,6 +183,52 @@ describe("summarizeProviderSetup", () => {
 		Reflect.deleteProperty(settings, "providers");
 		expect(summarizeProviderSetup(settings).displayValue).toBe("OpenAI · setup needed");
 		expect(summarizeProviderSetup(settings).issues).toEqual(["Add an API key for OpenAI."]);
+	});
+});
+
+describe("summarizeProviderSetup with the secret store (CTX-07)", () => {
+	const hasNoKey = (): boolean => false;
+	const hasKey = (): boolean => true;
+
+	test("a saved key name whose secret is missing on this device is an issue, not a ready provider", () => {
+		const settings = makeProviderSettings("openai", { apiKeySecretName: "askmate-openai-key" });
+		const summary = summarizeProviderSetup(settings, hasNoKey);
+		expect(summary.displayValue).toBe("OpenAI · setup needed");
+		expect(summary.status).toBe("warning");
+		expect(summary.issues).toEqual(["The API key for OpenAI is not stored on this device. Add it again."]);
+	});
+
+	test("the predicate is asked about the saved secret name", () => {
+		const asked: string[] = [];
+		summarizeProviderSetup(makeProviderSettings("anthropic", { apiKeySecretName: "claude" }), (name) => {
+			asked.push(name);
+			return true;
+		});
+		expect(asked).toEqual(["claude"]);
+	});
+
+	test("a present secret leaves the provider ready", () => {
+		const summary = summarizeProviderSetup(makeProviderSettings("openai", { apiKeySecretName: "k" }), hasKey);
+		expect(summary.displayValue).toBe("OpenAI · gpt-5.5");
+		expect(summary.issues).toEqual([]);
+	});
+
+	test("an absent name is still the old message, whatever the predicate says", () => {
+		expect(summarizeProviderSetup(makeSettings(), hasKey).issues).toEqual(["Add an API key for OpenAI."]);
+		expect(summarizeProviderSetup(makeSettings(), hasNoKey).issues).toEqual(["Add an API key for OpenAI."]);
+	});
+
+	test("local providers never ask for a key", () => {
+		expect(summarizeProviderSetup(makeProviderSettings("openai-compatible"), hasNoKey).issues).toEqual([]);
+	});
+
+	test("every gap is still listed in a stable order", () => {
+		const summary = summarizeProviderSetup(makeProviderSettings("azure-openai", { apiKeySecretName: "k" }), hasNoKey);
+		expect(summary.issues).toEqual([
+			"The API key for Azure OpenAI is not stored on this device. Add it again.",
+			"Set the Azure OpenAI base URL.",
+			"Enter your Azure OpenAI deployment name."
+		]);
 	});
 });
 

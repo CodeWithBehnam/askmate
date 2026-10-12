@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, TFile, getAllTags, normalizePath } from "obsidian";
+import { Editor, MarkdownView, TFile, TFolder, getAllTags, normalizePath } from "obsidian";
 import type { App, TAbstractFile } from "obsidian";
 import {
 	AskMateSettings,
@@ -182,6 +182,114 @@ export function remapRenamedPath(path: string, oldPath: string, newPath: string)
 	return `${newPath}${path.slice(oldPath.length)}`;
 }
 
+/** A folder named in settings, a mention or a batch run that is not in the vault. */
+export class FolderNotFoundError extends Error {
+	constructor(readonly folderPath: string) {
+		super(`AskMate cannot find the folder "${folderPath}" in this vault. Check the folder path, or clear it in AskMate settings.`);
+		this.name = "FolderNotFoundError";
+	}
+}
+
+/**
+ * True for an Excalidraw drawing: by name (.excalidraw.md) or, when the metadata is known, by the `excalidraw-plugin`
+ * frontmatter key the Excalidraw plugin writes. Such a note is mostly compressed drawing data, which is no use to a model.
+ */
+export function isExcalidrawNote(file: { path: string } | null | undefined, frontmatter?: Record<string, unknown> | null): boolean {
+	if (!file) {
+		return false;
+	}
+	const path = file.path.toLowerCase();
+	return path.endsWith(".excalidraw.md") || (path.endsWith(".md") && Boolean(frontmatter) && "excalidraw-plugin" in (frontmatter ?? {}));
+}
+
+/** Source label of a request made with no note open. WP-09 widens `ContextSource`; until then it lives on this type. */
+export const NO_NOTE_SOURCE = "No note";
+
+export interface NoNoteContext extends Omit<NoteContext, "source" | "file" | "content"> {
+	source: typeof NO_NOTE_SOURCE;
+	file: null;
+	content: "";
+}
+
+export function createNoNoteContext(): NoNoteContext {
+	return { content: "", file: null, source: NO_NOTE_SOURCE, selectionStartLine: null, selectionEndLine: null, selectionIdentity: null };
+}
+
+export function isNoNoteContext(context: NoteContext | NoNoteContext): context is NoNoteContext {
+	return context.source === NO_NOTE_SOURCE;
+}
+
+export type ContextSkipReason = "duplicate" | "current-note" | "not-markdown" | "not-found" | "over-budget";
+
+/** A note that a context source asked for but that was not attached, with the reason, for /context and the request preview. */
+export interface SkippedContext {
+	source: "additional_note" | "vault_note" | "folder_note";
+	path: string;
+	reason: ContextSkipReason;
+	detail: string;
+}
+
+export interface DetailedContextAttachments {
+	attachments: ContextAttachment[];
+	/** What each vault mention selected. Returned, not stored, so concurrent builds cannot mix them up. */
+	resolutions: VaultMentionResolution[];
+	skipped: SkippedContext[];
+}
+
+/** Plain-text lines for the /context preview. */
+export function describeSkippedContext(skipped: readonly SkippedContext[]): string[] {
+	return skipped.map((entry) => `skipped   ${entry.path}: ${entry.detail}`);
+}
+
+const SKIP_DETAILS: Record<Exclude<ContextSkipReason, "duplicate">, string> = {
+	"current-note": "this is the current note, which is always sent",
+	"not-markdown": "not a Markdown note",
+	"not-found": "no note with that name",
+	"over-budget": "the character limit was reached before it was read"
+};
+
+const CURRENT_NOTE_LABEL = "the current note";
+
+/**
+ * Which note each source has attached so far, for one build of the context. Seeded with the current note, which is
+ * always sent, so no source attaches it again. A new ledger per build keeps concurrent builds apart.
+ */
+class AttachmentLedger {
+	readonly attached = new Map<string, string>();
+	readonly skipped: SkippedContext[] = [];
+
+	constructor(currentPath: string) {
+		if (currentPath) {
+			this.attached.set(currentPath, CURRENT_NOTE_LABEL);
+		}
+	}
+
+	claim(path: string, label: string): void {
+		this.attached.set(path, label);
+	}
+
+	/** Records a duplicate and returns true when `path` was already attached; the current note is skipped silently. */
+	skipIfAttached(source: SkippedContext["source"], path: string, reportCurrent: boolean): boolean {
+		const label = this.attached.get(path);
+		if (label === undefined) {
+			return false;
+		}
+		if (label !== CURRENT_NOTE_LABEL) {
+			this.skipped.push({ source, path, reason: "duplicate", detail: `already attached as ${label}` });
+		} else if (reportCurrent) {
+			this.skipped.push({ source, path, reason: "current-note", detail: SKIP_DETAILS["current-note"] });
+		}
+		return true;
+	}
+
+	skip(source: SkippedContext["source"], path: string, reason: Exclude<ContextSkipReason, "duplicate">): void {
+		this.skipped.push({ source, path, reason, detail: SKIP_DETAILS[reason] });
+	}
+}
+
+/** What a context build needs from the note: the file and its text. A No note context has neither. */
+export type AttachmentContext = Pick<NoteContext, "content" | "file"> & { source: string };
+
 export type ContextServiceHost = {
 	app: App;
 	getSettings: () => AskMateSettings;
@@ -192,6 +300,7 @@ export class ContextService {
 	private lastMarkdownView: MarkdownView | null = null;
 	private lastMarkdownFile: TFile | null = null;
 	private lastNoteContext: NoteContext | null = null;
+	// Kept for describeLastVaultMentions only. Builds return their own resolutions and never read this.
 	private lastVaultMentionResolutions: VaultMentionResolution[] = [];
 	// A .md file can open in a non-Markdown view (Excalidraw, Kanban), which updates only the remembered file.
 	// These stamps record which of the view and the file was remembered last.
@@ -227,7 +336,10 @@ export class ContextService {
 		}
 	}
 
-	async getNoteContext(editor?: Editor, file?: TFile | null): Promise<NoteContext> {
+	async getNoteContext(editor?: Editor, file?: TFile | null): Promise<NoteContext>;
+	/** With `allowNoNote`, an empty workspace gives a No note context instead of an error. */
+	async getNoteContext(editor: Editor | undefined, file: TFile | null | undefined, options: { allowNoNote: true }): Promise<NoteContext | NoNoteContext>;
+	async getNoteContext(editor?: Editor, file?: TFile | null, options: { allowNoNote?: boolean } = {}): Promise<NoteContext | NoNoteContext> {
 		const activeView = this.host.app.workspace.getActiveViewOfType(MarkdownView);
 
 		if (editor) {
@@ -289,6 +401,11 @@ export class ContextService {
 		if (fileContext) {
 			this.lastNoteContext = fileContext;
 			return fileContext;
+		}
+
+		if (options.allowNoNote) {
+			this.lastNoteContext = null;
+			return createNoNoteContext();
 		}
 
 		throw new Error("Open a Markdown note or select text before using AskMate.");
@@ -437,7 +554,8 @@ export class ContextService {
 		if (fullNote.length > 0 || file?.extension === "md") {
 			const cursorLine = editor.getCursor().line;
 			return withLazyHeadingPath({
-				content: fullNote,
+				// A drawing opened as Markdown is mostly compressed data; send its text labels instead.
+				content: file && this.isExcalidrawFile(file) ? describeExcalidrawForContext(fullNote, file.path) : fullNote,
 				file,
 				source: "Current note",
 				selectionStartLine: null,
@@ -467,7 +585,7 @@ export class ContextService {
 	async getFileNoteContext(file: TFile): Promise<NoteContext> {
 		const raw = (await this.host.app.vault.cachedRead(file)).trim();
 		// An Excalidraw file is mostly compressed drawing data; only its text labels are useful to the model.
-		const content = file.path.toLowerCase().endsWith(".excalidraw.md") ? describeExcalidrawForContext(raw, file.path) : raw;
+		const content = this.isExcalidrawFile(file) ? describeExcalidrawForContext(raw, file.path) : raw;
 		return {
 			content,
 			file,
@@ -476,6 +594,10 @@ export class ContextService {
 			selectionEndLine: null,
 			selectionIdentity: null
 		};
+	}
+
+	private isExcalidrawFile(file: TFile): boolean {
+		return isExcalidrawNote(file, this.host.app.metadataCache.getFileCache(file)?.frontmatter);
 	}
 
 	getLastOpenMarkdownView(): MarkdownView | null {
@@ -518,12 +640,31 @@ export class ContextService {
 		return active?.path ?? null;
 	}
 
+	/** The attachments only. The detailed variant also returns what was skipped and what each mention selected. */
 	async buildContextAttachments(
-		context: NoteContext,
+		context: AttachmentContext,
 		options: BuildRequestOptions,
 		privacy: RequestPrivacyOptions
 	): Promise<ContextAttachment[]> {
+		const result = await this.buildContextAttachmentsDetailed(context, options, privacy);
+		// One assignment of a finished array, so builds that overlap cannot leave a mixture; /context reads it for old callers.
+		this.lastVaultMentionResolutions = result.resolutions;
+		return result.attachments;
+	}
+
+	/**
+	 * Builds every attachment for a request and reports what it left out. A note is attached once, under the first source
+	 * that names it: style guide and glossary, then additional notes, vault mentions, folder context. The current note is
+	 * never attached again. Nothing here is stored on the service, so concurrent builds are independent.
+	 */
+	async buildContextAttachmentsDetailed(
+		context: AttachmentContext,
+		options: BuildRequestOptions,
+		privacy: RequestPrivacyOptions
+	): Promise<DetailedContextAttachments> {
 		const settings = this.host.getSettings();
+		const sourcePath = context.file?.path ?? "";
+		const ledger = new AttachmentLedger(sourcePath);
 		const attachments: ContextAttachment[] = [];
 
 		if (options.includeThreadHistory && options.threadMessages?.length) {
@@ -533,23 +674,38 @@ export class ContextService {
 			}
 		}
 
-		const noteHistory = this.buildNoteHistoryAttachment(context.file?.path ?? "");
+		const noteHistory = this.buildNoteHistoryAttachment(sourcePath);
 		if (noteHistory) {
 			attachments.push(noteHistory);
+		}
+
+		// A role file that is also named as an ordinary source is attached as the role, so reserve it before they look.
+		const roleSources = [
+			{ kind: "style_guide" as const, enabled: settings.includeStyleGuideContext, path: settings.styleGuideContextPath, maxCharacters: settings.styleGuideMaxCharacters, label: "the style guide" },
+			{ kind: "glossary" as const, enabled: settings.includeGlossaryContext, path: settings.glossaryContextPath, maxCharacters: settings.glossaryMaxCharacters, label: "the glossary" }
+		].filter((role) => role.enabled);
+		for (const role of roleSources) {
+			const file = this.resolveMarkdownPath(role.path, sourcePath);
+			if (file && !ledger.attached.has(file.path)) {
+				ledger.claim(file.path, role.label);
+			}
 		}
 
 		const additionalPaths = options.additionalContextPaths ?? settings.additionalContextPaths;
 		attachments.push(...await this.buildAdditionalNoteAttachments(
 			additionalPaths,
-			context.file?.path ?? "",
-			settings.additionalContextMaxCharacters
+			sourcePath,
+			settings.additionalContextMaxCharacters,
+			ledger
 		));
 
-		attachments.push(...await this.buildVaultMentionAttachments(
+		const mentions = await this.collectVaultMentions(
 			options.vaultMentions,
 			context.file,
-			settings.additionalContextMaxCharacters
-		));
+			settings.additionalContextMaxCharacters,
+			ledger
+		);
+		attachments.push(...mentions.attachments);
 
 		const folderContext = options.folderContext ?? {
 			enabled: settings.folderContextEnabled,
@@ -557,19 +713,13 @@ export class ContextService {
 			maxFiles: settings.folderContextMaxFiles,
 			maxCharacters: settings.folderContextMaxCharacters
 		};
-		attachments.push(...await this.buildFolderContextAttachments(folderContext, context.file?.path ?? ""));
+		attachments.push(...await this.buildFolderContextAttachments(folderContext, sourcePath, ledger));
 
-		const styleGuide = settings.includeStyleGuideContext
-			? await this.buildRoleContextAttachment("style_guide", settings.styleGuideContextPath, context.file?.path ?? "", settings.styleGuideMaxCharacters)
-			: null;
-		if (styleGuide) {
-			attachments.push(styleGuide);
-		}
-		const glossary = settings.includeGlossaryContext
-			? await this.buildRoleContextAttachment("glossary", settings.glossaryContextPath, context.file?.path ?? "", settings.glossaryMaxCharacters)
-			: null;
-		if (glossary) {
-			attachments.push(glossary);
+		for (const role of roleSources) {
+			const attachment = await this.buildRoleContextAttachment(role.kind, role.path, sourcePath, role.maxCharacters);
+			if (attachment) {
+				attachments.push(attachment);
+			}
 		}
 
 		if (settings.includeExcalidrawSummaries) {
@@ -580,7 +730,7 @@ export class ContextService {
 			attachments.push(...this.buildImageManifestAttachments(context));
 		}
 
-		return attachments;
+		return { attachments, resolutions: mentions.resolutions, skipped: ledger.skipped };
 	}
 
 	buildThreadHistoryAttachment(messages: ChatMessage[], maxTurns: number): ContextAttachment | null {
@@ -664,23 +814,34 @@ export class ContextService {
 		};
 	}
 
-	async buildAdditionalNoteAttachments(paths: string[], sourcePath: string, maxCharacters: number): Promise<ContextAttachment[]> {
+	async buildAdditionalNoteAttachments(
+		paths: string[],
+		sourcePath: string,
+		maxCharacters: number,
+		ledger: AttachmentLedger = new AttachmentLedger(sourcePath)
+	): Promise<ContextAttachment[]> {
 		const attachments: ContextAttachment[] = [];
 		let remaining = maxCharacters;
 
 		for (const path of normalizeContextPathList(paths)) {
-			if (remaining <= 0) {
-				break;
+			const target = this.classifyMarkdownPath(path, sourcePath);
+			if (target.kind === "skip") {
+				ledger.skip("additional_note", path, target.reason);
+				continue;
 			}
-
-			const file = this.resolveMarkdownPath(path, sourcePath);
-			if (!file || file.path === sourcePath) {
+			const file = target.file;
+			if (ledger.skipIfAttached("additional_note", file.path, true)) {
+				continue;
+			}
+			if (remaining <= 0) {
+				ledger.skip("additional_note", file.path, "over-budget");
 				continue;
 			}
 
 			const raw = (await this.host.app.vault.cachedRead(file)).trim();
 			const content = withTruncationNotice(raw, remaining);
 			remaining = content.truncated ? 0 : remaining - content.shownCharacters;
+			ledger.claim(file.path, "an additional note");
 			attachments.push(this.createContextAttachment(
 				"additional_note",
 				`Additional note: ${file.path}`,
@@ -721,22 +882,37 @@ export class ContextService {
 		return { resolvedLinks: metadataCache.resolvedLinks, orderedLinkTargets, notes };
 	}
 
+	/**
+	 * The attachments for vault mentions. Remembers the resolutions for describeLastVaultMentions; code that needs them
+	 * per request should call buildContextAttachmentsDetailed, which returns them instead.
+	 */
 	async buildVaultMentionAttachments(
 		mentions: VaultMention[] | undefined,
 		file: TFile | null,
 		maxCharacters: number
 	): Promise<ContextAttachment[]> {
-		this.lastVaultMentionResolutions = [];
+		const result = await this.collectVaultMentions(mentions, file, maxCharacters, new AttachmentLedger(file?.path ?? ""));
+		this.lastVaultMentionResolutions = result.resolutions;
+		return result.attachments;
+	}
+
+	private async collectVaultMentions(
+		mentions: VaultMention[] | undefined,
+		file: TFile | null,
+		maxCharacters: number,
+		ledger: AttachmentLedger
+	): Promise<{ attachments: ContextAttachment[]; resolutions: VaultMentionResolution[] }> {
 		if (!mentions?.length) {
-			return [];
+			return { attachments: [], resolutions: [] };
 		}
 
 		const data = this.collectVaultData(file, mentions.some((mention) => mention.kind === "tag"));
-		const resolutions = resolveVaultMentions(mentions, file?.path ?? null, data);
+		const selected = resolveVaultMentions(mentions, file?.path ?? null, data, undefined, new Set(ledger.attached.keys()));
 		const attachments: ContextAttachment[] = [];
+		const resolutions: VaultMentionResolution[] = [];
 		let remaining = maxCharacters;
 
-		for (const resolution of resolutions) {
+		for (const resolution of selected) {
 			const unread: string[] = [];
 			const read: string[] = [];
 			for (const path of resolution.included) {
@@ -752,6 +928,7 @@ export class ContextService {
 				const content = withTruncationNotice(raw, remaining);
 				remaining = content.truncated ? 0 : remaining - content.shownCharacters;
 				read.push(path);
+				ledger.claim(path, "a mentioned note");
 				attachments.push(this.createContextAttachment(
 					"vault_note",
 					`Vault note (${resolution.relation}): ${path}`,
@@ -761,13 +938,17 @@ export class ContextService {
 					content.truncated
 				));
 			}
-			this.lastVaultMentionResolutions.push({ ...resolution, included: read, overBudget: unread });
+			resolutions.push({ ...resolution, included: read, overBudget: unread });
 		}
 
-		return attachments;
+		return { attachments, resolutions };
 	}
 
-	async buildFolderContextAttachments(options: FolderContextOptions, excludePath: string): Promise<ContextAttachment[]> {
+	async buildFolderContextAttachments(
+		options: FolderContextOptions,
+		excludePath: string,
+		ledger: AttachmentLedger = new AttachmentLedger(excludePath)
+	): Promise<ContextAttachment[]> {
 		if (!options.enabled || !options.path.trim()) {
 			return [];
 		}
@@ -780,7 +961,9 @@ export class ContextService {
 		const maxFiles = normalizeBoundedInteger(options.maxFiles, DEFAULT_FOLDER_CONTEXT_MAX_FILES, 1, 100);
 		let remaining = normalizeBoundedInteger(options.maxCharacters, DEFAULT_FOLDER_CONTEXT_MAX_CHARACTERS, 1000, 200000);
 		const attachments: ContextAttachment[] = [];
-		const files = await this.listMarkdownFilesInFolder(folder, maxFiles, excludePath);
+		const files = await this.listMarkdownFilesInFolder(folder, maxFiles, excludePath, ledger.attached, (path, takenBy) => {
+			ledger.skipped.push({ source: "folder_note", path, reason: "duplicate", detail: `already attached as ${takenBy}` });
+		});
 
 		for (const file of files) {
 			if (attachments.length >= maxFiles || remaining <= 0) {
@@ -790,6 +973,7 @@ export class ContextService {
 			const raw = (await this.host.app.vault.cachedRead(file)).trim();
 			const content = withTruncationNotice(raw, remaining);
 			remaining = content.truncated ? 0 : remaining - content.shownCharacters;
+			ledger.claim(file.path, "a folder note");
 			attachments.push(this.createContextAttachment(
 				"folder_note",
 				`Folder note ${attachments.length + 1}: ${file.path}`,
@@ -803,23 +987,33 @@ export class ContextService {
 		return attachments;
 	}
 
+	/** The Markdown note a path or link text names, or null. */
 	resolveMarkdownPath(path: string, sourcePath: string): TFile | null {
+		const target = this.classifyMarkdownPath(path, sourcePath);
+		return target.kind === "file" ? target.file : null;
+	}
+
+	/** Like resolveMarkdownPath, but says why nothing matched: not a Markdown file, or no file at all. */
+	private classifyMarkdownPath(path: string, sourcePath: string): { kind: "file"; file: TFile } | { kind: "skip"; reason: "not-markdown" | "not-found" } {
 		const cleanPath = normalizeContextPathList([path])[0] ?? "";
 		if (!cleanPath) {
-			return null;
+			return { kind: "skip", reason: "not-found" };
 		}
 
 		const direct = this.host.app.vault.getAbstractFileByPath(cleanPath);
 		if (direct instanceof TFile && direct.extension === "md") {
-			return direct;
+			return { kind: "file", file: direct };
 		}
 
 		const linked = this.host.app.metadataCache.getFirstLinkpathDest(cleanPath, sourcePath);
-		return linked?.extension === "md" ? linked : null;
+		if (linked?.extension === "md") {
+			return { kind: "file", file: linked };
+		}
+		return { kind: "skip", reason: direct instanceof TFile || linked ? "not-markdown" : "not-found" };
 	}
 
 	async buildExcalidrawSummaryAttachments(
-		context: NoteContext,
+		context: AttachmentContext,
 		privacy: Pick<RequestPrivacyOptions, "includeImageReferences">
 	): Promise<ContextAttachment[]> {
 		const sourcePath = context.file?.path ?? "";
@@ -893,7 +1087,7 @@ export class ContextService {
 		return clean.endsWith(".excalidraw.md") || clean.endsWith(".excalidraw") || clean.endsWith(".excalidraw.json");
 	}
 
-	buildImageManifestAttachments(context: NoteContext): ContextAttachment[] {
+	buildImageManifestAttachments(context: AttachmentContext): ContextAttachment[] {
 		const references = this.extractImageReferenceInfos(context.content);
 		if (references.length === 0) {
 			return [];
@@ -996,53 +1190,83 @@ export class ContextService {
 			&& !path.split("/").some((segment) => segment.startsWith("."));
 	}
 
-	async listMarkdownFilesInFolder(folderPath: string, maxFiles: number, excludePath = ""): Promise<TFile[]> {
+	/**
+	 * The folder at a path. An exact match wins; otherwise each segment is matched ignoring case, because the file system
+	 * under the vault may not distinguish case (macOS, Windows) and settings written by hand often differ in case only.
+	 * An ambiguous match is treated as missing.
+	 */
+	private findFolder(path: string): TFolder | null {
+		const exact = this.host.app.vault.getFolderByPath(path);
+		if (exact) {
+			return exact;
+		}
+		let current: TFolder | null = this.host.app.vault.getRoot();
+		for (const segment of path.split("/")) {
+			const wanted = segment.toLowerCase();
+			const matches: TFolder[] = current.children.filter((child): child is TFolder => child instanceof TFolder && child.name.toLowerCase() === wanted);
+			current = matches.length === 1 ? matches[0] : null;
+			if (!current) {
+				return null;
+			}
+		}
+		return current;
+	}
+
+	/** Visible Markdown notes below a folder, depth first, files before sub-folders, each level in path order. */
+	private *iterateMarkdownFiles(folder: TFolder): Generator<TFile> {
+		const byPath = (a: { path: string }, b: { path: string }): number => a.path.localeCompare(b.path);
+		const children = folder.children.slice();
+		for (const file of children.filter((child): child is TFile => child instanceof TFile).sort(byPath)) {
+			if (this.isVisibleMarkdownPath(file.path)) {
+				yield file;
+			}
+		}
+		// Hidden folders (.git, the config folder, .trash) can hold thousands of files that are never context.
+		for (const sub of children.filter((child): child is TFolder => child instanceof TFolder).sort(byPath)) {
+			if (this.isVisibleFolderPath(sub.path)) {
+				yield* this.iterateMarkdownFiles(sub);
+			}
+		}
+	}
+
+	/**
+	 * Markdown notes in a folder, at most `maxFiles`. Notes in `taken` (already attached elsewhere) are left out before
+	 * the limit is applied, so duplicates never use up the quota; each is passed to `onDuplicate`. Uses the vault's folder
+	 * tree. Throws FolderNotFoundError when there is no such folder.
+	 */
+	async listMarkdownFilesInFolder(
+		folderPath: string,
+		maxFiles: number,
+		excludePath = "",
+		taken?: ReadonlyMap<string, string>,
+		onDuplicate?: (path: string, takenBy: string) => void
+	): Promise<TFile[]> {
 		const folder = cleanFolderPath(folderPath);
 		if (!folder) {
 			return [];
 		}
 
+		const root = this.findFolder(folder);
+		if (!root) {
+			throw new FolderNotFoundError(folder);
+		}
+
 		const limit = normalizeBoundedInteger(maxFiles, DEFAULT_BATCH_WORKFLOW_MAX_FILES, 1, 100);
-		const paths: string[] = [];
-
-		const visit = async (currentFolder: string): Promise<void> => {
-			if (paths.length >= limit) {
-				return;
+		const files: TFile[] = [];
+		for (const file of this.iterateMarkdownFiles(root)) {
+			if (files.length >= limit) {
+				break;
 			}
-
-			let listed: { files: string[]; folders: string[] };
-			try {
-				listed = await this.host.app.vault.adapter.list(currentFolder);
-			} catch {
-				return;
+			const takenBy = taken?.get(file.path);
+			if (file.path === excludePath || takenBy === CURRENT_NOTE_LABEL) {
+				continue;
 			}
-
-			for (const path of listed.files.slice().sort((a, b) => a.localeCompare(b))) {
-				const normalizedPath = normalizePath(path);
-				if (paths.length >= limit) {
-					return;
-				}
-				if (normalizedPath !== excludePath && this.isVisibleMarkdownPath(normalizedPath)) {
-					paths.push(normalizedPath);
-				}
+			if (takenBy !== undefined) {
+				onDuplicate?.(file.path, takenBy);
+				continue;
 			}
-
-			for (const path of listed.folders.slice().sort((a, b) => a.localeCompare(b))) {
-				const folderPath = normalizePath(path);
-				// Hidden folders (.git, the config folder, .trash) can hold thousands of files that are never context.
-				if (!this.isVisibleFolderPath(folderPath)) {
-					continue;
-				}
-				await visit(folderPath);
-				if (paths.length >= limit) {
-					return;
-				}
-			}
-		};
-
-		await visit(folder);
-		return paths
-			.map((path) => this.host.app.vault.getAbstractFileByPath(path))
-			.filter((file): file is TFile => file instanceof TFile && file.extension === "md");
+			files.push(file);
+		}
+		return files;
 	}
 }

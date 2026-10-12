@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER_SETTINGS, TEXT_PROVIDER_IDS, TEXT_PROVIDER_LABELS } from "../../settings/constants";
 import type { AskMateSettings, TextProviderId } from "../../shared/types";
+import { ASSUME_SECRET_PRESENT, providerKeyIssue, type SecretPredicate } from "../../setup/setupState";
 
 /**
  * Pure rules for the sidebar model and provider switcher: matching what the user typed against known IDs, listing
@@ -112,18 +113,26 @@ export function listProviderModels(providerId: TextProviderId, settings: Pick<As
 	]);
 }
 
-/** Local servers often need no key; every other provider cannot answer without one. */
-export function providerNeedsApiKey(providerId: TextProviderId, settings: Pick<AskMateSettings, "providers">): boolean {
-	if (providerId === "openai-compatible") {
-		return false;
-	}
-	return (settings.providers?.[providerId]?.apiKeySecretName ?? "").trim().length === 0;
+/**
+ * Local servers often need no key; every other provider cannot answer without one. `hasSecret` asks the secret store
+ * whether the saved name has a value on this device; without it a saved name is taken to have one.
+ */
+export function providerNeedsApiKey(
+	providerId: TextProviderId,
+	settings: Pick<AskMateSettings, "providers">,
+	hasSecret: SecretPredicate = ASSUME_SECRET_PRESENT
+): boolean {
+	return providerKeyIssue(providerId, settings, hasSecret) !== null;
 }
 
 /** Provider and model pairs for the picker. Providers without a key are left out unless they are the current one. */
-export function buildModelChoices(settings: Pick<AskMateSettings, "providers">, currentProviderId: TextProviderId): ModelChoice[] {
+export function buildModelChoices(
+	settings: Pick<AskMateSettings, "providers">,
+	currentProviderId: TextProviderId,
+	hasSecret: SecretPredicate = ASSUME_SECRET_PRESENT
+): ModelChoice[] {
 	return TEXT_PROVIDER_IDS
-		.filter((providerId) => providerId === currentProviderId || !providerNeedsApiKey(providerId, settings))
+		.filter((providerId) => providerId === currentProviderId || !providerNeedsApiKey(providerId, settings, hasSecret))
 		.flatMap((providerId) => listProviderModels(providerId, settings).map((model) => ({
 			providerId,
 			providerName: TEXT_PROVIDER_LABELS[providerId],
@@ -160,10 +169,20 @@ export function formatModelListing(
 	].join("\n");
 }
 
-export function formatProviderListing(currentId: TextProviderId, settings: Pick<AskMateSettings, "providers">): string {
+const KEY_NOTES = {
+	"needs-key": " (no API key set)",
+	"key-missing": " (key not stored on this device)"
+} as const;
+
+export function formatProviderListing(
+	currentId: TextProviderId,
+	settings: Pick<AskMateSettings, "providers">,
+	hasSecret: SecretPredicate = ASSUME_SECRET_PRESENT
+): string {
 	const lines = TEXT_PROVIDER_IDS.map((id) => {
 		const marker = id === currentId ? "*" : " ";
-		const note = providerNeedsApiKey(id, settings) ? " (no API key set)" : "";
+		const issue = providerKeyIssue(id, settings, hasSecret);
+		const note = issue ? KEY_NOTES[issue] : "";
 		return `  ${marker} ${id.padEnd(18)}${TEXT_PROVIDER_LABELS[id]}${note}`;
 	});
 	return ["Providers (* is current)", ...lines, "", "Switch with /provider <id>."].join("\n");

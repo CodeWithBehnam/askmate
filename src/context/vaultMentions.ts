@@ -10,9 +10,10 @@ export type VaultMention =
 	| { kind: "recent"; count: number };
 
 export const DEFAULT_RECENT_COUNT = 5;
-export const MAX_RECENT_COUNT = 20;
 /** Upper bound of notes taken from one mention, so a popular tag cannot flood the prompt. */
 export const MAX_NOTES_PER_VAULT_MENTION = 10;
+/** The most @recent can ask for is the most one mention can attach, so the parser, help and completions never promise more. */
+export const MAX_RECENT_COUNT = MAX_NOTES_PER_VAULT_MENTION;
 
 export interface VaultNoteMeta {
 	path: string;
@@ -40,6 +41,8 @@ export interface VaultMentionResolution {
 	dropped: string[];
 	/** Selected notes not read because the character limit for attached notes ran out first. */
 	overBudget: string[];
+	/** Matching notes skipped because another source or an earlier mention already attaches them. */
+	duplicates?: string[];
 }
 
 export class VaultMentionError extends Error {
@@ -201,15 +204,17 @@ function zeroResultMessage(mention: VaultMention): string {
 
 /**
  * Resolves every mention to a capped list of notes. A note is attached once, under the first mention that selects it.
- * Throws VaultMentionError when a mention matches nothing, in the same spirit as a missing @folder.
+ * `taken` holds paths that other sources already attach (the current note, additional notes); it is filled in as notes
+ * are chosen, so the caller can pass the same set on to the next source. Throws VaultMentionError when a mention matches
+ * nothing at all, in the same spirit as a missing @folder; a mention whose notes are all attached elsewhere is not an error.
  */
 export function resolveVaultMentions(
 	mentions: readonly VaultMention[],
 	currentPath: string | null,
 	data: VaultData,
-	cap = MAX_NOTES_PER_VAULT_MENTION
+	cap = MAX_NOTES_PER_VAULT_MENTION,
+	taken: Set<string> = new Set<string>()
 ): VaultMentionResolution[] {
-	const taken = new Set<string>();
 	return mentions.map((mention) => {
 		if ((mention.kind === "links" || mention.kind === "backlinks") && !currentPath) {
 			throw new VaultMentionError(`${vaultMentionLabel(mention)} needs a note. Open a Markdown note first.`);
@@ -226,6 +231,7 @@ export function resolveVaultMentions(
 			throw new VaultMentionError(zeroResultMessage(mention));
 		}
 		const fresh = all.filter((candidate) => !taken.has(candidate));
+		const freshSet = new Set(fresh);
 		const included = fresh.slice(0, cap);
 		included.forEach((candidate) => taken.add(candidate));
 		return {
@@ -234,12 +240,13 @@ export function resolveVaultMentions(
 			relation: vaultMentionRelation(mention),
 			included,
 			dropped: fresh.slice(cap),
-			overBudget: []
+			overBudget: [],
+			duplicates: all.filter((candidate) => !freshSet.has(candidate))
 		};
 	});
 }
 
-/** Plain-text lines for the /context preview: what each mention attached and what the cap left out. */
+/** Plain-text lines for the /context preview: what each mention attached, what the cap left out and what was already attached. */
 export function describeVaultMentionResolutions(resolutions: readonly VaultMentionResolution[]): string[] {
 	return resolutions.map((resolution) => {
 		const dropped = resolution.dropped.length > 0
@@ -248,6 +255,9 @@ export function describeVaultMentionResolutions(resolutions: readonly VaultMenti
 		const overBudget = resolution.overBudget.length > 0
 			? `; ${resolution.overBudget.length} not read, character limit reached (${resolution.overBudget.join(", ")})`
 			: "";
-		return `mention   ${resolution.label}: ${resolution.included.join(", ") || "nothing new"}${dropped}${overBudget}`;
+		const duplicates = resolution.duplicates && resolution.duplicates.length > 0
+			? `; ${resolution.duplicates.length} already attached (${resolution.duplicates.join(", ")})`
+			: "";
+		return `mention   ${resolution.label}: ${resolution.included.join(", ") || "nothing new"}${dropped}${overBudget}${duplicates}`;
 	});
 }

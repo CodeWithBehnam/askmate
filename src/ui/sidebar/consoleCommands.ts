@@ -1,4 +1,5 @@
 import {
+	DEFAULT_RECENT_COUNT,
 	MAX_RECENT_COUNT,
 	normaliseTag,
 	parseRecentCount,
@@ -29,7 +30,15 @@ export type ConsoleCommandKind =
 	| "new-thread"
 	| "threads"
 	| "rename-thread"
-	| "delete-thread";
+	| "delete-thread"
+	| "setup"
+	| "welcome"
+	| "skills"
+	| "skill"
+	| "diagram"
+	| "mcp"
+	| "test"
+	| "images";
 
 export interface ConsoleCommand {
 	/** Typed after the slash, lower case. */
@@ -40,6 +49,8 @@ export interface ConsoleCommand {
 	argumentHint?: string;
 	workflowId?: string;
 	outputMode?: OutputMode;
+	/** Runs only when typed in full, never by a unique prefix, because a slip would lose something. */
+	destructive?: boolean;
 }
 
 export interface ConsoleMentions {
@@ -50,13 +61,22 @@ export interface ConsoleMentions {
 	notes: string[];
 	/** Vault-aware mentions (@links, @backlinks, @tag:, @recent), resolved later against the current note. */
 	vault: VaultMention[];
+	/** Skills named with @skill:name, lower case. Whether each exists is for the skill service to decide. */
+	skills: string[];
 }
 
 export type ConsoleAction =
-	/** literal: the line started with "//", so the question is sent as typed and never treated as an image command. */
-	| { kind: "ask"; question: string; outputMode: OutputMode | null; mentions: ConsoleMentions; literal: boolean }
+	/**
+	 * literal: the line started with "//", so the question is sent as typed and never treated as an image command.
+	 * hints: soft notes about how a mention was read, for the view to show next to the composer.
+	 */
+	| { kind: "ask"; question: string; outputMode: OutputMode | null; mentions: ConsoleMentions; literal: boolean; hints: string[] }
 	| { kind: "image"; prompt: string; mentions: ConsoleMentions }
 	| { kind: "workflow"; workflowId: string; extra: string; mentions: ConsoleMentions }
+	/** An empty prompt asks for a diagram of the current note. */
+	| { kind: "diagram"; prompt: string; mentions: ConsoleMentions }
+	/** An empty question selects the skill for the thread instead of running a request. */
+	| { kind: "skill"; name: string; question: string; mentions: ConsoleMentions }
 	| { kind: "mode"; mode: OutputMode }
 	| { kind: "effort"; effort: ReasoningEffort | null }
 	| { kind: "layout"; layout: ComposerLayout }
@@ -72,12 +92,21 @@ export type ConsoleAction =
 	| { kind: "threads" }
 	| { kind: "renameThread"; title: string }
 	| { kind: "deleteThread" }
+	| { kind: "setup" }
+	| { kind: "welcome" }
+	| { kind: "skills" }
+	| { kind: "mcp" }
+	| { kind: "test" }
+	/** setting null shows the current state. */
+	| { kind: "images"; setting: "on" | "off" | null }
 	| { kind: "error"; message: string };
 
 export interface ConsoleCompletion {
 	label: string;
 	insertText: string;
 	detail: string;
+	/** Heading the item is listed under, such as "Workflows" or "Commands". */
+	group?: string;
 }
 
 export interface ConsoleCompletionResult {
@@ -86,19 +115,26 @@ export interface ConsoleCompletionResult {
 	/** Index in the input where the replaced token ends. */
 	to: number;
 	items: ConsoleCompletion[];
+	/** How many more matches there are than `items` shows, for a "+N more, keep typing" row. */
+	more: number;
 }
 
-/** Values offered after "/model " and "/provider ". */
+/** Values offered after "/model ", "/provider ", "/skill " and "@skill:". */
 export interface ConsoleArgumentSource {
 	models: readonly string[];
 	providers: readonly { id: string; label: string }[];
 	vaultTags?: readonly string[];
+	skills?: readonly { name: string; description?: string }[];
 }
 
 export interface ConsoleStatusSegment {
 	kind: "mode" | "model" | "effort" | "usage";
 	text: string;
 	title: string;
+}
+
+function assertNever(value: never): never {
+	throw new Error(`Unhandled console value: ${JSON.stringify(value)}`);
 }
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh"];
@@ -114,35 +150,77 @@ export function resolveLayoutName(name: string): ComposerLayout | null {
 	return LAYOUT_NAMES.get(name.trim().toLowerCase()) ?? null;
 }
 const MAX_COMPLETIONS = 8;
+const EMPTY_MENU_WORKFLOWS = 6;
+const EMPTY_MENU_COMMANDS = ["help", "diagram", "model", "new"];
 
 const BUILT_IN_COMMANDS: ConsoleCommand[] = [
 	{ name: "help", aliases: ["?", "commands"], summary: "List commands, workflows and mentions", kind: "help" },
+	{ name: "setup", aliases: ["connect"], summary: "Connect an AI provider", kind: "setup" },
+	{ name: "welcome", aliases: [], summary: "Show the welcome card again", kind: "welcome" },
+	{ name: "diagram", aliases: [], summary: "Draw a Mermaid diagram of the note", kind: "diagram", argumentHint: "[what to draw]" },
+	{ name: "skills", aliases: [], summary: "List the skills AskMate can use", kind: "skills" },
+	{ name: "skill", aliases: [], summary: "Use a skill for a question, or for the whole conversation", kind: "skill", argumentHint: "<name> [question]" },
 	{ name: "chat", aliases: [], summary: "Answer in this sidebar (with text: one question only)", kind: "mode", outputMode: "chat", argumentHint: "[question]" },
 	{ name: "note", aliases: ["new-note"], summary: "Save answers as new notes (with text: one question only)", kind: "mode", outputMode: "note", argumentHint: "[question]" },
 	{ name: "apply", aliases: [], summary: "Write answers into the note (with text: one question only)", kind: "mode", outputMode: "apply", argumentHint: "[question]" },
 	{ name: "image", aliases: ["img"], summary: "Generate an image with OpenAI Images", kind: "image", argumentHint: "<prompt>" },
+	{ name: "images", aliases: [], summary: "Turn image previews of linked pictures on or off", kind: "images", argumentHint: "[on|off]" },
 	{ name: "effort", aliases: ["reasoning"], summary: "Set reasoning effort: none, low, medium, high, xhigh", kind: "effort", argumentHint: "<level>" },
 	{ name: "context", aliases: ["ctx"], summary: "Show what the next request would send", kind: "context" },
 	{ name: "inspect", aliases: ["prompt"], summary: "Open the final prompt for a question", kind: "inspect", argumentHint: "[question]" },
 	{ name: "history", aliases: [], summary: "Show AskMate history for this note", kind: "history" },
-	{ name: "clear", aliases: ["cls"], summary: "Clear the conversation", kind: "clear" },
+	{ name: "clear", aliases: ["cls"], summary: "Clear the conversation", kind: "clear", destructive: true },
 	{ name: "layout", aliases: [], summary: "Switch layout: console, compact, expanded", kind: "layout", argumentHint: "<layout>" },
 	{ name: "model", aliases: ["models"], summary: "Show or switch the model (add ! for an unlisted ID)", kind: "model", argumentHint: "[id]" },
 	{ name: "provider", aliases: ["providers"], summary: "Show or switch the chat provider", kind: "provider", argumentHint: "[id]" },
+	{ name: "test", aliases: [], summary: "Test the connection to the provider", kind: "test" },
+	{ name: "mcp", aliases: [], summary: "Show tool servers and their status", kind: "mcp" },
 	{ name: "export", aliases: [], summary: "Export this conversation to a note", kind: "export", argumentHint: "[title]" },
 	{ name: "new", aliases: ["new-thread"], summary: "Start a new conversation (the current one stays saved)", kind: "new-thread" },
 	{ name: "threads", aliases: [], summary: "Switch to a saved conversation", kind: "threads" },
 	{ name: "rename", aliases: [], summary: "Rename the current conversation", kind: "rename-thread", argumentHint: "<title>" },
-	{ name: "delete-thread", aliases: [], summary: "Delete a saved conversation", kind: "delete-thread" }
+	{ name: "delete-thread", aliases: [], summary: "Delete a saved conversation", kind: "delete-thread", destructive: true }
 ];
 
-export function slugifyCommandName(value: string): string {
+/**
+ * The one form a command name is compared in: lower case, accents on Latin letters dropped, zero-width joiners removed and
+ * the result recomposed (NFC). Keyboards and IMEs type NFC, while NFKD splits Persian hamza and madda alef, Hangul and
+ * kana with a voiced mark, so folding without recomposing would make those names impossible to type.
+ */
+function foldCommandText(value: string): string {
 	return value
 		.toLowerCase()
 		.normalize("NFKD")
-		.replace(/[\u0300-\u036f]/g, "")
-		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/[\u0300-\u036f\u200c\u200d]/g, "")
+		.normalize("NFC");
+}
+
+/**
+ * Letters, digits and combining marks of any script, joined by hyphens, in the folded form. Accents on Latin letters are
+ * dropped, while marks that carry meaning in other scripts, such as Devanagari vowel signs, are kept.
+ */
+export function slugifyCommandName(value: string): string {
+	return foldCommandText(value)
+		.replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
 		.replace(/^-+|-+$/g, "");
+}
+
+function nextCustomName(taken: ReadonlySet<string>): string {
+	let index = 1;
+	while (taken.has(`custom-${index}`)) {
+		index += 1;
+	}
+	return `custom-${index}`;
+}
+
+/** Short name first; a clash falls back to the ID; a name with no letters or digits falls back to the full name, then custom-N. */
+function pickCommandName(workflow: Workflow, taken: ReadonlySet<string>): string {
+	const preferred = slugifyCommandName(workflow.shortName);
+	if (preferred && !taken.has(preferred)) {
+		return preferred;
+	}
+	const alternative = preferred ? slugifyCommandName(workflow.id) : slugifyCommandName(workflow.name);
+	return alternative && !taken.has(alternative) ? alternative : nextCustomName(taken);
 }
 
 /** Built-in commands followed by one command per workflow, named after its short name and falling back to its id. */
@@ -150,14 +228,9 @@ export function buildConsoleCommands(workflows: readonly Workflow[]): ConsoleCom
 	const taken = new Set(BUILT_IN_COMMANDS.flatMap((command) => [command.name, ...command.aliases]));
 	const workflowCommands: ConsoleCommand[] = [];
 	for (const workflow of workflows) {
-		const preferred = slugifyCommandName(workflow.shortName);
-		const fallback = slugifyCommandName(workflow.id);
-		const name = preferred && !taken.has(preferred) ? preferred : fallback;
-		if (!name || taken.has(name)) {
-			continue;
-		}
+		const name = pickCommandName(workflow, taken);
 		taken.add(name);
-		const aliases = [fallback, slugifyCommandName(workflow.name)].filter((alias) => alias && !taken.has(alias));
+		const aliases = [slugifyCommandName(workflow.id), slugifyCommandName(workflow.name)].filter((alias) => alias && !taken.has(alias));
 		aliases.forEach((alias) => taken.add(alias));
 		workflowCommands.push({
 			name,
@@ -171,84 +244,261 @@ export function buildConsoleCommands(workflows: readonly Workflow[]): ConsoleCom
 	return [...BUILT_IN_COMMANDS, ...workflowCommands];
 }
 
-function findCommand(name: string, commands: readonly ConsoleCommand[]): { command: ConsoleCommand | null; candidates: ConsoleCommand[] } {
+function findCommand(typed: string, commands: readonly ConsoleCommand[]): { command: ConsoleCommand | null; candidates: ConsoleCommand[] } {
+	const name = foldCommandText(typed);
 	const exact = commands.find((command) => command.name === name || command.aliases.includes(name));
 	if (exact) {
 		return { command: exact, candidates: [exact] };
 	}
-	// A unique prefix runs the command, so "/pol" works like "/polish".
-	const byPrefix = commands.filter((command) => command.name.startsWith(name) || command.aliases.some((alias) => alias.startsWith(name)));
-	return { command: byPrefix.length === 1 ? byPrefix[0] : null, candidates: byPrefix };
+	// A unique prefix runs the command, so "/pol" works like "/polish". Matches on the name come before matches on an alias.
+	const byName = commands.filter((command) => command.name.startsWith(name));
+	const byAlias = commands.filter((command) => !command.name.startsWith(name) && command.aliases.some((alias) => alias.startsWith(name)));
+	const candidates = [...byName, ...byAlias];
+	const only = candidates.length === 1 ? candidates[0] : null;
+	return { command: only && !only.destructive ? only : null, candidates };
+}
+
+function describeCandidate(command: ConsoleCommand, typed: string): string {
+	if (command.name.startsWith(typed)) {
+		return `/${command.name}`;
+	}
+	const alias = command.aliases.find((candidate) => candidate.startsWith(typed));
+	return alias ? `/${command.name} (${alias})` : `/${command.name}`;
 }
 
 // A mention may be followed by closing punctuation ("Summarise @note."); a bare folder name never ends with it.
 // A full stop only ends a mention before whitespace or the end, so "@note.md" stays plain text. A bare argument stops at
 // "," and ";" (quote the argument to use them), and a colon with no argument is consumed with the keyword.
-const MENTION_PATTERN = /(^|\s)@(?:\[\[([^\]\n]+)\]\]|(selection|sel|note|folder|links|backlinks|recent|tag)(?::(?:"([^"\n]+)"|([^\s,;]*[^\s.,;:!?)]))?)?)(?=[\s,;:!?)]|\.(?=\s|$)|$)/gi;
+// Groups: 1 lead, 2 backslash escape, 3 note link, 4 keyword, 5 colon, 6 quoted argument, 7 bare argument.
+const MENTION_PATTERN = /(^|\s)(\\)?@(?:\[\[([^\]\n]+)\]\]|(selection|sel|note|folder|links|backlinks|recent|tag|skill)(?:(:)(?:"([^"\n]+)"|([^\s,;]*[^\s.,;:!?)]))?)?)(?=[\s,;:!?)]|\.(?=\s|$)|$)/gi;
 // U+FFFF is a Unicode noncharacter, reserved for internal use, so it never stands for anything the user typed.
 const REMOVED_MENTION = "\uffff";
 // Several mentions in a row collapse to one marker, so removing them leaves a single space.
 const ADJACENT_REMOVED_MENTIONS = new RegExp(`${REMOVED_MENTION}(?:[ \\t]+${REMOVED_MENTION})+`, "g");
+// A private-use character stands in for code, so a mention inside it can never match and never reads as whitespace.
+const CODE_MASK = "\ue000";
 
-/** Removes @mentions from the input. Unknown @words (such as email addresses) are left alone. */
-export function extractConsoleMentions(input: string): { text: string; mentions: ConsoleMentions; error: string | null } {
-	const mentions: ConsoleMentions = { scope: "auto", folder: null, notes: [], vault: [] };
+function maskInlineCode(line: string): string {
+	let result = "";
+	let index = 0;
+	while (index < line.length) {
+		if (line[index] !== "`") {
+			result += line[index];
+			index += 1;
+			continue;
+		}
+		let runEnd = index;
+		while (line[runEnd] === "`") {
+			runEnd += 1;
+		}
+		const run = runEnd - index;
+		let close = -1;
+		let scan = runEnd;
+		while (scan < line.length && close < 0) {
+			if (line[scan] === "`") {
+				let scanEnd = scan;
+				while (line[scanEnd] === "`") {
+					scanEnd += 1;
+				}
+				close = scanEnd - scan === run ? scanEnd : -1;
+				scan = scanEnd;
+			} else {
+				scan += 1;
+			}
+		}
+		if (close < 0) {
+			// An unmatched run of backticks is ordinary text.
+			result += line.slice(index, runEnd);
+			index = runEnd;
+		} else {
+			result += CODE_MASK.repeat(close - index);
+			index = close;
+		}
+	}
+	return result;
+}
+
+/** A copy of the input, the same length, with fenced blocks and inline code spans replaced by a mask character. */
+function maskCode(input: string): string {
+	let fence: { char: string; length: number } | null = null;
+	return input.split("\n").map((line) => {
+		const content = line.endsWith("\r") ? line.slice(0, -1) : line;
+		const tail = line.slice(content.length);
+		if (fence) {
+			const closing = new RegExp(`^ {0,3}\\${fence.char}{${fence.length},}[ \\t]*$`).test(content);
+			if (closing) {
+				fence = null;
+			}
+			return CODE_MASK.repeat(content.length) + tail;
+		}
+		const opening = /^ {0,3}(`{3,}|~{3,})/.exec(content);
+		// A backtick fence cannot have a backtick in its info string; that line is inline code instead.
+		if (opening && !(opening[1][0] === "`" && content.slice(opening[0].length).includes("`"))) {
+			fence = { char: opening[1][0], length: opening[1].length };
+			return CODE_MASK.repeat(content.length) + tail;
+		}
+		return maskInlineCode(content) + tail;
+	}).join("\n");
+}
+
+export function normaliseSkillName(raw: string): string | null {
+	const name = raw.trim().replace(/^\/+/, "").toLowerCase();
+	return name || null;
+}
+
+export interface ExtractedMentions {
+	text: string;
+	mentions: ConsoleMentions;
+	error: string | null;
+	/** Soft notes about how a mention was read; never block sending. */
+	hints: string[];
+}
+
+/**
+ * Removes @mentions from the input. Unknown @words (such as email addresses) are left alone, and so is anything inside
+ * code, after a backslash, or (for a bare @tag or @skill) in the middle of a sentence. With `lenient`, a mention that
+ * could not be read stays as text instead of being an error, which is how a "//" line behaves.
+ */
+export function extractConsoleMentions(input: string, options: { lenient?: boolean } = {}): ExtractedMentions {
+	const lenient = options.lenient ?? false;
+	const mentions: ConsoleMentions = { scope: "auto", folder: null, notes: [], vault: [], skills: [] };
 	const vaultErrors: string[] = [];
+	const hints: string[] = [];
 	const addVaultMention = (mention: VaultMention): void => {
 		if (!mentions.vault.some((existing) => vaultMentionKey(existing) === vaultMentionKey(mention))) {
 			mentions.vault.push(mention);
 		}
 	};
+	const addHint = (hint: string): void => {
+		if (!lenient && !hints.includes(hint)) {
+			hints.push(hint);
+		}
+	};
 	const scopes = new Set<ContextScope>();
 	let error: string | null = null;
 
-	const marked = input.replace(MENTION_PATTERN, (match: string, lead: string, note?: string, keyword?: string, quoted?: string, bare?: string) => {
+	let marked = "";
+	let cursor = 0;
+	let previousEnd = 0;
+	for (const match of maskCode(input).matchAll(MENTION_PATTERN)) {
+		const [whole, lead = "", escape, note, keyword, colon, quoted, bare] = match;
+		const start = match.index;
+		const end = start + whole.length;
+		const original = input.slice(start, end);
+		marked += input.slice(cursor, start);
+		cursor = end;
+
+		if (whole.includes(CODE_MASK)) {
+			marked += original;
+			continue;
+		}
+		if (escape) {
+			// "\@tag" sends the word; the backslash is only there to say so.
+			marked += lead + original.slice(lead.length + 1);
+			continue;
+		}
+
+		const mentionStart = start + lead.length;
+		const wordAfter = /^\s+[\p{L}\p{N}]/u.test(input.slice(end));
+		const proseBefore = input.slice(previousEnd, mentionStart).trim().length > 0;
+		const consume = (): string => {
+			previousEnd = end;
+			return `${lead}${REMOVED_MENTION}`;
+		};
+		const literal = (): string => original;
+
 		if (note) {
 			// Only the note itself is attached; an alias, heading or block reference does not change which note that is.
 			const target = note.split("|")[0].split(/[#^]/)[0].trim();
 			if (target && !mentions.notes.includes(target)) {
 				mentions.notes.push(target);
 			}
-			return `${lead}${REMOVED_MENTION}`;
+			marked += consume();
+			continue;
 		}
+
 		const name = (keyword ?? "").toLowerCase();
 		const argument = (quoted ?? bare ?? "").trim();
+		const hintForKeyword = (): void => {
+			if (proseBefore && wordAfter) {
+				addHint(`"@${name}" was read as a mention and removed from your question. Write \\@${name} to send the word itself.`);
+			}
+		};
+
 		if (name === "folder") {
 			mentions.folder = argument;
-			return `${lead}${REMOVED_MENTION}`;
+			hintForKeyword();
+			marked += consume();
+			continue;
 		}
 		if (name === "links" || name === "backlinks") {
 			if (argument) {
-				return match;
+				marked += literal();
+				continue;
 			}
 			addVaultMention({ kind: name });
-			return `${lead}${REMOVED_MENTION}`;
+			hintForKeyword();
+			marked += consume();
+			continue;
 		}
-		if (name === "tag") {
-			const tag = normaliseTag(argument);
-			if (tag) {
-				addVaultMention({ kind: "tag", tag });
-			} else {
-				vaultErrors.push("@tag needs a tag, for example @tag:project or @tag:#project/alpha.");
+		if (name === "tag" || name === "skill") {
+			const isTag = name === "tag";
+			const missing = isTag
+				? "@tag needs a tag, for example @tag:project or @tag:#project/alpha."
+				: "@skill needs a skill name, for example @skill:mermaid-diagrams.";
+			if (!colon && !argument && wordAfter) {
+				// "the @tag annotation" is prose: send it as typed and say how to write a real mention.
+				addHint(isTag
+					? "\"@tag\" was sent as text. To attach notes with a tag, write @tag:name, for example @tag:project."
+					: "\"@skill\" was sent as text. To use a skill, write @skill:name, for example @skill:mermaid-diagrams.");
+				marked += literal();
+				continue;
 			}
-			return `${lead}${REMOVED_MENTION}`;
+			const value = isTag ? normaliseTag(argument) : normaliseSkillName(argument);
+			if (!value) {
+				if (lenient) {
+					marked += literal();
+				} else {
+					vaultErrors.push(missing);
+					marked += consume();
+				}
+				continue;
+			}
+			if (isTag) {
+				addVaultMention({ kind: "tag", tag: value });
+			} else if (!mentions.skills.includes(value)) {
+				mentions.skills.push(value);
+			}
+			marked += consume();
+			continue;
 		}
 		if (name === "recent") {
 			const count = parseRecentCount(argument);
 			if (count === null) {
-				vaultErrors.push(`@recent:${argument} is not a number from 1 to ${MAX_RECENT_COUNT}. Use @recent or @recent:5.`);
-			} else {
-				addVaultMention({ kind: "recent", count });
+				if (lenient) {
+					marked += literal();
+				} else {
+					vaultErrors.push(`@recent:${argument} is not a number from 1 to ${MAX_RECENT_COUNT}. Use @recent or @recent:${DEFAULT_RECENT_COUNT}.`);
+					marked += consume();
+				}
+				continue;
 			}
-			return `${lead}${REMOVED_MENTION}`;
+			addVaultMention({ kind: "recent", count });
+			hintForKeyword();
+			marked += consume();
+			continue;
 		}
 		if (argument) {
 			// "@note:Something" is not a mention form; keep it as typed.
-			return match;
+			marked += literal();
+			continue;
 		}
 		scopes.add(name === "note" ? "note" : "selection");
-		return `${lead}${REMOVED_MENTION}`;
-	});
+		hintForKeyword();
+		marked += consume();
+	}
+	marked += input.slice(cursor);
+
 	// Tidy only where a mention was removed, so indentation, tables and pasted code keep their spacing.
 	const text = marked
 		.replace(ADJACENT_REMOVED_MENTIONS, REMOVED_MENTION)
@@ -263,11 +513,19 @@ export function extractConsoleMentions(input: string): { text: string; mentions:
 	} else if (scopes.size === 1) {
 		mentions.scope = scopes.has("note") ? "note" : "selection";
 	}
-	return { text, mentions, error };
+	return { text, mentions, error, hints };
+}
+
+function takesNoText(command: ConsoleCommand): ConsoleAction {
+	return { kind: "error", message: `/${command.name} takes no text. Type /help to list commands.` };
 }
 
 export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand[]): ConsoleAction {
-	const extracted = extractConsoleMentions(raw.trim());
+	const trimmed = raw.trim();
+	// "//text" sends a question that starts with a slash. It is decided before mentions are read, so a literal line
+	// never fails because of an @word in it.
+	const literalPrefix = trimmed.startsWith("//");
+	const extracted = extractConsoleMentions(trimmed, { lenient: literalPrefix });
 	if (extracted.error) {
 		return { kind: "error", message: extracted.error };
 	}
@@ -275,26 +533,28 @@ export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand
 	let text = extracted.text;
 
 	if (!text) {
-		return { kind: "error", message: raw.trim() ? "Add a question after the mentions." : "Type a question, or /help for commands." };
+		return { kind: "error", message: trimmed ? "Add a question after the mentions." : "Type a question, or /help for commands." };
 	}
-	// "//text" sends a question that starts with a slash.
 	if (text.startsWith("//")) {
-		return { kind: "ask", question: text.slice(1), outputMode: null, mentions, literal: true };
+		return { kind: "ask", question: text.slice(1), outputMode: null, mentions, literal: true, hints: extracted.hints };
 	}
 	if (!text.startsWith("/")) {
-		return { kind: "ask", question: text, outputMode: null, mentions, literal: false };
+		return { kind: "ask", question: text, outputMode: null, mentions, literal: false, hints: extracted.hints };
 	}
 
 	const match = text.match(/^\/(\S*)\s*([\s\S]*)$/);
-	const name = (match?.[1] ?? "").toLowerCase();
+	const name = foldCommandText(match?.[1] ?? "");
 	const argument = (match?.[2] ?? "").trim();
 	if (!name) {
 		return { kind: "error", message: "Type a command after the slash, or /help to list them." };
 	}
 	const { command, candidates } = findCommand(name, commands);
 	if (!command) {
+		if (candidates.length === 1) {
+			return { kind: "error", message: `/${name} matches /${candidates[0].name}, which cannot be undone. Type the whole command name to run it.` };
+		}
 		return candidates.length > 1
-			? { kind: "error", message: `/${name} could mean ${candidates.slice(0, 6).map((candidate) => `/${candidate.name}`).join(", ")}${candidates.length > 6 ? " and more" : ""}. Type more of the name.` }
+			? { kind: "error", message: `/${name} could mean ${candidates.slice(0, 6).map((candidate) => describeCandidate(candidate, name)).join(", ")}${candidates.length > 6 ? " and more" : ""}. Type more of the name.` }
 			: { kind: "error", message: `Unknown command /${name}. Type /help to list commands, or start with // to send it as text.` };
 	}
 	text = argument;
@@ -306,7 +566,7 @@ export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand
 				: { kind: "error", message: `/${command.name} has no workflow.` };
 		case "mode": {
 			const mode = command.outputMode ?? "chat";
-			return text ? { kind: "ask", question: text, outputMode: mode, mentions, literal: false } : { kind: "mode", mode };
+			return text ? { kind: "ask", question: text, outputMode: mode, mentions, literal: false, hints: extracted.hints } : { kind: "mode", mode };
 		}
 		case "image":
 			return text ? { kind: "image", prompt: text, mentions } : { kind: "error", message: "Describe the image after /image, for example /image a lighthouse at dusk." };
@@ -322,15 +582,15 @@ export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand
 			return layout ? { kind: "layout", layout } : { kind: "error", message: "Use /layout console, /layout compact or /layout expanded." };
 		}
 		case "clear":
-			return { kind: "clear" };
+			return text ? takesNoText(command) : { kind: "clear" };
 		case "help":
-			return { kind: "help" };
+			return text ? takesNoText(command) : { kind: "help" };
 		case "context":
-			return { kind: "context", mentions };
+			return text ? takesNoText(command) : { kind: "context", mentions };
 		case "inspect":
 			return { kind: "inspect", question: text, mentions };
 		case "history":
-			return { kind: "history" };
+			return text ? takesNoText(command) : { kind: "history" };
 		case "model":
 			return { kind: "model", query: text };
 		case "provider":
@@ -343,12 +603,88 @@ export function parseConsoleInput(raw: string, commands: readonly ConsoleCommand
 				? { kind: "error", message: "/new starts an empty conversation and takes no text. To save one answer as a note, use /note <question>." }
 				: { kind: "newThread" };
 		case "threads":
-			return { kind: "threads" };
+			return text ? takesNoText(command) : { kind: "threads" };
 		case "rename-thread":
 			return text ? { kind: "renameThread", title: text } : { kind: "error", message: "Add a title after /rename, for example /rename Budget review." };
 		case "delete-thread":
-			return { kind: "deleteThread" };
+			return text ? takesNoText(command) : { kind: "deleteThread" };
+		case "setup":
+			return text ? takesNoText(command) : { kind: "setup" };
+		case "welcome":
+			return text ? takesNoText(command) : { kind: "welcome" };
+		case "skills":
+			return text ? takesNoText(command) : { kind: "skills" };
+		case "skill": {
+			const parts = /^(?:"([^"]+)"|(\S+))\s*([\s\S]*)$/.exec(text);
+			const skillName = parts ? normaliseSkillName(parts[1] ?? parts[2] ?? "") : null;
+			// With no name there is nothing to run, so show the list the user can pick from.
+			return parts && skillName ? { kind: "skill", name: skillName, question: parts[3].trim(), mentions } : { kind: "skills" };
+		}
+		case "diagram":
+			return { kind: "diagram", prompt: text, mentions };
+		case "mcp":
+			return text ? takesNoText(command) : { kind: "mcp" };
+		case "test":
+			return text ? takesNoText(command) : { kind: "test" };
+		case "images": {
+			const setting = text.toLowerCase();
+			if (!setting) {
+				return { kind: "images", setting: null };
+			}
+			return setting === "on" || setting === "off" ? { kind: "images", setting } : { kind: "error", message: "Use /images on or /images off." };
+		}
+		default:
+			return assertNever(command.kind);
 	}
+}
+
+export type ConsoleActionCategory = "request" | "local" | "error";
+
+/**
+ * Sorts every action into one of three groups. The switch has no default branch that accepts anything, so adding an
+ * action kind without deciding which group it belongs to is a compile error.
+ */
+export function classifyConsoleAction(action: ConsoleAction): ConsoleActionCategory {
+	switch (action.kind) {
+		case "ask":
+		case "image":
+		case "workflow":
+		case "diagram":
+			return "request";
+		case "skill":
+			return action.question ? "request" : "local";
+		case "error":
+			return "error";
+		case "mode":
+		case "effort":
+		case "layout":
+		case "clear":
+		case "help":
+		case "context":
+		case "inspect":
+		case "history":
+		case "model":
+		case "provider":
+		case "export":
+		case "newThread":
+		case "threads":
+		case "renameThread":
+		case "deleteThread":
+		case "setup":
+		case "welcome":
+		case "skills":
+		case "mcp":
+		case "test":
+		case "images":
+			return "local";
+		default:
+			return assertNever(action);
+	}
+}
+
+/** True when running the action sends a request to the provider, so the view must check it is idle first. */
+export function isRequestAction(action: ConsoleAction): boolean {
+	return classifyConsoleAction(action) === "request";
 }
 
 function rankMatches<T>(items: readonly T[], query: string, keys: (item: T) => string[]): T[] {
@@ -369,16 +705,39 @@ function rankMatches<T>(items: readonly T[], query: string, keys: (item: T) => s
 		.map((entry) => entry.item);
 }
 
+/** Commands whose name, alias or summary contains the query, best matches first. */
+function rankCommands(commands: readonly ConsoleCommand[], query: string): ConsoleCommand[] {
+	const score = (command: ConsoleCommand): number => {
+		const names = [command.name, ...command.aliases];
+		if (command.name.startsWith(query)) {
+			return 0;
+		}
+		if (names.some((value) => value.startsWith(query))) {
+			return 1;
+		}
+		if (names.some((value) => value.includes(query))) {
+			return 2;
+		}
+		return foldCommandText(command.summary).includes(query) ? 3 : 4;
+	};
+	return commands
+		.map((command, index) => ({ command, index, rank: score(command) }))
+		.filter((entry) => entry.rank < 4)
+		.sort((a, b) => a.rank - b.rank || a.index - b.index)
+		.map((entry) => entry.command);
+}
+
 const MENTION_COMPLETIONS: ConsoleCompletion[] = [
-	{ label: "@selection", insertText: "@selection ", detail: "Only the selected text; stops if nothing is selected" },
-	{ label: "@note", insertText: "@note ", detail: "The whole note, even when text is selected" },
-	{ label: "@folder", insertText: "@folder ", detail: "Notes in the folder set in AskMate settings" },
-	{ label: "@folder:", insertText: "@folder:", detail: "Notes in a folder you name, for example @folder:Projects" },
-	{ label: "@links", insertText: "@links ", detail: "Notes the current note links to" },
-	{ label: "@backlinks", insertText: "@backlinks ", detail: "Notes that link to the current note" },
-	{ label: "@tag:", insertText: "@tag:", detail: "Notes with a tag, for example @tag:project" },
-	{ label: "@recent", insertText: "@recent ", detail: "The 5 most recently modified notes; @recent:10 for more" },
-	{ label: "@[[", insertText: "@[[", detail: "Add another note, for example @[[Vendors]]" }
+	{ label: "@selection", insertText: "@selection ", detail: "Only the selected text; stops if nothing is selected", group: "Mentions" },
+	{ label: "@note", insertText: "@note ", detail: "The whole note, even when text is selected", group: "Mentions" },
+	{ label: "@folder", insertText: "@folder ", detail: "Notes in the folder set in AskMate settings", group: "Mentions" },
+	{ label: "@folder:", insertText: "@folder:", detail: "Notes in a folder you name, for example @folder:Projects", group: "Mentions" },
+	{ label: "@links", insertText: "@links ", detail: "Notes the current note links to", group: "Mentions" },
+	{ label: "@backlinks", insertText: "@backlinks ", detail: "Notes that link to the current note", group: "Mentions" },
+	{ label: "@tag:", insertText: "@tag:", detail: "Notes with a tag, for example @tag:project", group: "Mentions" },
+	{ label: "@recent", insertText: "@recent ", detail: `The ${DEFAULT_RECENT_COUNT} most recently modified notes; up to @recent:${MAX_RECENT_COUNT}`, group: "Mentions" },
+	{ label: "@skill:", insertText: "@skill:", detail: "Use a skill for this question, for example @skill:mermaid-diagrams", group: "Mentions" },
+	{ label: "@[[", insertText: "@[[", detail: "Add another note, for example @[[Vendors]]", group: "Mentions" }
 ];
 
 function tagCompletions(vaultTags: readonly string[], query: string): ConsoleCompletion[] {
@@ -387,6 +746,33 @@ function tagCompletions(vaultTags: readonly string[], query: string): ConsoleCom
 	return rankMatches(items, query, (tag) => [tag.toLowerCase()])
 		.slice(0, MAX_COMPLETIONS)
 		.map((tag) => ({ label: `@tag:${tag}`, insertText: `@tag:${tag} `, detail: "Notes with this tag" }));
+}
+
+function quoteIfNeeded(name: string): string {
+	return /\s/.test(name) ? `"${name}"` : name;
+}
+
+function skillCompletions(skills: readonly { name: string; description?: string }[], query: string, asMention: boolean): { items: ConsoleCompletion[]; total: number } {
+	const matches = rankMatches(skills, query, (skill) => [skill.name.toLowerCase()]);
+	const ranked = query ? matches : [...skills];
+	return {
+		total: ranked.length,
+		items: ranked.slice(0, MAX_COMPLETIONS).map((skill) => ({
+			label: asMention ? `@skill:${skill.name}` : skill.name,
+			insertText: asMention ? `@skill:${quoteIfNeeded(skill.name)} ` : `${quoteIfNeeded(skill.name)} `,
+			detail: skill.description ?? "Skill",
+			group: "Skills"
+		}))
+	};
+}
+
+function commandItem(command: ConsoleCommand): ConsoleCompletion {
+	return {
+		label: `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`,
+		insertText: `/${command.name} `,
+		detail: command.summary,
+		group: command.kind === "workflow" ? "Workflows" : "Commands"
+	};
 }
 
 /** Suggestions for the token before the cursor: a command at the start, or an @mention anywhere. */
@@ -401,35 +787,46 @@ export function getConsoleCompletions(
 	const tokenEnd = cursor + (/^\S*/.exec(input.slice(cursor))?.[0].length ?? 0);
 	const argumentMatch = before.match(/^\/([^\s]+)\s+([^\s]*)$/);
 	if (argumentMatch) {
-		const kind = findCommand(argumentMatch[1].toLowerCase(), commands).command?.kind;
+		const kind = findCommand(argumentMatch[1], commands).command?.kind;
 		if (kind === "model" || kind === "provider") {
 			const query = argumentMatch[2].toLowerCase();
 			// An empty argument offers nothing, so Enter after "/model " still lists models instead of picking one.
 			if (!query) {
-				return { from: cursor, to: cursor, items: [] };
+				return { from: cursor, to: cursor, items: [], more: 0 };
 			}
 			const candidates: ConsoleCompletion[] = kind === "model"
 				? argumentSource.models.map((model) => ({ label: model, insertText: model, detail: "Model" }))
 				: argumentSource.providers.map((provider) => ({ label: provider.id, insertText: provider.id, detail: provider.label }));
+			const ranked = rankMatches(candidates, query, (item) => [item.label.toLowerCase(), item.detail.toLowerCase()]);
 			return {
 				from: cursor - argumentMatch[2].length,
 				to: tokenEnd,
-				items: rankMatches(candidates, query, (item) => [item.label.toLowerCase(), item.detail.toLowerCase()]).slice(0, MAX_COMPLETIONS)
+				items: ranked.slice(0, MAX_COMPLETIONS),
+				more: Math.max(0, ranked.length - MAX_COMPLETIONS)
 			};
+		}
+		if (kind === "skill" && argumentSource.skills?.length) {
+			const query = argumentMatch[2].toLowerCase();
+			const found = skillCompletions(argumentSource.skills, query, false);
+			return { from: cursor - argumentMatch[2].length, to: tokenEnd, items: found.items, more: Math.max(0, found.total - found.items.length) };
 		}
 	}
 	const commandMatch = before.match(/^\/([^\s]*)$/);
 	if (commandMatch) {
-		const query = commandMatch[1].toLowerCase();
-		const matches = rankMatches(commands, query, (command) => [command.name, ...command.aliases]);
+		const query = foldCommandText(commandMatch[1]);
+		if (!query) {
+			// A bare slash lists workflows first, because they are what people come to the menu for, then a few commands.
+			const workflows = commands.filter((command) => command.kind === "workflow").slice(0, EMPTY_MENU_WORKFLOWS);
+			const others = EMPTY_MENU_COMMANDS.flatMap((name) => commands.filter((command) => command.name === name && command.kind !== "workflow"));
+			const items = [...workflows, ...others].map(commandItem);
+			return { from: 0, to: tokenEnd, items, more: Math.max(0, commands.length - items.length) };
+		}
+		const matches = rankCommands(commands, query);
 		return {
 			from: 0,
 			to: tokenEnd,
-			items: matches.slice(0, MAX_COMPLETIONS).map((command) => ({
-				label: `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`,
-				insertText: `/${command.name} `,
-				detail: command.summary
-			}))
+			items: matches.slice(0, MAX_COMPLETIONS).map(commandItem),
+			more: Math.max(0, matches.length - MAX_COMPLETIONS)
 		};
 	}
 
@@ -439,29 +836,40 @@ export function getConsoleCompletions(
 		const from = before.length - mentionMatch[2].length;
 		const tagQuery = /^@tag:#?(.*)$/i.exec(mentionMatch[2]);
 		if (tagQuery) {
-			return { from, to: tokenEnd, items: tagCompletions(argumentSource.vaultTags ?? [], tagQuery[1].toLowerCase()) };
+			const items = tagCompletions(argumentSource.vaultTags ?? [], tagQuery[1].toLowerCase());
+			return { from, to: tokenEnd, items, more: 0 };
 		}
-		return {
-			from,
-			to: tokenEnd,
-			items: rankMatches(MENTION_COMPLETIONS, query, (item) => [item.label]).slice(0, MAX_COMPLETIONS)
-		};
+		const skillQuery = /^@skill:"?(.*?)"?$/i.exec(mentionMatch[2]);
+		if (skillQuery) {
+			const found = skillCompletions(argumentSource.skills ?? [], skillQuery[1].toLowerCase(), true);
+			return { from, to: tokenEnd, items: found.items, more: Math.max(0, found.total - found.items.length) };
+		}
+		const ranked = rankMatches(MENTION_COMPLETIONS, query, (item) => [item.label]);
+		return { from, to: tokenEnd, items: ranked.slice(0, MAX_COMPLETIONS), more: Math.max(0, ranked.length - MAX_COMPLETIONS) };
 	}
 
-	return { from: cursor, to: cursor, items: [] };
+	return { from: cursor, to: cursor, items: [], more: 0 };
 }
 
 export function formatConsoleHelp(commands: readonly ConsoleCommand[]): string {
-	const width = Math.max(...commands.map((command) => command.name.length)) + 2;
-	const line = (command: ConsoleCommand): string => `  /${command.name.padEnd(width)}${command.summary}`;
 	const builtIns = commands.filter((command) => command.kind !== "workflow");
 	const workflows = commands.filter((command) => command.kind === "workflow");
+	const usage = (command: ConsoleCommand): string => `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`;
+	const builtInWidth = Math.max(...builtIns.map((command) => usage(command).length)) + 2;
+	const workflowWidth = Math.max(...workflows.map((command) => usage(command).length), 0) + 2;
+	const aliasNote = (command: ConsoleCommand): string => command.aliases.length > 0 ? ` (also ${command.aliases.map((alias) => `/${alias}`).join(", ")})` : "";
 	return [
+		"Start here",
+		"  Type a question and press Enter.",
+		"  /setup          connect an AI provider",
+		"  /diagram        draw a diagram of the note",
+		"  /               pick a workflow, such as a summary or a plan",
+		"",
 		"Commands",
-		...builtIns.map(line),
+		...builtIns.map((command) => `  ${usage(command).padEnd(builtInWidth)}${command.summary}${aliasNote(command)}`),
 		"",
 		"Workflows (add text after the command for extra instructions)",
-		...workflows.map(line),
+		...workflows.map((command) => `  /${command.name.padEnd(workflowWidth - 1)}${command.summary}`),
 		"",
 		"Mentions",
 		"  @selection      only the selected text",
@@ -472,7 +880,9 @@ export function formatConsoleHelp(commands: readonly ConsoleCommand[]): string {
 		"  @links          notes the current note links to",
 		"  @backlinks      notes that link to the current note",
 		"  @tag:name       notes with that tag, nested tags included",
-		"  @recent         the 5 most recently modified notes (@recent:10 for more, up to 20)",
+		`  @recent         the ${DEFAULT_RECENT_COUNT} most recently modified notes (@recent:${MAX_RECENT_COUNT} for up to ${MAX_RECENT_COUNT})`,
+		"  @skill:name     use a skill for this question",
+		"  \\@word          a backslash sends the word as text; code spans and code blocks are never read",
 		"",
 		"Keys",
 		"  Tab or Enter accepts a suggestion, ↑ recalls earlier input, Esc closes suggestions or stops a request.",

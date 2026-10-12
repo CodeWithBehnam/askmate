@@ -2,168 +2,22 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
 import type { AskMateSettings, NoteContext } from "../src/shared/types";
 
-import { MarkdownView, TAbstractFile, TFile, TFolder } from "./support/obsidian-fakes";
-
-type Position = { line: number; ch: number };
-
-class FakeEditor {
-	selectionStart = 0;
-	selectionEnd = 0;
-	cursorLine = 0;
-	getValueCalls = 0;
-
-	constructor(public value: string) {}
-
-	select(text: string): this {
-		this.selectionStart = this.value.indexOf(text);
-		this.selectionEnd = this.selectionStart + text.length;
-		this.cursorLine = this.offsetToPos(this.selectionStart).line;
-		return this;
-	}
-
-	getValue(): string {
-		this.getValueCalls += 1;
-		return this.value;
-	}
-
-	getSelection(): string {
-		return this.value.slice(this.selectionStart, this.selectionEnd);
-	}
-
-	somethingSelected(): boolean {
-		return this.selectionEnd > this.selectionStart;
-	}
-
-	getCursor(which?: "from" | "to"): Position {
-		if (which === "from") {
-			return this.offsetToPos(this.selectionStart);
-		}
-		if (which === "to") {
-			return this.offsetToPos(this.selectionEnd);
-		}
-		return { line: this.cursorLine, ch: 0 };
-	}
-
-	posToOffset(position: Position): number {
-		const lines = this.value.split("\n");
-		return lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.ch;
-	}
-
-	offsetToPos(offset: number): Position {
-		const before = this.value.slice(0, offset).split("\n");
-		return { line: before.length - 1, ch: (before[before.length - 1] ?? "").length };
-	}
-}
+import { FakeEditor, createFakeApp, leafFor, openFakeMarkdownView, type FakeMetadataCache, type FakeVault, type FakeWorkspace } from "./support/fake-app";
+import { MarkdownView, TFile, TFolder } from "./support/obsidian-fakes";
 
 const {
 	ContextService,
+	FolderNotFoundError,
 	cleanFolderPath,
+	createNoNoteContext,
+	describeSkippedContext,
 	extractExcalidrawTexts,
+	isExcalidrawNote,
+	isNoNoteContext,
 	parseExcalidrawTextElements,
 	remapRenamedPath,
 	truncateAtBoundary
 } = await import("../src/context/ContextService");
-
-type Leaf = { view: unknown; getViewState: () => { type: string; state?: Record<string, unknown> } };
-
-function leafFor(view: unknown, type: string, file: string | null): Leaf {
-	return { view, getViewState: () => ({ type, state: file ? { file } : {} }) };
-}
-
-class FakeWorkspace {
-	activeView: MarkdownView | null = null;
-	activeFile: TFile | null = null;
-	leaves: Leaf[] = [];
-
-	getActiveViewOfType<T>(type: new (...args: never[]) => T): T | null {
-		return this.activeView instanceof type ? this.activeView : null;
-	}
-
-	getActiveFile(): TFile | null {
-		return this.activeFile;
-	}
-
-	getLeavesOfType(type: string): Leaf[] {
-		return this.leaves.filter((leaf) => leaf.getViewState().type === type);
-	}
-
-	iterateAllLeaves(callback: (leaf: Leaf) => void): void {
-		this.leaves.forEach(callback);
-	}
-}
-
-class FakeVault {
-	configDir = ".obsidian";
-	files = new Map<string, TFile>();
-	contents = new Map<string, string>();
-	reads: string[] = [];
-	folders = new Set<string>();
-
-	add(path: string, content: string): TFile {
-		const file = new TFile(path);
-		this.files.set(path, file);
-		this.contents.set(path, content);
-		const parts = path.split("/");
-		parts.slice(0, -1).forEach((_, index) => this.folders.add(parts.slice(0, index + 1).join("/")));
-		return file;
-	}
-
-	remove(path: string): void {
-		this.files.delete(path);
-		this.contents.delete(path);
-	}
-
-	rename(file: TFile, newPath: string): void {
-		const content = this.contents.get(file.path) ?? "";
-		this.remove(file.path);
-		file.path = newPath;
-		this.files.set(newPath, file);
-		this.contents.set(newPath, content);
-	}
-
-	getAbstractFileByPath(path: string): TAbstractFile | null {
-		return this.files.get(path) ?? null;
-	}
-
-	async cachedRead(file: TFile): Promise<string> {
-		this.reads.push(file.path);
-		const content = this.contents.get(file.path);
-		if (content === undefined) {
-			throw new Error(`ENOENT: ${file.path}`);
-		}
-		return content;
-	}
-
-	adapter = {
-		list: async (folder: string): Promise<{ files: string[]; folders: string[] }> => {
-			const prefix = `${folder}/`;
-			const direct = (path: string): boolean => path.startsWith(prefix) && !path.slice(prefix.length).includes("/");
-			return {
-				files: Array.from(this.files.keys()).filter(direct),
-				folders: Array.from(this.folders).filter(direct)
-			};
-		}
-	};
-}
-
-class FakeMetadataCache {
-	resolvedLinks: Record<string, Record<string, number>> = {};
-	caches = new Map<string, { links?: { link: string }[]; tags?: { tag: string }[]; frontmatter?: Record<string, unknown> }>();
-
-	constructor(private readonly vault: FakeVault) {}
-
-	getFileCache(file: TFile): { links?: { link: string }[]; tags?: { tag: string }[]; frontmatter?: Record<string, unknown> } | null {
-		return this.caches.get(file.path) ?? null;
-	}
-
-	getFirstLinkpathDest(link: string): TFile | null {
-		const direct = this.vault.files.get(link) ?? this.vault.files.get(`${link}.md`);
-		if (direct) {
-			return direct;
-		}
-		return Array.from(this.vault.files.values()).find((file) => file.path.split("/").pop() === link) ?? null;
-	}
-}
 
 type Harness = {
 	service: InstanceType<typeof ContextService>;
@@ -174,25 +28,21 @@ type Harness = {
 };
 
 function createHarness(overrides: Partial<AskMateSettings> = {}): Harness {
-	const workspace = new FakeWorkspace();
-	const vault = new FakeVault();
-	const metadataCache = new FakeMetadataCache(vault);
+	const { app, workspace, vault, metadataCache } = createFakeApp();
 	const settings = { ...structuredClone(normalizeAskMateSettings({}, "load")), ...overrides };
 	const service = new ContextService({
-		app: { workspace, vault, metadataCache },
+		app,
 		getSettings: () => settings,
 		getNoteHistoryForPath: () => []
 	});
 	return { service, workspace, vault, metadataCache, settings };
 }
 
-function openInView(harness: Harness, file: TFile, content: string): MarkdownView {
-	const view = new MarkdownView(new FakeEditor(content), file);
-	harness.workspace.leaves.push(leafFor(view, "markdown", file.path));
-	return view;
+function openInView(harness: Harness, file: TFile, content: string): MarkdownView<FakeEditor> {
+	return openFakeMarkdownView(harness.workspace, file, content);
 }
 
-function focus(harness: Harness, view: MarkdownView | null, file: TFile | null = view?.file ?? null): void {
+function focus(harness: Harness, view: MarkdownView<unknown> | null, file: TFile | null = view?.file ?? null): void {
 	harness.workspace.activeView = view;
 	harness.workspace.activeFile = file;
 	harness.service.rememberActiveMarkdownContext();
@@ -211,7 +61,7 @@ function closeLeavesFor(harness: Harness, path: string): void {
 describe("rename and delete (C8)", () => {
 	let harness: Harness;
 	let note: TFile;
-	let view: MarkdownView;
+	let view: MarkdownView<FakeEditor>;
 
 	beforeEach(() => {
 		harness = createHarness();
@@ -219,7 +69,7 @@ describe("rename and delete (C8)", () => {
 		view = openInView(harness, note, "# Plan\nAlpha beta gamma");
 		view.editor.select("beta");
 		focus(harness, view);
-		harness.service.rememberEditorContext(view.editor, note);
+		harness.service.rememberEditorContext(view.editor.asEditor(), note);
 	});
 
 	test("remapRenamedPath handles files, folders and unrelated paths", () => {
@@ -324,7 +174,7 @@ describe("sidebar context rule", () => {
 		const view = openInView(harness, note, "alpha beta gamma");
 		view.editor.select("beta");
 		focus(harness, view);
-		harness.service.rememberEditorContext(view.editor, note);
+		harness.service.rememberEditorContext(view.editor.asEditor(), note);
 		view.editor.selectionEnd = view.editor.selectionStart;
 		focusSidebar(harness);
 
@@ -339,7 +189,7 @@ describe("sidebar context rule", () => {
 		const editor = new FakeEditor("typed text").select("typed");
 		harness.workspace.leaves.push(leafFor({}, "markdown", note.path));
 		harness.service.rememberMarkdownFile(note);
-		harness.service.rememberEditorContext(editor, note);
+		harness.service.rememberEditorContext(editor.asEditor(), note);
 		focusSidebar(harness);
 
 		const context = await harness.service.getNoteContext();
@@ -455,7 +305,7 @@ describe("recency and stale files (context#1, context#3)", () => {
 		const note = harness.vault.add("Embedded.md", "embedded words");
 		const other = harness.vault.add("B.md", "note B");
 		const editor = new FakeEditor("embedded words").select("words");
-		harness.service.rememberEditorContext(editor, note);
+		harness.service.rememberEditorContext(editor.asEditor(), note);
 		harness.workspace.leaves.push(leafFor({}, "markdown", other.path));
 		harness.service.rememberMarkdownFile(other);
 		focusSidebar(harness);
@@ -584,7 +434,7 @@ describe("keystroke cost and reading mode (context#8, context#9)", () => {
 		const note = harness.vault.add("A.md", "# A\nbody");
 		const view = openInView(harness, note, "# A\nbody");
 		harness.workspace.activeView = view;
-		harness.service.rememberEditorContext(view.editor, note);
+		harness.service.rememberEditorContext(view.editor.asEditor(), note);
 		expect(view.editor.getValueCalls).toBe(0);
 	});
 
@@ -595,7 +445,7 @@ describe("keystroke cost and reading mode (context#8, context#9)", () => {
 		const view = openInView(harness, note, text);
 		view.editor.select("chosen");
 		harness.workspace.activeView = view;
-		harness.service.rememberEditorContext(view.editor, note);
+		harness.service.rememberEditorContext(view.editor.asEditor(), note);
 		expect(view.editor.getValueCalls).toBe(1);
 
 		focusSidebar(harness);
@@ -728,5 +578,349 @@ describe("vault mentions", () => {
 		const { harness, current } = vaultHarness();
 		expect(await harness.service.buildVaultMentionAttachments(undefined, current, 1000)).toEqual([]);
 		expect(harness.service.describeLastVaultMentions()).toEqual([]);
+	});
+});
+
+const PRIVACY = { includeNoteContext: true, includeImageReferences: true };
+const NO_OPTIONS = {} as Parameters<InstanceType<typeof ContextService>["buildContextAttachments"]>[1];
+
+function contextFor(file: TFile | null, content = "body"): NoteContext {
+	return { content, file, source: "Current note" };
+}
+
+function sourcePaths(attachments: { kind: string; sourcePath: string }[]): string[] {
+	return attachments.map((attachment) => `${attachment.kind}:${attachment.sourcePath}`);
+}
+
+describe("one note is attached once (CTX-01)", () => {
+	function dedupeHarness() {
+		const harness = createHarness({ folderContextEnabled: false });
+		const current = harness.vault.add("Work/Current.md", "current body");
+		harness.vault.add("Work/Vendors.md", "vendor notes");
+		harness.vault.add("Work/A.md", "note a");
+		harness.vault.add("Work/B.md", "note b");
+		harness.metadataCache.resolvedLinks = { "Work/Current.md": { "Work/Vendors.md": 1 }, "Work/Vendors.md": {}, "Work/A.md": {}, "Work/B.md": {} };
+		harness.metadataCache.caches.set("Work/Current.md", { links: [{ link: "Vendors" }] });
+		return { harness, current };
+	}
+
+	test("a note named as an additional note, an @links target and a folder file is read once", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			additionalContextPaths: ["Vendors"],
+			vaultMentions: [{ kind: "links" }],
+			folderContext: { enabled: true, path: "Work", maxFiles: 10, maxCharacters: 10000 }
+		}, PRIVACY);
+		const paths = sourcePaths(detailed.attachments);
+		expect(paths.filter((path) => path.endsWith("Work/Vendors.md"))).toEqual(["additional_note:Work/Vendors.md"]);
+		expect(paths).toEqual(["additional_note:Work/Vendors.md", "folder_note:Work/A.md", "folder_note:Work/B.md"]);
+		expect(harness.vault.reads.filter((path) => path === "Work/Vendors.md")).toHaveLength(1);
+	});
+
+	test("skipped duplicates are reported with the source that already had them", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			additionalContextPaths: ["Vendors"],
+			vaultMentions: [{ kind: "links" }],
+			folderContext: { enabled: true, path: "Work", maxFiles: 10, maxCharacters: 10000 }
+		}, PRIVACY);
+		expect(detailed.skipped).toEqual([
+			{ source: "folder_note", path: "Work/Vendors.md", reason: "duplicate", detail: "already attached as an additional note" }
+		]);
+		expect(detailed.resolutions).toHaveLength(1);
+		expect(detailed.resolutions[0]?.included).toEqual([]);
+		expect(detailed.resolutions[0]?.duplicates).toEqual(["Work/Vendors.md"]);
+		expect(describeSkippedContext(detailed.skipped)).toEqual(["skipped   Work/Vendors.md: already attached as an additional note"]);
+	});
+
+	test("the current note is never attached again by folder context", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			folderContext: { enabled: true, path: "Work", maxFiles: 10, maxCharacters: 10000 }
+		}, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).not.toContain("folder_note:Work/Current.md");
+	});
+
+	test("duplicates are filtered out of the folder listing before the file limit is applied", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			additionalContextPaths: ["Vendors"],
+			folderContext: { enabled: true, path: "Work", maxFiles: 2, maxCharacters: 10000 }
+		}, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Work/Vendors.md", "folder_note:Work/A.md", "folder_note:Work/B.md"]);
+	});
+
+	test("the same note named twice as an additional note is one attachment", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), { additionalContextPaths: ["Vendors", "Work/Vendors.md"] }, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Work/Vendors.md"]);
+		expect(detailed.skipped.map((entry) => entry.reason)).toEqual(["duplicate"]);
+	});
+
+	test("@links does not re-attach a note an additional note already carries", async () => {
+		const { harness, current } = dedupeHarness();
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			additionalContextPaths: ["Vendors"],
+			vaultMentions: [{ kind: "links" }]
+		}, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Work/Vendors.md"]);
+		expect(detailed.resolutions[0]?.duplicates).toEqual(["Work/Vendors.md"]);
+	});
+
+	test("a style guide that is also an additional note is attached once, as the style guide", async () => {
+		const { harness, current } = dedupeHarness();
+		harness.settings.includeStyleGuideContext = true;
+		harness.settings.styleGuideContextPath = "Work/A.md";
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), { additionalContextPaths: ["Work/A.md", "Work/B.md"] }, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Work/B.md", "style_guide:Work/A.md"]);
+		expect(detailed.skipped).toEqual([{ source: "additional_note", path: "Work/A.md", reason: "duplicate", detail: "already attached as the style guide" }]);
+	});
+
+	test("additional notes that cannot be attached are reported with a reason", async () => {
+		const { harness, current } = dedupeHarness();
+		harness.vault.add("Pics/cat.png", "");
+		const detailed = await harness.service.buildContextAttachmentsDetailed(contextFor(current), {
+			additionalContextPaths: ["Pics/cat.png", "Nowhere", "Work/Current.md", "Work/A.md"]
+		}, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Work/A.md"]);
+		expect(detailed.skipped.map((entry) => [entry.path, entry.reason])).toEqual([
+			["Pics/cat.png", "not-markdown"],
+			["Nowhere", "not-found"],
+			["Work/Current.md", "current-note"]
+		]);
+	});
+
+	test("buildContextAttachments still returns just the attachments, deduplicated", async () => {
+		const { harness, current } = dedupeHarness();
+		const attachments = await harness.service.buildContextAttachments(contextFor(current), {
+			additionalContextPaths: ["Vendors"],
+			vaultMentions: [{ kind: "links" }]
+		}, PRIVACY);
+		expect(sourcePaths(attachments)).toEqual(["additional_note:Work/Vendors.md"]);
+	});
+});
+
+describe("detailed builds share no state (CTX review)", () => {
+	test("two builds in flight each get their own resolutions", async () => {
+		const harness = createHarness({ folderContextEnabled: false });
+		const current = harness.vault.add("Current.md", "current");
+		harness.vault.add("Out.md", "outgoing");
+		harness.vault.add("Back.md", "backlink");
+		harness.metadataCache.resolvedLinks = { "Current.md": { "Out.md": 1 }, "Back.md": { "Current.md": 1 }, "Out.md": {} };
+		harness.metadataCache.caches.set("Current.md", { links: [{ link: "Out" }] });
+
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const read = harness.vault.read.bind(harness.vault);
+		harness.vault.read = async (file) => {
+			if (file.path === "Out.md") {
+				await gate;
+			}
+			return await read(file);
+		};
+
+		const first = harness.service.buildContextAttachmentsDetailed(contextFor(current), { vaultMentions: [{ kind: "links" }] }, PRIVACY);
+		const second = await harness.service.buildContextAttachmentsDetailed(contextFor(current), { vaultMentions: [{ kind: "backlinks" }] }, PRIVACY);
+		release();
+		const firstResult = await first;
+
+		expect(firstResult.resolutions.map((entry) => entry.label)).toEqual(["@links"]);
+		expect(firstResult.resolutions[0]?.included).toEqual(["Out.md"]);
+		expect(second.resolutions.map((entry) => entry.label)).toEqual(["@backlinks"]);
+		expect(second.resolutions[0]?.included).toEqual(["Back.md"]);
+	});
+
+	test("a build without mentions has no resolutions", async () => {
+		const harness = createHarness({ folderContextEnabled: false });
+		const current = harness.vault.add("Current.md", "current");
+		const result = await harness.service.buildContextAttachmentsDetailed(contextFor(current), NO_OPTIONS, PRIVACY);
+		expect(result).toEqual({ attachments: [], resolutions: [], skipped: [] });
+	});
+});
+
+describe("folder context uses the vault, not the disk (CTX-03)", () => {
+	function folderHarness() {
+		const harness = createHarness();
+		harness.vault.adapter.list = () => Promise.reject(new Error("the adapter must not be used"));
+		return harness;
+	}
+
+	test("a missing folder is a specific error that names the folder", async () => {
+		const harness = folderHarness();
+		const error = await harness.service.buildFolderContextAttachments({ enabled: true, path: "Typo/Folder", maxFiles: 5, maxCharacters: 1000 }, "").catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(FolderNotFoundError);
+		expect((error as Error).message).toContain("Typo/Folder");
+		expect((error as InstanceType<typeof FolderNotFoundError>).folderPath).toBe("Typo/Folder");
+		await expect(harness.service.listMarkdownFilesInFolder("Typo", 3)).rejects.toBeInstanceOf(FolderNotFoundError);
+	});
+
+	test("a path that is a note, not a folder, is also reported as missing", async () => {
+		const harness = folderHarness();
+		harness.vault.add("Note.md", "x");
+		await expect(harness.service.listMarkdownFilesInFolder("Note.md", 3)).rejects.toBeInstanceOf(FolderNotFoundError);
+	});
+
+	test("a folder written with different capitals is still found, unless that is ambiguous", async () => {
+		const harness = folderHarness();
+		harness.vault.add("Projects/Q3/Plan.md", "plan");
+		expect((await harness.service.listMarkdownFilesInFolder("projects/q3", 3)).map((file) => file.path)).toEqual(["Projects/Q3/Plan.md"]);
+		harness.vault.addFolder("Notes");
+		harness.vault.addFolder("notes");
+		await expect(harness.service.listMarkdownFilesInFolder("NOTES", 3)).rejects.toBeInstanceOf(FolderNotFoundError);
+		expect(await harness.service.listMarkdownFilesInFolder("Notes", 3)).toEqual([]);
+	});
+
+	test("an existing folder with no notes is empty, not an error", async () => {
+		const harness = folderHarness();
+		harness.vault.addFolder("Empty");
+		expect(await harness.service.listMarkdownFilesInFolder("Empty", 3)).toEqual([]);
+		expect(await harness.service.buildFolderContextAttachments({ enabled: true, path: "Empty", maxFiles: 3, maxCharacters: 1000 }, "")).toEqual([]);
+	});
+
+	test("a disabled or blank folder setting is ignored without looking anything up", async () => {
+		const harness = folderHarness();
+		expect(await harness.service.buildFolderContextAttachments({ enabled: false, path: "Typo", maxFiles: 3, maxCharacters: 1000 }, "")).toEqual([]);
+		expect(await harness.service.buildFolderContextAttachments({ enabled: true, path: "  ", maxFiles: 3, maxCharacters: 1000 }, "")).toEqual([]);
+	});
+
+	test("walks sub-folders in path order, skips hidden folders and non-Markdown files", async () => {
+		const harness = folderHarness();
+		harness.vault.add("Docs/b.md", "b");
+		harness.vault.add("Docs/a.md", "a");
+		harness.vault.add("Docs/Sub/c.md", "c");
+		harness.vault.add("Docs/.git/hidden.md", "h");
+		harness.vault.add("Docs/.obsidian/x.md", "x");
+		harness.vault.add("Docs/image.png", "");
+		const files = await harness.service.listMarkdownFilesInFolder("Docs", 10);
+		expect(files.map((file) => file.path)).toEqual(["Docs/a.md", "Docs/b.md", "Docs/Sub/c.md"]);
+		expect((await harness.service.listMarkdownFilesInFolder("Docs", 2)).map((file) => file.path)).toEqual(["Docs/a.md", "Docs/b.md"]);
+	});
+
+	test("an unreadable file is an error that names it, not a silently shorter list", async () => {
+		const harness = folderHarness();
+		harness.vault.add("Docs/a.md", "a");
+		harness.vault.contents.delete("Docs/a.md");
+		await expect(harness.service.buildFolderContextAttachments({ enabled: true, path: "Docs", maxFiles: 3, maxCharacters: 1000 }, "")).rejects.toThrow("Docs/a.md");
+	});
+});
+
+describe("Excalidraw notes in a Markdown view (CTX-04)", () => {
+	test("the raw compressed drawing is replaced by its text labels", async () => {
+		const harness = createHarness();
+		const drawing = harness.vault.add("Flow.excalidraw.md", EXCALIDRAW_MD);
+		focus(harness, openInView(harness, drawing, EXCALIDRAW_MD));
+
+		const context = await harness.service.getNoteContext();
+		expect(context.source).toBe("Current note");
+		expect(context.content).toContain("[Excalidraw drawing: only its text labels are included");
+		expect(context.content).toContain("Login flow");
+		expect(context.content).not.toContain("compressed-json");
+		expect(context.content).not.toContain("N4IgLgng");
+	});
+
+	test("@note on an open drawing does the same", async () => {
+		const harness = createHarness();
+		const drawing = harness.vault.add("Flow.excalidraw.md", EXCALIDRAW_MD);
+		openInView(harness, drawing, EXCALIDRAW_MD);
+		const context = await harness.service.getFullNoteContext(drawing);
+		expect(context.content).not.toContain("compressed-json");
+		expect(context.content).toContain("Login flow");
+	});
+
+	test("the sidebar-focus fallback summarises the drawing too", async () => {
+		const harness = createHarness();
+		const drawing = harness.vault.add("Flow.excalidraw.md", EXCALIDRAW_MD);
+		focus(harness, openInView(harness, drawing, EXCALIDRAW_MD));
+		focusSidebar(harness);
+		const context = await harness.service.getNoteContext();
+		expect(context.content).not.toContain("compressed-json");
+	});
+
+	test("a text selection inside a drawing is sent as chosen", async () => {
+		const harness = createHarness();
+		const drawing = harness.vault.add("Flow.excalidraw.md", EXCALIDRAW_MD);
+		const view = openInView(harness, drawing, EXCALIDRAW_MD);
+		view.editor.select("Login flow");
+		focus(harness, view);
+		const context = await harness.service.getNoteContext();
+		expect(context.source).toBe("Selected text");
+		expect(context.content).toBe("Login flow");
+	});
+
+	test("a drawing recognised by its frontmatter key counts even without the .excalidraw.md name", async () => {
+		const harness = createHarness();
+		const drawing = harness.vault.add("Board.md", EXCALIDRAW_MD);
+		harness.metadataCache.caches.set("Board.md", { frontmatter: { "excalidraw-plugin": "parsed" } });
+		focus(harness, openInView(harness, drawing, EXCALIDRAW_MD));
+		const context = await harness.service.getNoteContext();
+		expect(context.content).toContain("[Excalidraw drawing");
+		expect(isExcalidrawNote(drawing, { "excalidraw-plugin": "parsed" })).toBe(true);
+	});
+
+	test("ordinary notes are untouched", () => {
+		expect(isExcalidrawNote(new TFile("Plain.md"))).toBe(false);
+		expect(isExcalidrawNote(new TFile("Folder/Drawing.EXCALIDRAW.md"))).toBe(true);
+		expect(isExcalidrawNote(null)).toBe(false);
+	});
+});
+
+describe("note-less context (UX-16)", () => {
+	test("is refused by default, as before", async () => {
+		const harness = createHarness();
+		focusSidebar(harness);
+		await expect(harness.service.getNoteContext()).rejects.toThrow("Open a Markdown note");
+	});
+
+	test("allowNoNote returns an empty No note context when nothing is open", async () => {
+		const harness = createHarness();
+		focusSidebar(harness);
+		const context = await harness.service.getNoteContext(undefined, undefined, { allowNoNote: true });
+		expect(context).toEqual({
+			content: "",
+			file: null,
+			source: "No note",
+			selectionStartLine: null,
+			selectionEndLine: null,
+			selectionIdentity: null
+		});
+		expect(isNoNoteContext(context)).toBe(true);
+		expect(isNoNoteContext(contextFor(null))).toBe(false);
+	});
+
+	test("allowNoNote still uses the remembered view when the sidebar has focus", async () => {
+		const harness = createHarness();
+		const note = harness.vault.add("A.md", "saved text");
+		focus(harness, openInView(harness, note, "live editor text"));
+		focusSidebar(harness);
+		const context = await harness.service.getNoteContext(undefined, undefined, { allowNoNote: true });
+		expect(context.source).toBe("Current note");
+		expect(context.content).toBe("live editor text");
+		expect(harness.vault.reads).toEqual([]);
+	});
+
+	test("allowNoNote still reads the remembered file with cachedRead when no view is left", async () => {
+		const harness = createHarness();
+		const note = harness.vault.add("A.md", "saved text");
+		harness.workspace.leaves.push(leafFor({}, "markdown", note.path));
+		harness.service.rememberMarkdownFile(note);
+		focusSidebar(harness);
+		const context = await harness.service.getNoteContext(undefined, undefined, { allowNoNote: true });
+		expect(context.source).toBe("Current note");
+		expect(context.content).toBe("saved text");
+		expect(harness.vault.reads).toEqual(["A.md"]);
+	});
+
+	test("attachments can be built around a No note context", async () => {
+		const harness = createHarness({ folderContextEnabled: false });
+		harness.vault.add("Extra.md", "extra");
+		const detailed = await harness.service.buildContextAttachmentsDetailed(createNoNoteContext(), { additionalContextPaths: ["Extra.md"] }, PRIVACY);
+		expect(sourcePaths(detailed.attachments)).toEqual(["additional_note:Extra.md"]);
+	});
+
+	test("@links with no note still says it needs one", async () => {
+		const harness = createHarness({ folderContextEnabled: false });
+		await expect(harness.service.buildContextAttachmentsDetailed(createNoNoteContext(), { vaultMentions: [{ kind: "links" }] }, PRIVACY)).rejects.toThrow("needs a note");
 	});
 });
