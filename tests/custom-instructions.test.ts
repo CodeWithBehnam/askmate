@@ -142,9 +142,9 @@ describe("custom instructions in the prompt", () => {
 
 describe("buildEditorMenuEntries", () => {
 	const workflows = [
-		{ id: "study-summary", name: "Study Summary" },
-		{ id: "rewrite-polish", name: "Rewrite Polish" },
-		{ id: "explain-simply", name: "Explain Simply" },
+		{ id: "study-summary", name: "Study summary" },
+		{ id: "rewrite-polish", name: "Rewrite polish" },
+		{ id: "explain-simply", name: "Explain simply" },
 		{ id: "custom-a", name: "Custom A" }
 	];
 	const base = { enabled: true, hasSelection: true, visibleWorkflows: workflows, favouriteIds: new Set<string>() };

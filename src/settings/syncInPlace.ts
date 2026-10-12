@@ -8,6 +8,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * so replacing the settings graph on save would detach those references and silently drop later edits.
  * Values that are not plain objects (arrays, primitives) are deep-cloned so the live settings never share
  * mutable state with defaults.
+ * Keys the target has and the source lacks are removed, so the source must carry every key that should survive.
+ * Normalisation does that for keys it does not know, which keeps a newer build's data alive.
  */
 export function syncObjectInPlace<T extends object>(target: T, source: T): void {
 	syncRecordInPlace(target as Record<string, unknown>, source as Record<string, unknown>);
@@ -21,6 +23,10 @@ function syncRecordInPlace(target: Record<string, unknown>, source: Record<strin
 	}
 
 	for (const [key, value] of Object.entries(source)) {
+		// Assigning "__proto__" would swap the target's prototype instead of copying a value. Settings never use that name.
+		if (key === "__proto__") {
+			continue;
+		}
 		const current = target[key];
 		if (isPlainObject(current) && isPlainObject(value)) {
 			if (current !== value) {

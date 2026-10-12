@@ -40,6 +40,41 @@ describe("syncObjectInPlace", () => {
 		expect(settings.providers["openai-compatible"].model).toBe("second-model");
 	});
 
+	test("keys the current build does not know survive a save, so a newer build's data is not deleted", () => {
+		const settings = structuredClone(normalizeAskMateSettings({ settingsVersion: 9, futureGroup: { a: [1, 2] } } as never, "load"));
+		const future = (settings as unknown as Record<string, unknown>).futureGroup;
+		syncObjectInPlace(settings, normalizeAskMateSettings(settings, "save"));
+		const after = settings as unknown as Record<string, unknown>;
+		expect(after.futureGroup).toBe(future);
+		expect(after.futureGroup).toEqual({ a: [1, 2] });
+		expect(settings.settingsVersion).toBe(9);
+	});
+
+	test("a __proto__ key in the source is skipped instead of replacing the target prototype", () => {
+		const target: Record<string, unknown> = { keep: 1 };
+		const source = JSON.parse('{"__proto__": {"injected": true}, "keep": 2}') as Record<string, unknown>;
+		syncObjectInPlace<Record<string, unknown>>(target, source);
+		expect(target.keep).toBe(2);
+		expect(Object.getPrototypeOf(target)).toBe(Object.prototype);
+		expect((target as { injected?: unknown }).injected).toBeUndefined();
+		expect(Object.prototype.hasOwnProperty.call(target, "__proto__")).toBe(false);
+	});
+
+	test("the new namespaced groups keep their identity across saves", () => {
+		const settings = structuredClone(normalizeAskMateSettings({}, "load"));
+		const { skills, diagrams, mcp } = settings;
+		skills.enabled = false;
+		diagrams.defaultStyle = "blueprint";
+		mcp.enabled = true;
+		syncObjectInPlace(settings, normalizeAskMateSettings(settings, "save"));
+		expect(settings.skills).toBe(skills);
+		expect(settings.diagrams).toBe(diagrams);
+		expect(settings.mcp).toBe(mcp);
+		expect(skills.enabled).toBe(false);
+		expect(diagrams.defaultStyle).toBe("blueprint");
+		expect(mcp.enabled).toBe(true);
+	});
+
 	test("saving never mutates DEFAULT_SETTINGS", () => {
 		const before = JSON.stringify(DEFAULT_SETTINGS);
 		const settings = structuredClone(normalizeAskMateSettings({}, "load"));

@@ -1,5 +1,9 @@
 import { buildTranslatePreservePrompt } from "../settings/normalize";
 import type { Workflow, WorkflowOutputKind } from "../shared/types";
+import { NOTE_EDIT_OUTPUT_RULE, NOTE_LANGUAGE_RULE, OBSIDIAN_SYNTAX_RULE, TABLE_CELL_RULE } from "./promptRules";
+
+// The shared rules live in promptRules so the translate prompt in settings uses the same text. Re-exported for existing importers.
+export { NOTE_EDIT_OUTPUT_RULE, NOTE_LANGUAGE_RULE, OBSIDIAN_SYNTAX_RULE, TABLE_CELL_RULE };
 
 // Required here so the compiler rejects a built-in that forgets to say whether its output replaces the note.
 export type BuiltInWorkflow = Workflow & { outputKind: WorkflowOutputKind };
@@ -11,14 +15,6 @@ interface WorkflowPromptSections {
 	output: string;
 	stopRules: string;
 }
-
-// Workflow prompts are in English, so without this the model tends to answer in English even for notes in other languages.
-export const NOTE_LANGUAGE_RULE = "Write in the main language of the note context and follow its spelling conventions, unless the user asks for another language.";
-
-export const OBSIDIAN_SYNTAX_RULE = "These stay byte-for-byte identical: YAML frontmatter; code blocks and inline code; math ($...$ and $$...$$); Obsidian comments (%%...%%); wikilinks and embeds ([[target|alias]], ![[target]]); Markdown link and image URLs; block IDs (^id); footnote labels ([^label]); tags (#tag); callout markers (> [!type]); inline fields (key:: value); HTML tags.";
-
-// Applied output becomes permanent note text, so any remark or citation would end up inside the user's note.
-export const NOTE_EDIT_OUTPUT_RULE = "Return only the complete revised text, ready to replace the original. No preamble, explanation, editor notes, remarks about limitations, closing remarks, or source IDs such as [S1]. Do not wrap it in a code fence.";
 
 function composeWorkflowPrompt(sections: WorkflowPromptSections): string {
 	return [
@@ -40,7 +36,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "study-summary",
 		commandId: "workflow-study-summary",
-		name: "Study Summary",
+		name: "Study summary",
 		shortName: "Summarise",
 		description: "Study guide",
 		icon: "book-open",
@@ -64,7 +60,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "action-plan",
 		commandId: "workflow-action-plan",
-		name: "Action Plan",
+		name: "Action plan",
 		shortName: "Plan",
 		description: "Next steps",
 		icon: "list-checks",
@@ -89,7 +85,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "explain-simply",
 		commandId: "workflow-explain-simply",
-		name: "Explain Simply",
+		name: "Explain simply",
 		shortName: "Explain",
 		description: "Plain language",
 		icon: "sparkles",
@@ -114,7 +110,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "question-drill",
 		commandId: "workflow-question-drill",
-		name: "Question Drill",
+		name: "Question drill",
 		shortName: "Drill",
 		description: "Practice Qs",
 		icon: "circle-help",
@@ -130,6 +126,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Do not ask questions whose answers the note does not contain.",
+				TABLE_CELL_RULE,
 				NOTE_LANGUAGE_RULE
 			],
 			output: "An Obsidian Markdown table with the columns Question, Answer and Why it matters, ordered from basic to harder, followed by a Gaps line naming thin areas (omit it when there are none).",
@@ -139,7 +136,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "buyer-protection-analysis",
 		commandId: "workflow-buyer-protection-analysis",
-		name: "Buyer Protection Analysis",
+		name: "Buyer protection analysis",
 		shortName: "Protect",
 		description: "Spot hype",
 		icon: "shield-alert",
@@ -164,7 +161,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "knowledge-graph-links",
 		commandId: "workflow-knowledge-graph-links",
-		name: "Knowledge Graph Links",
+		name: "Knowledge graph links",
 		shortName: "Links",
 		description: "Suggest [[links]]",
 		icon: "network",
@@ -181,7 +178,8 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			constraints: [
 				"Suggestions stay inert until the user accepts them, so saving or applying this reply must not create graph links. Outside the copy-ready code block, write every suggested link as inline code, such as `[[Customer Acquisition]]`, never as a bare wikilink.",
 				"Name cautioned or rejected links as inline code without brackets, such as `Business`.",
-				"You cannot see the user's other notes, so do not claim that a note exists.",
+				"Unless vault_note, folder_note or additional_note attachments are present, you cannot see the user's other notes, so do not claim that a note exists. When they are present, prefer their exact titles and say which suggestions match an attached note.",
+				TABLE_CELL_RULE,
 				NOTE_LANGUAGE_RULE
 			],
 			output: [
@@ -198,33 +196,35 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "mermaid-diagram",
 		commandId: "workflow-mermaid-diagram",
-		name: "Mermaid Diagram",
+		name: "Mermaid diagram",
 		shortName: "Diagram",
 		description: "Visual map",
 		icon: "workflow",
 		accent: "blue",
 		outputKind: "new-content",
+		// The type choice, syntax rules and look come from the built-in mermaid-diagrams skill, so this entry only states the outcome.
+		skillIds: ["built-in:mermaid-diagrams"],
 		prompt: composeWorkflowPrompt({
-			goal: "One valid Mermaid diagram that visualises the note context and renders in Obsidian without cleanup.",
+			goal: "One valid Mermaid diagram that makes the structure of the note context easy to see and renders in Obsidian without cleanup.",
 			successCriteria: [
-				"Uses the diagram type that best fits, such as flowchart, mindmap, sequenceDiagram, timeline, journey or classDiagram.",
-				"Shows the main entities, steps, decisions, relationships, causes or timeline, with short labels traceable to the note.",
-				"Shows a gap as a labelled node only when the note itself points to it."
+				"The diagram type fits the content, and the labels are short and taken from the note.",
+				"It shows the main entities, steps, decisions, relationships, causes or timeline the note states or clearly implies.",
+				"A gap appears as a labelled node only when the note itself points to it."
 			],
 			constraints: [
 				"Do not add relationships the note does not state or clearly imply.",
-				"Prefer a simple diagram over a crowded one.",
-				"Quote or simplify labels that could break Mermaid syntax, including quotes, pipes, brackets, and Markdown or wiki links.",
+				"Follow the diagram skill for the type, syntax and style when one is provided.",
+				"Quote any label that contains brackets, quotes, pipes or other punctuation, so the diagram parses.",
 				NOTE_LANGUAGE_RULE
 			],
-			output: "One fenced code block with the language mermaid. Add one short sentence after it only if the note is too thin or an assumption was necessary.",
-			stopRules: "Stop after the Mermaid block and that optional sentence. Do not offer alternative diagrams or explain the process."
+			output: "One fenced code block with the language mermaid. Add one short sentence after it only if the note is too thin or an assumption was necessary. No source IDs such as [S1], links or HTML.",
+			stopRules: "Stop after the Mermaid block and that optional sentence. If the note has too little structure to draw, say so in one sentence and stop."
 		})
 	},
 	{
 		id: "key-insights",
 		commandId: "workflow-key-insights",
-		name: "Key Insights",
+		name: "Key insights",
 		shortName: "Insights",
 		description: "Best ideas",
 		icon: "lightbulb",
@@ -248,7 +248,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "critical-review",
 		commandId: "workflow-critical-review",
-		name: "Critical Review",
+		name: "Critical review",
 		shortName: "Critique",
 		description: "Find gaps",
 		icon: "search",
@@ -273,7 +273,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "pros-cons",
 		commandId: "workflow-pros-cons",
-		name: "Pros And Cons",
+		name: "Pros and cons",
 		shortName: "Pros/Cons",
 		description: "Weigh it up",
 		icon: "scale",
@@ -289,6 +289,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Label any inferred point as inferred.",
+				TABLE_CELL_RULE,
 				NOTE_LANGUAGE_RULE
 			],
 			output: "One line stating what is evaluated, an Obsidian Markdown table with the columns Pros and Cons, a short Risks and unknowns list, then either a short Recommendation or one line saying why the evidence does not support one.",
@@ -313,6 +314,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Do not write cards whose answers the note does not contain.",
+				TABLE_CELL_RULE,
 				NOTE_LANGUAGE_RULE
 			],
 			output: "An Obsidian Markdown table with the columns Front, Back and Source clue.",
@@ -322,7 +324,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "meeting-notes",
 		commandId: "workflow-meeting-notes",
-		name: "Meeting Notes",
+		name: "Meeting notes",
 		shortName: "Meeting",
 		description: "Clean notes",
 		icon: "messages-square",
@@ -348,7 +350,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "research-map",
 		commandId: "workflow-research-map",
-		name: "Research Map",
+		name: "Research map",
 		shortName: "Research",
 		description: "Explore next",
 		icon: "compass",
@@ -373,7 +375,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "decision-brief",
 		commandId: "workflow-decision-brief",
-		name: "Decision Brief",
+		name: "Decision brief",
 		shortName: "Decision",
 		description: "Choose well",
 		icon: "file-question",
@@ -398,7 +400,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "compare-ideas",
 		commandId: "workflow-compare-ideas",
-		name: "Compare Ideas",
+		name: "Compare ideas",
 		shortName: "Compare",
 		description: "Contrast ideas",
 		icon: "git-compare",
@@ -413,6 +415,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Do not add outside facts unless the user asks for them.",
+				TABLE_CELL_RULE,
 				NOTE_LANGUAGE_RULE
 			],
 			output: "One line stating what is compared, a Markdown comparison table (one column per item, one row per criterion), then a short Takeaway.",
@@ -422,7 +425,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "translate-preserve",
 		commandId: "workflow-translate-preserve",
-		name: "Translate Preserve",
+		name: "Translate and preserve",
 		shortName: "Translate",
 		description: "Keep meaning",
 		icon: "languages",
@@ -433,7 +436,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "quote-extractor",
 		commandId: "workflow-quote-extractor",
-		name: "Quote Extractor",
+		name: "Quote extractor",
 		shortName: "Quotes",
 		description: "Pull quotes",
 		icon: "quote",
@@ -459,7 +462,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 	{
 		id: "rewrite-polish",
 		commandId: "workflow-rewrite-polish",
-		name: "Rewrite Polish",
+		name: "Rewrite polish",
 		shortName: "Polish",
 		description: "Clean rewrite",
 		icon: "wand-2",
@@ -475,6 +478,7 @@ export const WORKFLOWS: BuiltInWorkflow[] = [
 			],
 			constraints: [
 				"Do not add facts, examples, opinions or conclusions. If the source is fragmented, tidy the wording without filling the gaps.",
+				TABLE_CELL_RULE,
 				"Keep the note's language and spelling conventions."
 			],
 			output: NOTE_EDIT_OUTPUT_RULE,

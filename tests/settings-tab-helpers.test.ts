@@ -125,7 +125,8 @@ describe("setting controls", () => {
 		writeSettingControl(settings, "composerLayout", "expanded");
 		expect(settings.composerLayout).toBe("expanded");
 		writeSettingControl(settings, "composerLayout", "not-a-layout");
-		expect(settings.composerLayout).toBe("compact");
+		expect(settings.composerLayout).toBe(DEFAULT_SETTINGS.composerLayout);
+		expect(settings.composerLayout).toBe("console");
 		writeSettingControl(settings, "threadedChatEnabled", "yes");
 		expect(settings.threadedChatEnabled).toBe(false);
 		writeSettingControl(settings, "includeImageReferences", true);

@@ -3,6 +3,7 @@ export * from "../settings/constants";
 export * from "../settings/defaults";
 export * from "../settings/normalize";
 export * from "../workflows/builtInWorkflows";
+export * from "../workflows/promptRules";
 export * from "./modelCapabilities";
 export * from "./markdownDiff";
 export * from "./trustSafety";

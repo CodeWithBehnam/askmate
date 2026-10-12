@@ -8,9 +8,10 @@ export type SendShortcut = "enter" | "ctrl-enter";
 export type ContextSource = "Selected text" | "Current note";
 export type ChatRole = "user" | "assistant" | "system";
 export type ModelCapability = "text" | "image";
-export type RequestIntentKind = "freeform_text" | "workflow" | "explicit_image" | "auto_image";
+export type RequestIntentKind = "freeform_text" | "workflow" | "explicit_image" | "auto_image" | "diagram";
 export type RequestCommandSource = "sidebar" | "command_palette";
-export type OperationKind = "text_response" | "image_prompt_planning" | "image_generation";
+/** "diagram_repair" is the single extra model turn that fixes a diagram that failed to parse; "tool_round" is one model call inside a tool loop. */
+export type OperationKind = "text_response" | "image_prompt_planning" | "image_generation" | "diagram_repair" | "tool_round";
 export type OperationStatus = "completed" | "failed" | "aborted" | "fallback";
 export type ApiEndpoint = "responses" | "images_generations" | "chat_completions" | "anthropic_messages" | "gemini_generate_content";
 export type TextProviderId = "openai" | "azure-openai" | "azure-ai" | "openrouter" | "anthropic" | "google-gemini" | "openai-compatible";
@@ -38,7 +39,7 @@ export type BatchWorkflowOutputMode = "note" | "review-queue";
 export type BudgetEnforcementMode = "warn" | "block";
 export type ReviewQueueStatus = "pending" | "applied" | "dismissed";
 export type MarkdownDiffLineKind = "context" | "added" | "removed" | "omitted";
-export type RunPhase = "building" | "confirming" | "generating" | "post-processing";
+export type RunPhase = "building" | "confirming" | "generating" | "post-processing" | "tool-calling" | "awaiting-approval";
 export type SelectionResolutionStatus = "exact" | "relocated" | "missing" | "ambiguous";
 export type MutationOutcomeStatus = "applied" | "cancelled" | "partial";
 
@@ -81,7 +82,103 @@ export interface AskMateHttpResponse<T> {
 	text: string;
 }
 
+/**
+ * How skills are chosen when the user does not pick one:
+ * "off" never applies a skill on its own, "suggest" offers one chip, "builtin-auto" applies a matching built-in skill,
+ * "all-auto" also applies matching vault skills the user has already approved.
+ */
+export type SkillMatchingMode = "off" | "suggest" | "builtin-auto" | "all-auto";
+
+/** Skills are instruction-only. Everything under this key is namespaced so a build that predates it can only drop the whole group. */
+export interface SkillsSettings {
+	enabled: boolean;
+	/** Visible vault folder scanned for SKILL.md files. Never a dot-folder, because Obsidian does not index those. */
+	folder: string;
+	matching: SkillMatchingMode;
+	/** Ids of skills the user switched off. */
+	disabledIds: string[];
+	/**
+	 * Vault skill id to the SHA-256 (lowercase hex) of the text the user approved. Built-in skills never appear here.
+	 * Any change to the skill text invalidates the entry. A synced data.json can carry this map to another device, so a
+	 * stricter host may keep approvals device-locally and treat this as a hint only.
+	 */
+	trustedHashes: Record<string, string>;
+}
+
+export interface DiagramSettings {
+	enabled: boolean;
+	/** Mermaid diagram type to ask for, or "auto" to let the diagram skill choose from the content. */
+	defaultType: string;
+	/** Style recipe id (for example "blueprint"), or "auto" to seed a look from the note. */
+	defaultStyle: string;
+	/** Allow the single extra model turn that repairs a diagram which fails to parse. */
+	allowRepairTurn: boolean;
+}
+
+/** How a tool call is approved. Structurally the same union the MCP client uses. */
+export type McpApprovalMode = "always-ask" | "ask-once-per-chat" | "trusted-read-only";
+
+/** A value that is either a harmless literal or a reference to a SecretStorage entry. Tokens are never stored in settings. */
+export type McpEnvValue = { kind: "plain"; value: string } | { kind: "secret"; secretId: string };
+
+interface McpServerBase {
+	/** Lowercase slug, unique within the list. */
+	id: string;
+	label: string;
+	/** Off until the user turns the server on. */
+	enabled: boolean;
+	approval: McpApprovalMode;
+	/** Tool annotations such as readOnlyHint are untrusted hints unless the user marks the server as trusted. */
+	trustsAnnotations: boolean;
+	callTimeoutMs?: number;
+	/** Tool names the user turned off for this server. They never reach the model. Omitted when no tool is off. */
+	disabledTools?: string[];
+	/**
+	 * Advisory copy of the hash the user last trusted. Consent is decided by the device-local trust record, never by this
+	 * field, because a synced or cloned data.json could ship a pre-approved hash.
+	 */
+	trustedConfigHash: string | null;
+}
+
+export type McpServerConfig =
+	| (McpServerBase & { transport: "stdio"; command: string; args: string[]; env: Record<string, McpEnvValue> })
+	| (McpServerBase & { transport: "http"; url: string; headers: Record<string, McpEnvValue>; bearerSecretId: string | null });
+
+export interface McpSettings {
+	/** Off by default. Nothing starts or connects while this is false. */
+	enabled: boolean;
+	servers: McpServerConfig[];
+	maxToolRoundsPerTurn: number;
+	maxOutputChars: number;
+}
+
+export type SettingsDiagnosticCode =
+	| "provider-endpoint-reset"
+	| "workflow-prompt-truncated"
+	| "workflow-prompt-empty"
+	| "workflow-name-truncated"
+	| "workflow-invalid"
+	| "workflows-dropped"
+	| "mcp-server-dropped"
+	| "mcp-server-disabled"
+	| "mcp-value-dropped";
+
+/** Something normalisation had to change that the user would otherwise never learn about. */
+export interface SettingsDiagnostic {
+	code: SettingsDiagnosticCode;
+	message: string;
+	/** What the message is about, for example a workflow name or provider id. */
+	subject?: string;
+}
+
+export interface NormalizedSettingsResult {
+	settings: AskMateSettings;
+	diagnostics: SettingsDiagnostic[];
+}
+
 export interface AskMateSettings {
+	/** Schema version of the stored settings. A value above the one this build writes means a newer build saved the file. */
+	settingsVersion: number;
 	openAiApiKeySecretName: string;
 	model: string;
 	modelOptions: string[];
@@ -109,7 +206,7 @@ export interface AskMateSettings {
 	folderInstructions: FolderInstruction[];
 	editorContextMenuEnabled: boolean;
 	composerLayout: ComposerLayout;
-	// Set once the one-time move to the Console layout has run, so a later switch back to another layout is kept.
+	// Retired: the one-time move to the Console layout no longer runs. The flag stays true so builds that still read it never move anyone.
 	consoleLayoutMigrated: boolean;
 	showOnboardingTips: boolean;
 	autoImageIntentEnabled: boolean;
@@ -157,6 +254,13 @@ export interface AskMateSettings {
 	usagePerRequestHardLimitTokens: number;
 	usageBudgetEnforcement: BudgetEnforcementMode;
 	tokenUsageStats: TokenUsageStats;
+	skills: SkillsSettings;
+	diagrams: DiagramSettings;
+	mcp: McpSettings;
+	/** Set when the user finishes first-run setup; null until then. */
+	firstRunCompletedAt: string | null;
+	/** Plugin version that last showed its what's-new notice; null when none has been shown. */
+	lastSeenVersion: string | null;
 }
 
 export interface ContextAttachment {
@@ -208,6 +312,38 @@ export interface NoteContext {
 	attachments?: ContextAttachment[];
 }
 
+export type SkillActivation = "explicit" | "workflow" | "sticky" | "auto";
+
+/** A skill resolved for one request. Same shape as the skills engine's ResolvedSkill, declared here so shared types never import it. */
+export interface RequestSkill {
+	id: string;
+	name: string;
+	source: "built-in" | "vault";
+	version: string;
+	hash: string;
+	body: string;
+	activation: SkillActivation;
+	characters: number;
+}
+
+/** What the request tells the model about the tools it may call this run. The snapshot is frozen when the run starts. */
+export interface RequestToolsInfo {
+	toolCount: number;
+	/** Labels of the servers that contributed tools, in a stable order. */
+	serverLabels: string[];
+	maxRounds: number;
+}
+
+/** The diagram look and type behind a diagram request, kept so "Another look" and saved threads can reproduce it. */
+export interface DiagramRequestMetadata {
+	/** Requested Mermaid type, or "auto". */
+	kind: string;
+	/** Style recipe id, or "auto". */
+	style: string;
+	/** Re-roll counter that seeds the look. */
+	nonce: number;
+}
+
 export interface AskRequestMetadata {
 	intentKind: RequestIntentKind;
 	commandSource: RequestCommandSource;
@@ -240,6 +376,10 @@ export interface AskRequestMetadata {
 	workflowId: string | null;
 	workflowName: string | null;
 	createdAt: string;
+	/** Ids of the skills applied to this request, in injection order. */
+	skills?: string[];
+	toolsEnabled?: boolean;
+	diagram?: DiagramRequestMetadata;
 }
 
 export interface FolderInstruction {
@@ -255,6 +395,10 @@ export interface AskRequest {
 	evidenceSources: EvidenceSource[];
 	/** Global and matching folder instructions resolved when the request was built; empty when none apply. */
 	customInstructions?: string;
+	/** Skills resolved for this request. Absent or empty means no skill text is added to the instructions. */
+	skills?: RequestSkill[];
+	/** Present only when tools are enabled for this run. */
+	tools?: RequestToolsInfo;
 }
 
 export interface BuildRequestOptions {
@@ -559,6 +703,8 @@ export interface CustomWorkflow {
 	resultNoteTemplate: string;
 	hidden: boolean;
 	outputKind?: WorkflowOutputKind;
+	/** Skills this workflow always applies, for example "built-in:mermaid-diagrams". Omitted when none. */
+	skillIds?: string[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -583,6 +729,8 @@ export interface Workflow {
 	isCustom?: boolean;
 	/** "note-edit": output is a revised version of the whole input note. "new-content": output is new material (summary, analysis). */
 	outputKind?: WorkflowOutputKind;
+	/** Skills this workflow always applies, for example "built-in:mermaid-diagrams". */
+	skillIds?: string[];
 }
 
 export interface MarkdownHeadingSection {
