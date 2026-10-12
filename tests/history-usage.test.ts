@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { HistoryService } from "../src/history/HistoryService";
-import { buildUsageTotalsFromRecords, getLocalDayKey, sumUsageTotalsForMonth, UsageService } from "../src/usage/UsageService";
+import {
+	buildUsageTotalsFromRecords,
+	countsTowardBudget,
+	evaluateHardInputLimit,
+	getLocalDayKey,
+	HARD_INPUT_CONFIRM_TOKENS,
+	sumUsageTotalsForMonth,
+	UsageService,
+	type RecordOperationUsageParams
+} from "../src/usage/UsageService";
 import { normalizeAskMateSettings } from "../src/settings/normalize";
-import type { AskMateSettings, AskRequest, ReviewQueueItem, TokenUsageRecord } from "../src/shared/types";
+import type { AskMateSettings, AskRequest, NoteHistoryTurn, ReviewQueueItem, TokenUsageRecord } from "../src/shared/types";
 
 function createSettings(overrides: Partial<AskMateSettings> = {}): AskMateSettings {
 	return { ...structuredClone(normalizeAskMateSettings({}, "load")), ...overrides };
@@ -147,6 +156,100 @@ describe("HistoryService review queue", () => {
 		await service.handleFileDeleted("A.md");
 		expect(settings.reviewQueue.map((item) => item.id)).toEqual(["b"]);
 	});
+
+	test("a failed save leaves the queue as it was, so a retry queues one item (STO-05)", async () => {
+		const settings = createSettings();
+		let failNext = true;
+		const service = new HistoryService({
+			getSettings: () => settings,
+			saveSettings: async () => {
+				if (failNext) {
+					failNext = false;
+					throw new Error("disk full");
+				}
+			},
+			readFileText: async () => "Note body"
+		});
+		const request = createRequest("Note.md");
+		await expect(service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "append")).rejects.toThrow("disk full");
+		expect(settings.reviewQueue).toHaveLength(0);
+		await service.queueReviewItemFromRequest(request, "proposal", "gpt-5.5", "append");
+		expect(settings.reviewQueue).toHaveLength(1);
+	});
+
+	test("a failed save removes only its own item when the queue changed meanwhile", async () => {
+		const settings = createSettings();
+		const service = new HistoryService({
+			getSettings: () => settings,
+			saveSettings: async () => {
+				// Another action queues an item while this write is under way, then the write fails.
+				settings.reviewQueue = [...settings.reviewQueue, pendingItem("other", "Other.md", 5)];
+				throw new Error("disk full");
+			},
+			readFileText: async () => "Note body"
+		});
+		await expect(service.queueReviewItemFromRequest(createRequest("Note.md"), "proposal", "gpt-5.5", "append")).rejects.toThrow("disk full");
+		expect(settings.reviewQueue.map((item) => item.id)).toEqual(["other"]);
+	});
+});
+
+function historyTurn(id: string, sourcePath: string, createdAt: string): NoteHistoryTurn {
+	return { id, sourcePath, createdAt, title: "t", question: "q", answer: "a", providerName: "OpenAI", model: "gpt-5.5", outputMode: "chat", intentKind: "freeform_text" };
+}
+
+describe("HistoryService note history", () => {
+	test("the global cap evicts the oldest turns by date, not the other notes' newer ones (STO-06)", async () => {
+		const otherNoteTurns = Array.from({ length: 199 }, (_, index) => historyTurn(`b${index}`, "B.md", new Date(Date.UTC(2026, 0, 2, 0, index)).toISOString()));
+		const settings = createSettings({
+			noteHistoryEnabled: true,
+			noteHistoryStore: { turns: [historyTurn("old-a", "A.md", "2026-01-01T00:00:00.000Z"), ...otherNoteTurns] }
+		});
+		const { service } = createHistory(settings);
+		await service.recordNoteHistoryTurn(createRequest("A.md"), "answer", "gpt-5.5");
+		const kept = settings.noteHistoryStore.turns.map((turn) => turn.id);
+		expect(kept).toHaveLength(200);
+		expect(kept).not.toContain("old-a");
+		expect(kept).toContain("b0");
+		expect(settings.noteHistoryStore.turns.at(-1)?.sourcePath).toBe("A.md");
+		const dates = settings.noteHistoryStore.turns.map((turn) => Date.parse(turn.createdAt));
+		expect(dates).toEqual([...dates].sort((a, b) => a - b));
+	});
+
+	test("a failed save restores the note history", async () => {
+		const settings = createSettings({ noteHistoryEnabled: true });
+		const service = new HistoryService({
+			getSettings: () => settings,
+			saveSettings: async () => {
+				throw new Error("disk full");
+			},
+			readFileText: async () => "Note body"
+		});
+		const warn = console.warn;
+		console.warn = () => undefined;
+		try {
+			await service.recordNoteHistoryTurn(createRequest("A.md"), "answer", "gpt-5.5");
+		} finally {
+			console.warn = warn;
+		}
+		expect(settings.noteHistoryStore.turns).toHaveLength(0);
+	});
+
+	test("nothing is recorded while note history is off or the request has no note", async () => {
+		const settings = createSettings({ noteHistoryEnabled: false });
+		const { service, saves } = createHistory(settings);
+		await service.recordNoteHistoryTurn(createRequest("A.md"), "answer", "gpt-5.5");
+		expect(settings.noteHistoryStore.turns).toHaveLength(0);
+		expect(saves()).toBe(0);
+	});
+
+	test("the per-note cap keeps the newest turns of that note", async () => {
+		const settings = createSettings({ noteHistoryEnabled: true, noteHistoryMaxTurnsPerNote: 2 });
+		const { service } = createHistory(settings);
+		for (const answer of ["one", "two", "three"]) {
+			await service.recordNoteHistoryTurn(createRequest("A.md"), answer, "gpt-5.5");
+		}
+		expect(settings.noteHistoryStore.turns.map((turn) => turn.answer)).toEqual(["two", "three"]);
+	});
 });
 
 function usageRecord(timestamp: string, totalTokens: number, overrides: Partial<TokenUsageRecord> = {}): TokenUsageRecord {
@@ -158,10 +261,25 @@ function usageRecord(timestamp: string, totalTokens: number, overrides: Partial<
 	};
 }
 
+/** A fixed local time, so day and month totals never depend on when the suite runs. */
+const NOW = new Date(2026, 5, 15, 12, 0, 0);
+
+function createUsage(settings: AskMateSettings): UsageService {
+	return new UsageService({ getSettings: () => settings, saveSettings: async () => undefined, now: () => NOW });
+}
+
+function usageParams(overrides: Partial<RecordOperationUsageParams> = {}): RecordOperationUsageParams {
+	return {
+		request: createRequest("Note.md"), operationKind: "text_response", endpoint: "responses", status: "completed", model: "gpt-5.5",
+		instructions: "", input: "x".repeat(4000), responseText: "", startedAt: NOW, usage: null,
+		...overrides
+	};
+}
+
 describe("UsageService budgets", () => {
 	test("monthly use counts every day, not only the last 120 records", async () => {
 		const settings = createSettings({ usageGuardrailsEnabled: true, usageMonthlyTokenBudget: 1000, usageBudgetEnforcement: "block" });
-		const usage = new UsageService({ getSettings: () => settings, saveSettings: async () => undefined });
+		const usage = createUsage(settings);
 		const request = createRequest("Note.md");
 		for (let index = 0; index < 300; index += 1) {
 			await usage.recordOperationUsage({
@@ -207,12 +325,131 @@ describe("UsageService budgets", () => {
 	});
 
 	test("old data without daily totals falls back to the records", () => {
-		const today = new Date();
+		const today = NOW;
 		const totals = buildUsageTotalsFromRecords([
 			usageRecord(today.toISOString(), 10),
 			usageRecord(today.toISOString(), 99, { estimated: true, status: "aborted" })
 		]);
 		expect(totals[getLocalDayKey(today)]).toBe(10);
 		expect(sumUsageTotalsForMonth({ "2026-01-01": 5, "2026-01-31": 6, "2026-02-01": 7 }, "2026-01")).toBe(11);
+	});
+});
+
+describe("UsageService spend rules (STO-07 and STO-08)", () => {
+	async function dayUsed(settings: AskMateSettings): Promise<number> {
+		return createUsage(settings).evaluateUsageGuardrails(createRequest("Note.md"), 0).dayUsedTokens;
+	}
+
+	test("a stopped request that was sent spends its estimated input", async () => {
+		const settings = createSettings();
+		await createUsage(settings).recordOperationUsage(usageParams({ status: "aborted", sent: true }));
+		const [record] = settings.tokenUsageStats.records;
+		expect(record.estimated).toBe(true);
+		expect(record.totalTokens).toBeGreaterThan(900);
+		expect(await dayUsed(settings)).toBe(record.totalTokens);
+	});
+
+	test("a request stopped before it was sent spends nothing", async () => {
+		const settings = createSettings();
+		const usage = createUsage(settings);
+		await usage.recordOperationUsage(usageParams({ status: "aborted", sent: false }));
+		await usage.recordOperationUsage(usageParams({ status: "aborted" }));
+		expect(settings.tokenUsageStats.records).toHaveLength(2);
+		expect(await dayUsed(settings)).toBe(0);
+	});
+
+	test("repeated stops of a large sent request now reach the block budget", async () => {
+		const settings = createSettings({ usageGuardrailsEnabled: true, usageDailyTokenBudget: 3000, usageBudgetEnforcement: "block" });
+		const usage = createUsage(settings);
+		for (let index = 0; index < 4; index += 1) {
+			await usage.recordOperationUsage(usageParams({ status: "aborted", sent: true }));
+		}
+		expect(usage.evaluateUsageGuardrails(createRequest("Note.md"), 100).blockers.join(" ")).toContain("Daily budget");
+	});
+
+	test("a failed request counts only when part of the reply had arrived", async () => {
+		const settings = createSettings();
+		const usage = createUsage(settings);
+		await usage.recordOperationUsage(usageParams({ status: "failed", sent: true, responseText: "" }));
+		expect(await dayUsed(settings)).toBe(0);
+		await usage.recordOperationUsage(usageParams({ status: "failed", sent: true, responseText: "A partial answer that broke off" }));
+		const partial = settings.tokenUsageStats.records[1];
+		expect(partial.outputTokens).toBeGreaterThan(0);
+		expect(await dayUsed(settings)).toBe(partial.totalTokens);
+	});
+
+	test("text that arrived proves the request was sent, even without the flag", async () => {
+		const settings = createSettings();
+		await createUsage(settings).recordOperationUsage(usageParams({ status: "aborted", responseText: "Some words" }));
+		expect(await dayUsed(settings)).toBe(settings.tokenUsageStats.records[0].totalTokens);
+	});
+
+	test("usage the provider reported counts whatever the status", async () => {
+		const settings = createSettings();
+		await createUsage(settings).recordOperationUsage(usageParams({ status: "failed", usage: { input_tokens: 500, output_tokens: 100, total_tokens: 600 } }));
+		expect(await dayUsed(settings)).toBe(600);
+	});
+
+	test("components without a total are exact, so the record is not estimated and a failed call counts", async () => {
+		const settings = createSettings();
+		await createUsage(settings).recordOperationUsage(usageParams({ status: "failed", usage: { input_tokens: 8000, output_tokens: 1200 } }));
+		const [record] = settings.tokenUsageStats.records;
+		expect(record.estimated).toBe(false);
+		expect(record.totalTokens).toBe(9200);
+		expect(await dayUsed(settings)).toBe(9200);
+	});
+
+	test("a record stays estimated when input or output usage is missing", async () => {
+		const settings = createSettings();
+		const usage = createUsage(settings);
+		await usage.recordOperationUsage(usageParams({ usage: { input_tokens: 10, total_tokens: 10 } }));
+		await usage.recordOperationUsage(usageParams({ usage: { output_tokens: 10, total_tokens: 10 } }));
+		await usage.recordOperationUsage(usageParams({ usage: null }));
+		expect(settings.tokenUsageStats.records.map((record) => record.estimated)).toEqual([true, true, true]);
+	});
+
+	test("countsTowardBudget applies the rule per status", () => {
+		const estimated = (status: TokenUsageRecord["status"]): TokenUsageRecord => usageRecord(NOW.toISOString(), 10, { estimated: true, status });
+		expect(countsTowardBudget(estimated("completed"))).toBe(true);
+		expect(countsTowardBudget(estimated("fallback"))).toBe(true);
+		expect(countsTowardBudget(estimated("aborted"))).toBe(false);
+		expect(countsTowardBudget(estimated("aborted"), { sent: true })).toBe(true);
+		expect(countsTowardBudget(estimated("failed"), { sent: true })).toBe(false);
+		expect(countsTowardBudget(estimated("failed"), { outputDelivered: true })).toBe(true);
+		expect(countsTowardBudget(usageRecord(NOW.toISOString(), 10, { status: "failed" }))).toBe(true);
+	});
+
+	test("the fixed clock decides which day a call is counted against", async () => {
+		const settings = createSettings();
+		await createUsage(settings).recordOperationUsage(usageParams({ usage: { input_tokens: 4, output_tokens: 1, total_tokens: 5 } }));
+		expect(settings.tokenUsageStats.totalsByDay).toEqual({ [getLocalDayKey(NOW)]: 5 });
+		expect(settings.tokenUsageStats.records[0].timestamp).toBe(NOW.toISOString());
+	});
+});
+
+describe("hard input limit", () => {
+	test("asks for confirmation from the threshold up, whatever the guardrail settings are", () => {
+		expect(evaluateHardInputLimit(HARD_INPUT_CONFIRM_TOKENS - 1)).toEqual({ confirm: false, reason: "" });
+		const over = evaluateHardInputLimit(HARD_INPUT_CONFIRM_TOKENS);
+		expect(over.confirm).toBe(true);
+		expect(over.reason).toContain("very large");
+		expect(evaluateHardInputLimit(HARD_INPUT_CONFIRM_TOKENS * 4).confirm).toBe(true);
+	});
+
+	test("ignores estimates that are not usable numbers", () => {
+		expect(evaluateHardInputLimit(Number.NaN).confirm).toBe(false);
+		expect(evaluateHardInputLimit(-5).confirm).toBe(false);
+		expect(evaluateHardInputLimit(Number.POSITIVE_INFINITY).confirm).toBe(false);
+	});
+
+	test("takes an explicit threshold", () => {
+		expect(evaluateHardInputLimit(1000, 500).confirm).toBe(true);
+		expect(evaluateHardInputLimit(400, 500).confirm).toBe(false);
+	});
+
+	test("the service uses the same fixed threshold with guardrails off", () => {
+		const usage = createUsage(createSettings({ usageGuardrailsEnabled: false }));
+		expect(usage.evaluateHardInputLimit(HARD_INPUT_CONFIRM_TOKENS).confirm).toBe(true);
+		expect(usage.evaluateHardInputLimit(1000).confirm).toBe(false);
 	});
 });

@@ -47,7 +47,9 @@ export class HistoryService {
 		const previousStore = settings.noteHistoryStore;
 		const existing = normalizedTurns.filter((item) => item.sourcePath !== turn.sourcePath);
 		const forNote = normalizedTurns.filter((item) => item.sourcePath === turn.sourcePath).concat(turn).slice(-settings.noteHistoryMaxTurnsPerNote);
-		settings.noteHistoryStore = { turns: [...existing, ...forNote].slice(-MAX_NOTE_HISTORY_TURNS) };
+		// Oldest first across all notes, so the global cap drops the oldest turns whichever note they belong to.
+		const merged = [...existing, ...forNote].sort((a, b) => timestampOf(a.createdAt) - timestampOf(b.createdAt));
+		settings.noteHistoryStore = { turns: merged.slice(-MAX_NOTE_HISTORY_TURNS) };
 		try {
 			await this.host.saveSettings();
 		} catch (error) {
@@ -132,8 +134,19 @@ export class HistoryService {
 		};
 		// Re-check after the file read: another queue action may have filled the queue meanwhile.
 		this.assertReviewQueueHasRoom(settings);
-		settings.reviewQueue = normalizeReviewQueueItems([...settings.reviewQueue, item], settings.reviewQueueMaxItems);
-		await this.host.saveSettings();
+		const previousQueue = settings.reviewQueue;
+		const nextQueue = normalizeReviewQueueItems([...previousQueue, item], settings.reviewQueueMaxItems);
+		settings.reviewQueue = nextQueue;
+		try {
+			await this.host.saveSettings();
+		} catch (error) {
+			// A failed write must not leave the item in memory: the caller reports the error and the user may try again,
+			// and the next successful save would otherwise write the item twice.
+			settings.reviewQueue = settings.reviewQueue === nextQueue
+				? previousQueue
+				: settings.reviewQueue.filter((queued) => queued.id !== item.id);
+			throw error;
+		}
 		return item;
 	}
 
@@ -196,4 +209,10 @@ export class HistoryService {
 
 function isSameOrInside(path: string, target: string): boolean {
 	return path === target || path.startsWith(`${target}/`);
+}
+
+/** Unparseable timestamps sort as the oldest, so they are the first to go. */
+function timestampOf(iso: string): number {
+	const parsed = Date.parse(iso);
+	return Number.isNaN(parsed) ? Number.MIN_SAFE_INTEGER : parsed;
 }
