@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseMarkdownHeadingSections, splitMarkdownFrontmatter } from "../src/output/applyMath";
+import { findSectionHiddenHeadings, parseMarkdownHeadingSections, splitMarkdownFrontmatter } from "../src/output/applyMath";
+import { spliceHeadingSectionBody } from "../src/output/sectionSplice";
 
 describe("parseMarkdownHeadingSections", () => {
 	test("builds nested heading paths", () => {
@@ -89,6 +90,36 @@ describe("splitMarkdownFrontmatter", () => {
 		expect(block.body).toBe("Body\r\nMore");
 	});
 
+	test("a reply that opens with a thematic break and has a second one is body, not frontmatter", () => {
+		const text = "---\n\n# New title\n\nIntro text\n\n---\n\n## Section\n\nMore";
+		expect(splitMarkdownFrontmatter(text)).toEqual({ exists: false, malformed: false, frontmatter: "", body: text, endLineExclusive: 0 });
+		const crlf = text.replace(/\n/g, "\r\n");
+		expect(splitMarkdownFrontmatter(crlf)).toEqual({ exists: false, malformed: false, frontmatter: "", body: crlf, endLineExclusive: 0 });
+	});
+
+	test("a block with no key, or one of only comments or list items, is not frontmatter", () => {
+		for (const middle of ["# Just a heading", "- one\n- two", "plain text line", "# a comment\n# another"]) {
+			const text = `---\n${middle}\n---\nBody`;
+			expect({ middle, exists: splitMarkdownFrontmatter(text).exists }).toEqual({ middle, exists: false });
+		}
+	});
+
+	test("keys, lists, comments, continuation lines and block scalars are frontmatter", () => {
+		const text = ["---", "title: \"Plan: Q3\"", "# a comment", "tags:", "  - a", "- b", "summary: |", "  Long text", "", "  more", "---", "Body"].join("\n");
+		expect(splitMarkdownFrontmatter(text)).toMatchObject({ exists: true, malformed: false, body: "Body" });
+	});
+
+	test("an unfenced diagram header with a title is read as frontmatter, which is why diagrams are always fenced", () => {
+		const block = splitMarkdownFrontmatter("---\ntitle: Plan\n---\nflowchart TD\n  A --> B");
+		expect(block).toMatchObject({ exists: true, body: "flowchart TD\n  A --> B" });
+	});
+
+	test("the YAML check can be turned off for a note's own frontmatter", () => {
+		const text = "---\nnot yaml at all\nstill not\n---\nBody";
+		expect(splitMarkdownFrontmatter(text).exists).toBe(false);
+		expect(splitMarkdownFrontmatter(text, { requireYaml: false })).toMatchObject({ exists: true, malformed: false, body: "Body" });
+	});
+
 	test("returns the note unchanged when there is no frontmatter", () => {
 		const block = splitMarkdownFrontmatter("Body only");
 		expect(block).toEqual({ exists: false, malformed: false, frontmatter: "", body: "Body only", endLineExclusive: 0 });
@@ -142,5 +173,95 @@ describe("parseMarkdownHeadingSections edge cases", () => {
 	test("single-line comments do not hide later headings", () => {
 		const lines = ["# A", "<!-- note -->", "%% note %%", "$$x$$", "# B"];
 		expect(parseMarkdownHeadingSections(lines.join("\n")).map((s) => s.title)).toEqual(["A", "B"]);
+	});
+});
+
+describe("parseMarkdownHeadingSections: fences nested in lists and quotes", () => {
+	const note = (indent: string, commentLine = "%% a comment"): string[] => [
+		"# A", "", "- step one", `${indent}\`\`\`mermaid`, `${indent}${commentLine}`, `${indent}graph TD`, `${indent}  X-->Y`, `${indent}\`\`\``, "",
+		"# B", "", "text B", "", "# C", "", "text C"
+	];
+
+	test.each([
+		["a tab", "\t"],
+		["four spaces", "    "],
+		["three spaces", "   "],
+		["two spaces", "  "]
+	])("a list-nested fence indented with %s and holding a %% comment does not swallow later headings", (_name: string, indent: string) => {
+		const lines = note(indent);
+		const sections = parseMarkdownHeadingSections(lines.join("\n"));
+		expect(sections.map((section) => section.title)).toEqual(["A", "B", "C"]);
+		expect(sections[0].endLineExclusive).toBe(lines.indexOf("# B"));
+	});
+
+	test.each([
+		["a MATLAB section comment", "%% Section 1"],
+		["an odd number of dollar signs", "$$ x"],
+		["an unclosed HTML comment", "<!-- start"]
+	])("%s inside a nested fence is code, not a block opener", (_name: string, line: string) => {
+		const sections = parseMarkdownHeadingSections(note("\t", line).join("\n"));
+		expect(sections.map((section) => section.title)).toEqual(["A", "B", "C"]);
+	});
+
+	test("a section Apply on such a note keeps every other section", () => {
+		const content = note("\t").join("\n");
+		const sectionA = parseMarkdownHeadingSections(content)[0];
+		const result = spliceHeadingSectionBody(content, sectionA, "REWRITTEN A").next;
+		expect(result).toContain("REWRITTEN A");
+		expect(result).toContain("# B\n\ntext B\n\n# C\n\ntext C");
+	});
+
+	test("quoted and callout fences with comments do not swallow later headings", () => {
+		const lines = ["# A", "> [!example]", "> ```mermaid", "> %% note", "> graph TD", "> ```", "", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((section) => section.title)).toEqual(["A", "B"]);
+	});
+
+	test("an over-indented comment line outside a fence is not a block opener", () => {
+		const lines = ["# A", "text", "    %% indented code, not a comment", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((section) => section.title)).toEqual(["A", "B"]);
+	});
+
+	test("a comment or math block opener still works at columns zero to three", () => {
+		const lines = ["# A", "   %%", "# hidden", "%%", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((section) => section.title)).toEqual(["A", "B"]);
+	});
+
+	test("a fence-looking line inside a comment does not open a fence", () => {
+		const lines = ["# A", "%%", "```js", "%%", "# B", "```", "# C"];
+		// The comment hides its fence line, so B is a heading; the later bare fence opens a real fence that hides C.
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((section) => section.title)).toEqual(["A", "B"]);
+	});
+
+	test("a list fence ends with its list item", () => {
+		const lines = ["# A", "- item", "  ```js", "  code", "# B"];
+		expect(parseMarkdownHeadingSections(lines.join("\n")).map((section) => section.title)).toEqual(["A", "B"]);
+	});
+});
+
+describe("findSectionHiddenHeadings", () => {
+	test("reports headings swallowed by an unclosed comment or math block inside the section's range", () => {
+		const lines = ["# A", "", "text", "", "%%", "", "# B", "", "text B"];
+		const content = lines.join("\n");
+		const sections = parseMarkdownHeadingSections(content);
+		expect(sections.map((section) => section.title)).toEqual(["A"]);
+		expect(sections[0].endLineExclusive).toBe(lines.length);
+		expect(findSectionHiddenHeadings(content, sections[0])).toEqual([6]);
+		expect(findSectionHiddenHeadings("# A\n\n$$\n## B\n", parseMarkdownHeadingSections("# A\n\n$$\n## B\n")[0])).toEqual([3]);
+		expect(findSectionHiddenHeadings("# A\n<!--\n# B\n", parseMarkdownHeadingSections("# A\n<!--\n# B\n")[0])).toEqual([2]);
+	});
+
+	test("reports nothing for closed comments, code and ordinary sections", () => {
+		for (const content of ["# A\n%%\n# hidden\n%%\n# B\n", "# A\n```\n# code\n```\n", "# A\ntext\n# B\nmore\n", "# A\n- item\n\t```mermaid\n\t%% x\n\t# not a heading\n\t```\n"]) {
+			for (const section of parseMarkdownHeadingSections(content)) {
+				expect({ content, hidden: findSectionHiddenHeadings(content, section) }).toEqual({ content, hidden: [] });
+			}
+		}
+	});
+
+	test("only counts hidden headings inside the section asked about", () => {
+		const content = "# A\n\ntext\n\n# B\n\n%%\n# hidden\n";
+		const [first, second] = parseMarkdownHeadingSections(content);
+		expect(findSectionHiddenHeadings(content, first)).toEqual([]);
+		expect(findSectionHiddenHeadings(content, second)).toEqual([7]);
 	});
 });

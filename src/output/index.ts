@@ -1,3 +1,4 @@
+export * from "./applyFrontmatter";
 export * from "./applyGuards";
 export * from "./applyMath";
 export * from "./paths";
@@ -5,3 +6,6 @@ export * from "./resultBacklink";
 export * from "./sectionSplice";
 export * from "./templates";
 export * from "./conversationExport";
+export { endsInsideOpenFence } from "../safety/markdownFences";
+export { planRangeEdit } from "../safety/rangeEdit";
+export { prepareModelOutputForWrite } from "../safety/writePath";

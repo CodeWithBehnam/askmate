@@ -1,4 +1,8 @@
+import { closeOpenFence } from "../safety/markdownFences";
+import { prepareModelOutputForWrite } from "../safety/writePath";
 import type { ChatMessage } from "../shared/types";
+
+export { closeOpenFence };
 
 export interface ConversationExportMeta {
 	title: string;
@@ -8,6 +12,11 @@ export interface ConversationExportMeta {
 	exportedAtLabel?: string;
 	providerName?: string;
 	model?: string;
+	/**
+	 * Builds the link to a source note, so the export can follow the user's link settings (Obsidian's
+	 * generateMarkdownLink). When it is absent, or returns null, a wikilink to the path is written.
+	 */
+	linkFor?: (path: string) => string | null;
 }
 
 const DEFAULT_EXPORT_TITLE = "AskMate conversation";
@@ -40,37 +49,19 @@ function describeMessageModel(message: ChatMessage, fallbackModel?: string): str
 	return model ? ` (${toSingleLine(model)})` : "";
 }
 
-/**
- * Appends a closing fence when the text ends inside a code fence, so one truncated reply cannot turn every later
- * section of the exported note into code. Follows CommonMark: a closing fence uses the opening character, is at
- * least as long, and has nothing but whitespace after it.
- */
-export function closeOpenFence(text: string): string {
-	const open = text.split(/\r?\n/).reduce<string | null>((fence, line) => {
-		const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-		if (!marker) {
-			return fence;
-		}
-		if (fence === null) {
-			// A backtick fence's info string cannot contain backticks, so "``` inline" text is not an opener.
-			return marker[1][0] === "`" && marker[2].includes("`") ? null : marker[1];
-		}
-		return marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim() ? null : fence;
-	}, null);
-	return open === null ? text : `${text}\n${open}`;
-}
-
-function renderTurn(message: ChatMessage, fallbackModel?: string): string {
+function renderTurn(message: ChatMessage, meta: ConversationExportMeta): string {
+	const fallbackModel = meta.model;
 	const lines: string[] = [];
 	if (message.role === "user") {
 		lines.push("## You", "", closeOpenFence(message.text.trim()));
-		const link = message.sourcePath ? wikilink(message.sourcePath) : null;
+		const link = message.sourcePath ? (meta.linkFor?.(message.sourcePath) ?? wikilink(message.sourcePath)) : null;
 		if (link) {
 			lines.push("", `Source note: ${link}`);
 		}
 		return lines.join("\n");
 	}
-	lines.push(`## AskMate${describeMessageModel(message, fallbackModel)}`, "", closeOpenFence(message.text.trim()));
+	// Assistant text is model output, and the exported note is vault content other plugins will read and run.
+	lines.push(`## AskMate${describeMessageModel(message, fallbackModel)}`, "", closeOpenFence(prepareModelOutputForWrite(message.text.trim()).text));
 	if (message.image) {
 		const safePath = message.imagePath && !/[\][|\n]/.test(message.imagePath) ? message.imagePath : null;
 		lines.push("", safePath ? `![[${safePath}]]` : "_Image generated in AskMate and not saved to the vault._");
@@ -82,7 +73,8 @@ function renderTurn(message: ChatMessage, fallbackModel?: string): string {
 }
 
 /**
- * Turns the sidebar transcript into a note body. Assistant Markdown is kept verbatim, source notes become links,
+ * Turns the sidebar transcript into a note body. Assistant Markdown is defused for writing (remote images, plugin code
+ * blocks, template tags and other active constructs are neutralised) but otherwise kept as written, source notes become links,
  * and incomplete replies and unsaved images are marked. Error and status lines are omitted.
  */
 export function conversationToMarkdown(messages: readonly ChatMessage[], meta: ConversationExportMeta): string {
@@ -103,7 +95,7 @@ export function conversationToMarkdown(messages: readonly ChatMessage[], meta: C
 		meta.providerName && meta.model ? `${meta.providerName}, ${meta.model}` : meta.model ?? meta.providerName ?? ""
 	].filter(Boolean);
 	const header = [...frontmatter, "", `# ${title.replace(/^#+\s*/, "")}`, ...(details.length > 0 ? ["", details.join(" · ")] : [])];
-	const body = turns.map((turn) => renderTurn(turn, meta.model));
+	const body = turns.map((turn) => renderTurn(turn, meta));
 	return `${[header.join("\n"), ...body].join("\n\n---\n\n")}\n`;
 }
 

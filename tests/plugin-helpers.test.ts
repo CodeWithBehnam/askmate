@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyTextInsertion, planResultBacklinkInsertion } from "../src/output/resultBacklink";
+import { applyTextInsertion, planResultBacklink, planResultBacklinkInsertion } from "../src/output/resultBacklink";
 import { getHeadingSectionCore, isSameNoteText, spliceHeadingSectionBody } from "../src/output/sectionSplice";
 import { appendWorkflowUserPreferences } from "../src/output/templates";
 import { parseMarkdownHeadingSections } from "../src/output/applyMath";
@@ -39,6 +39,38 @@ describe("planResultBacklinkInsertion", () => {
 
 	test("keeps CRLF line endings", () => {
 		expect(insertBacklink("Body\r\n")).toBe(`Body\r\n\r\n## AskMate results\r\n\r\n${BULLET}\r\n`);
+	});
+
+	test("never lands inside a code fence that is still open at the end of the note", () => {
+		const unclosed = "# Note\n\n```mermaid\ngraph TD\n A-->B\n";
+		expect(planResultBacklinkInsertion(unclosed, BULLET)).toBeNull();
+		expect(planResultBacklink(unclosed, BULLET)).toEqual({ kind: "inside-open-fence" });
+		expect(insertBacklink(unclosed)).toBe(unclosed);
+		expect(planResultBacklink("```js\r\ncode\r\n", BULLET)).toEqual({ kind: "inside-open-fence" });
+		expect(planResultBacklink("   ~~~\ncode", BULLET)).toEqual({ kind: "inside-open-fence" });
+	});
+
+	test("a fence open inside a quote or list item ends with it, so the blank-line separated heading is safe", () => {
+		const list = "- item\n\t```js\n\tcode\n";
+		expect(insertBacklink(list)).toBe(`${list}\n## AskMate results\n\n${BULLET}\n`);
+		const quote = "> ```js\n> code";
+		expect(insertBacklink(quote)).toBe(`${quote}\n\n## AskMate results\n\n${BULLET}\n`);
+	});
+
+	test("adds the backlink after a fence that is closed, and keeps reporting a present bullet", () => {
+		expect(planResultBacklink("```js\ncode\n```\n", BULLET).kind).toBe("insert");
+		expect(insertBacklink("```js\ncode\n```\n")).toBe(`\`\`\`js\ncode\n\`\`\`\n\n## AskMate results\n\n${BULLET}\n`);
+		expect(planResultBacklink(`## AskMate results\n\n${BULLET}\n`, BULLET)).toEqual({ kind: "present" });
+	});
+
+	test("an existing heading before an open fence still takes the bullet, above the fence", () => {
+		const note = "## AskMate results\n\n- [[old]]\n\n```js\nunfinished\n";
+		expect(insertBacklink(note)).toBe(`## AskMate results\n\n${BULLET}\n- [[old]]\n\n\`\`\`js\nunfinished\n`);
+	});
+
+	test("a heading inside a tab-indented list fence is not the results heading", () => {
+		const note = "- item\n\t```md\n\t## AskMate results\n\t```\n";
+		expect(insertBacklink(note)).toBe(`${note}\n## AskMate results\n\n${BULLET}\n`);
 	});
 });
 

@@ -61,6 +61,25 @@ describe("awaitWithAbortAndTimeout", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	});
 
+	test("a pre-aborted signal does not leak an unhandled rejection when the abandoned request fails later", async () => {
+		const unhandled: unknown[] = [];
+		const record = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", record);
+		try {
+			const pending = deferred<string>();
+			const controller = new AbortController();
+			controller.abort();
+			await expect(awaitWithAbortAndTimeout(pending.promise, { abortSignal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+			pending.reject(new Error("provider failed after abort"));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", record);
+		}
+	});
+
 	test("rejects at once when the signal is already aborted", async () => {
 		const controller = new AbortController();
 		controller.abort();
@@ -107,6 +126,16 @@ describe("run phases and identity", () => {
 		const generating = withRunPhase(run, "generating");
 		expect(generating.id).toBe(7);
 		expect(generating.phase).toBe("generating");
+	});
+
+	test("withRunPhase follows the phase union of the run it is given, so new phases need no change here", () => {
+		type ToolPhase = ActiveRun["phase"] | "tool-calling" | "awaiting-approval";
+		const run: Omit<ActiveRun, "phase"> & { phase: ToolPhase } = { ...activeRun(9), phase: "generating" };
+		const calling = withRunPhase(run, "tool-calling");
+		const waiting = withRunPhase(calling, "awaiting-approval");
+		expect(calling.phase).toBe("tool-calling");
+		expect(waiting).toMatchObject({ id: 9, phase: "awaiting-approval" });
+		expect(run.phase).toBe("generating");
 	});
 });
 

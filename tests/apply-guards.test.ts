@@ -81,6 +81,44 @@ describe("planImageInsertion", () => {
 	});
 });
 
+describe("planImageInsertion: fences and line endings", () => {
+	test("an inline triple-backtick line is not a fence", () => {
+		const text = "First paragraph.\n\n```inline``` is how you mark a span.\n\nSecond paragraph.\n\nThird paragraph.";
+		expect(insert(text, text.indexOf("Second"))).toBe(`First paragraph.\n\n\`\`\`inline\`\`\` is how you mark a span.\n\nSecond paragraph.\n\n${EMBED}\n\nThird paragraph.`);
+	});
+
+	test("a cursor inside a tab-indented list fence with a blank line moves after the closing fence", () => {
+		const text = "- item\n\t```mermaid\n\tgraph TD\n\n\t  A-->B\n\t```\n\nAfter";
+		const result = insert(text, text.indexOf("A-->B"));
+		expect(result).toBe(`- item\n\t\`\`\`mermaid\n\tgraph TD\n\n\t  A-->B\n\t\`\`\`\n\n${EMBED}\n\nAfter`);
+		expect(result.indexOf(EMBED)).toBeGreaterThan(result.lastIndexOf("```"));
+	});
+
+	test("a four-space list fence and a quoted fence are handled the same way", () => {
+		const four = "- item\n    ```mermaid\n    graph TD\n\n    A-->B\n    ```\n\nAfter";
+		expect(insert(four, four.indexOf("A-->B"))).toBe(`- item\n    \`\`\`mermaid\n    graph TD\n\n    A-->B\n    \`\`\`\n\n${EMBED}\n\nAfter`);
+		const quoted = "> ```js\n> a\n>\n> b\n> ```\n\nAfter";
+		expect(insert(quoted, quoted.indexOf("> b") + 2)).toBe(`> \`\`\`js\n> a\n>\n> b\n> \`\`\`\n\n${EMBED}\n\nAfter`);
+	});
+
+	test("a CRLF note gets CRLF separators and its line-ending pairs stay whole", () => {
+		const text = "One\r\n\r\nTwo\r\n\r\nThree";
+		expect(insert(text, 0)).toBe(`One\r\n\r\n${EMBED}\r\n\r\nTwo\r\n\r\nThree`);
+		const fenced = "Intro\r\n\r\n```ts\r\nlet a;\r\n```\r\n\r\nOutro";
+		expect(insert(fenced, fenced.indexOf("let"))).toBe(`Intro\r\n\r\n\`\`\`ts\r\nlet a;\r\n\`\`\`\r\n\r\n${EMBED}\r\n\r\nOutro`);
+		expect(insert("Only line\r\n", 9)).toBe(`Only line\r\n\r\n${EMBED}\r\n`);
+	});
+
+	test("an insertion at the selection end or the note end stays out of a fence, and says when it cannot", () => {
+		const closed = "Para one is here. Para two.\n\n```js\ncode\n```\n";
+		expect(insert(closed, closed.indexOf("Para two") + 8)).toBe(`Para one is here. Para two.\n\n${EMBED}\n\n\`\`\`js\ncode\n\`\`\`\n`);
+		const open = "Intro\n\n```\ncode";
+		const plan = planImageInsertion(open, open.length, EMBED);
+		expect(plan.insideOpenFence).toBe(true);
+		expect(planImageInsertion(closed, 0, EMBED).insideOpenFence).toBeUndefined();
+	});
+});
+
 describe("chooseSmartResultFolder", () => {
 	test("adds the AskMate folder under a normal parent", () => {
 		expect(chooseSmartResultFolder("Projects")).toBe("Projects/AskMate");

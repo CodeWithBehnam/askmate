@@ -1,4 +1,5 @@
 import { stripImageReferences } from "../requests/promptSafety";
+import { planBlockInsertion, type BlockInsertionPlan } from "../safety/markdownFences";
 import type { RequestPrivacyOptions } from "../shared/types";
 
 /**
@@ -29,98 +30,18 @@ export function isOriginalSelectionNote(identitySourcePath: string, targetFile: 
 	return (targetFile as { path?: string }).path === identitySourcePath;
 }
 
-export type ImageInsertionPlan = { offset: number; text: string };
+export type ImageInsertionPlan = BlockInsertionPlan;
 
-const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
-
-type Line = { start: number; end: number; text: string };
-
-function splitLines(text: string): Line[] {
-	const lines: Line[] = [];
-	let start = 0;
-	while (start <= text.length) {
-		const newline = text.indexOf("\n", start);
-		const end = newline === -1 ? text.length : newline;
-		lines.push({ start, end, text: text.slice(start, end).replace(/\r$/, "") });
-		if (newline === -1) {
-			break;
-		}
-		start = newline + 1;
-	}
-	return lines;
-}
-
-/** Offset just after the frontmatter block, or 0 when the note has none. */
-function frontmatterEnd(lines: Line[]): number {
-	if (lines[0]?.text.trimEnd() !== "---") {
-		return 0;
-	}
-	const close = lines.findIndex((line, index) => index > 0 && /^(---|\.\.\.)\s*$/.test(line.text));
-	return close === -1 ? 0 : lines[close].end;
-}
+export { planBlockInsertion };
 
 /**
  * Plans where an image embed can go for a cursor position without splitting a sentence, entering frontmatter or
- * landing inside a code fence. The embed goes after the paragraph or block the cursor is in, separated by blank lines.
+ * landing inside a code fence. The embed goes after the paragraph or block the cursor is in, separated by blank lines,
+ * in the note's own line endings. Callers that insert at a selection end or at the end of a note should plan through
+ * this too, so the embed cannot split a sentence or land in a trailing unclosed fence unnoticed.
  */
 export function planImageInsertion(text: string, cursorOffset: number, embed: string): ImageInsertionPlan {
-	const lines = splitLines(text);
-	const clamped = Math.max(0, Math.min(text.length, cursorOffset));
-	const frontmatterBoundary = frontmatterEnd(lines);
-	let offset = Math.max(clamped, frontmatterBoundary);
-	let lineIndex = lines.findIndex((line) => offset >= line.start && offset <= line.end);
-	if (lineIndex === -1) {
-		lineIndex = lines.length - 1;
-	}
-
-	const fenceBounds = findFenceContaining(lines, lineIndex, frontmatterBoundary);
-	if (fenceBounds !== null) {
-		lineIndex = fenceBounds.closeIndex;
-		offset = lines[lineIndex].end;
-	} else if (offset === frontmatterBoundary && frontmatterBoundary > 0 && clamped <= frontmatterBoundary) {
-		// Frontmatter is its own block, so the embed follows it directly.
-		offset = frontmatterBoundary;
-	} else if (lines[lineIndex].text.trim() !== "") {
-		let last = lineIndex;
-		while (last + 1 < lines.length && lines[last + 1].text.trim() !== "" && !FENCE_PATTERN.test(lines[last + 1].text)) {
-			last += 1;
-		}
-		offset = lines[last].end;
-	} else {
-		offset = lines[lineIndex].start;
-	}
-
-	const before = text.slice(0, offset);
-	const rest = text.slice(offset);
-	const prefix = before === "" || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-	const suffix = rest.startsWith("\n\n") ? "" : "\n";
-	return { offset, text: `${prefix}${embed}${suffix}` };
-}
-
-/** Finds the fenced block that contains `lineIndex` (including its fence lines). An unclosed fence runs to the end. */
-function findFenceContaining(lines: Line[], lineIndex: number, frontmatterBoundary: number): { closeIndex: number } | null {
-	let open: { marker: string; length: number; openIndex: number } | null = null;
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index];
-		if (frontmatterBoundary > 0 && line.end <= frontmatterBoundary) {
-			continue;
-		}
-		const match = FENCE_PATTERN.exec(line.text);
-		if (open === null) {
-			if (match) {
-				open = { marker: match[1][0], length: match[1].length, openIndex: index };
-			}
-			continue;
-		}
-		const closes = match !== null && match[1][0] === open.marker && match[1].length >= open.length && line.text.trim() === match[1];
-		if (closes) {
-			if (lineIndex >= open.openIndex && lineIndex <= index) {
-				return { closeIndex: index };
-			}
-			open = null;
-		}
-	}
-	return open !== null && lineIndex >= open.openIndex ? { closeIndex: lines.length - 1 } : null;
+	return planBlockInsertion(text, cursorOffset, embed);
 }
 
 /** Result folder for smart placement: reuses the parent when it already is the AskMate folder, so it never nests. */

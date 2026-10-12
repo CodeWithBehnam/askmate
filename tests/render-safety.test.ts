@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
 	classifyImagePreviewSource,
+	classifyLinkDestination,
 	describeDataImage,
 	extractImageEmbedTargets,
 	isSafeImageDestination,
-	sanitizeModelMarkdown
+	sanitizeModelMarkdown,
+	validateMermaidSource
 } from "../src/ui/sidebar/renderSafety";
 
 const ZWSP = "\u200B";
@@ -265,10 +267,14 @@ describe("sanitizeModelMarkdown: code-block processors", () => {
 	});
 
 	test("keeps plain highlighting languages and extra info", () => {
-		for (const language of ["js", "TypeScript", "python", "bash", "json", "yaml", "sql", "html", "css", "c++", "text", "mermaid", "math"]) {
+		for (const language of ["js", "TypeScript", "python", "bash", "json", "yaml", "sql", "html", "css", "c++", "text", "math"]) {
 			const text = `\`\`\`${language}\nbody\n\`\`\``;
 			expect(sanitizeModelMarkdown(text)).toBe(text);
 		}
+		// Mermaid is judged by the structural guard, so it needs a real diagram body to stay a diagram.
+		const diagram = "```mermaid\nflowchart TD\n  A --> B\n```";
+		expect(sanitizeModelMarkdown(diagram)).toBe(diagram);
+		expect(sanitizeModelMarkdown("```mermaid\nbody\n```")).toBe("```text\nbody\n```");
 		expect(sanitizeModelMarkdown("```dataviewjs title=\"x\"\nbody\n```")).toBe("```text title=\"x\"\nbody\n```");
 	});
 
@@ -292,8 +298,11 @@ describe("sanitizeModelMarkdown: code-block processors", () => {
 		for (const body of bodies) {
 			expect(sanitizeModelMarkdown(`\`\`\`mermaid\nflowchart TD\n${body}\n\`\`\``)).toStartWith("```text\n");
 		}
-		expect(sanitizeModelMarkdown("> ```mermaid\n> A --> B\n> ```\n\nSee https://example.com")).toStartWith("> ```text");
-		expect(sanitizeModelMarkdown("```mermaid\nA --> B\n```\n\nSee https://example.com")).toStartWith("```mermaid");
+		// A fence is judged on its own lines only: prose after its closer, in any container, never downgrades it.
+		expect(sanitizeModelMarkdown("> ```mermaid\n> flowchart TD\n>   A --> B\n> ```\n\nSee https://example.com")).toStartWith("> ```mermaid");
+		expect(sanitizeModelMarkdown("```mermaid\nflowchart TD\n  A --> B\n```\n\nSee https://example.com")).toStartWith("```mermaid");
+		expect(sanitizeModelMarkdown("- step\n  ```mermaid\n  flowchart TD\n    A --> B\n  ```\n\n  See https://example.com")).toContain("```mermaid");
+		expect(sanitizeModelMarkdown("> ```mermaid\n> flowchart TD\n>   A@{ img: \"https://evil.example/x.png\" }\n> ```")).toStartWith("> ```text");
 	});
 
 	test("relabels fences hidden inside HTML blocks too", () => {
@@ -439,5 +448,55 @@ describe("sanitizeModelMarkdown: partial streamed replies", () => {
 		const partial = sanitizeModelMarkdown("![x](https://evil.test/a.png");
 		expect(partial).not.toContain("![x](https://evil.test/a.png");
 		expect(sanitizeModelMarkdown("![x](https://evil.test/a.png)")).not.toBe("![x](https://evil.test/a.png)");
+	});
+});
+
+describe("renderSafety entry point: guards re-exported for the view", () => {
+	const fence = (body: string): string => `\`\`\`mermaid\n${body}\n\`\`\``;
+
+	test("the five confirmed Mermaid bypass payloads and a plain URL are relabelled as text", () => {
+		const host = "attacker.example";
+		const bodies = [
+			`%%{init: {"themeCSS": ".x{background-image:url(\\000068ttp\\00003a\\00002f\\00002f${host}/x)}"}}%%\nflowchart TD\n  A --> B`,
+			`---\nconfig:\n  themeCSS: ".x{background-image:url(\\000068ttp\\00003a\\00002f\\00002f${host}/x)}"\n---\nflowchart TD\n  A --> B`,
+			`%%{init: {"fontFamily": "x; background-image: url(\\000068ttp\\00003a\\00002f\\00002f${host}/x)"}}%%\nflowchart TD\n  A --> B`,
+			`flowchart TD\n  A@{ img: "http\\x3a\\U0000002f\\U0000002f${host}/x", label: "x" }`,
+			`flowchart TD\n  A["<img src='#104;ttp#58;#47;#47;${host}#58;8080/x'>"]`,
+			`flowchart TD\n  A["https://${host}/x"] --> B`
+		];
+		for (const body of bodies) {
+			expect(sanitizeModelMarkdown(fence(body))).toStartWith("```text\n");
+			expect(validateMermaidSource(body).ok).toBe(false);
+		}
+	});
+
+	test("diagrams with scheme words, slashes in prose and FTP or WS participants still render", () => {
+		for (const body of [
+			"flowchart TD\n  A[file: config.yaml] --> B[Parser]",
+			"sequenceDiagram\n  participant FTP\n  participant WS\n  FTP->>WS: ws: subscribe",
+			"flowchart LR\n  A[client // server] --> B"
+		]) {
+			expect(sanitizeModelMarkdown(fence(body))).toBe(fence(body));
+		}
+	});
+
+	test("a tag with its src behind 2,100 characters of attributes is still escaped", () => {
+		const tag = `<input type="image" title="${"a".repeat(2100)}" src="https://attacker.example/p.png">`;
+		expect(sanitizeModelMarkdown(tag)).toStartWith("&lt;input");
+	});
+
+	test("links to other apps become inert text while http and vault links stay", () => {
+		for (const destination of ["obsidian://new?file=a", "file:///etc/passwd", "mailto:a@b.c", "tel:+441234", "javascript:alert(1)", "data:text/html,x", "vscode://file/x", "obsidian&#58;//open"]) {
+			expect(classifyLinkDestination(destination)).toBe("blocked");
+			expect(sanitizeModelMarkdown(`[open](${destination})`)).not.toContain("](");
+		}
+		expect(sanitizeModelMarkdown("[a](https://example.com) [b](Note.md)")).toBe("[a](https://example.com) [b](Note.md)");
+	});
+
+	test("8,000 unterminated image destinations are handled in under 200 ms", () => {
+		const started = performance.now();
+		const result = sanitizeModelMarkdown("![a](b".repeat(8000));
+		expect(performance.now() - started).toBeLessThan(200);
+		expect(result).not.toMatch(/(?<!\\)!\[/);
 	});
 });

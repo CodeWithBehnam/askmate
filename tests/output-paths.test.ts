@@ -37,6 +37,49 @@ describe("sanitizeFileName", () => {
 		expect(sanitizeFileName("   ")).toBe("AskMate Response");
 		expect(sanitizeFileName("", "Image")).toBe("Image");
 	});
+
+	test("removes zero-width, bidi and other format characters", () => {
+		expect(sanitizeFileName("report\u202Efdp")).toBe("reportfdp");
+		expect(sanitizeFileName("a\u200Bb\u200Dc\u2060d\uFEFFe\u00ADf")).toBe("abcdef");
+		expect(sanitizeFileName("tag\u{E0041}\u{E0042}s")).toBe("tags");
+		expect(sanitizeFileName("\u202E\u200B\u2066")).toBe("AskMate Response");
+		expect(sanitizeFileName("mixed \u2067text\u2069 here")).toBe("mixed text here");
+	});
+
+	test("keeps scripts and emoji sequences that are not control characters", () => {
+		expect(sanitizeFileName("\u0645\u0631\u0648\u0631 \u0631\u0648\u0632\u0627\u0646\u0647")).toBe("\u0645\u0631\u0648\u0631 \u0631\u0648\u0632\u0627\u0646\u0647");
+		expect(sanitizeFileName("\u6587\u4EF6\u540D")).toBe("\u6587\u4EF6\u540D");
+	});
+});
+
+describe("file name byte limits", () => {
+	const encoder = new TextEncoder();
+	const bytes = (text: string): number => encoder.encode(text).length;
+	const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
+	test.each([
+		["80 CJK characters", "\u6F22".repeat(80)],
+		["80 emoji", "\u{1F600}".repeat(80)],
+		["a long mixed title", `${"\u6F22\u{1F600}a".repeat(40)}`],
+		["80 accented letters", "\u00E9".repeat(80)]
+	])("a title of %s still makes a file name under 255 bytes with a stamp, an attempt number and an extension", (_name: string, title: string) => {
+		const base = sanitizeFileName(title);
+		expect(bytes(base)).toBeLessThanOrEqual(200);
+		expect(Array.from(base).length).toBeLessThanOrEqual(80);
+		const candidate = buildUniquePathCandidate("AskMate/Results", base, "2026-10-12 1200", "md", 12);
+		expect(bytes(lastSegment(candidate))).toBeLessThanOrEqual(255);
+		expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(base)).toBe(false);
+	});
+
+	test("short names and the 80 code point cap are unchanged", () => {
+		expect(sanitizeFileName("Plan for Q3")).toBe("Plan for Q3");
+		expect(Array.from(sanitizeFileName("a".repeat(120)))).toHaveLength(80);
+	});
+
+	test("a byte budget can be given, and trailing dots left by the cut are dropped", () => {
+		expect(sanitizeFileName("abc.....def", "x", 80, 7)).toBe("abc");
+		expect(bytes(sanitizeFileName("\u6F22\u6F22\u6F22\u6F22", "x", 80, 7))).toBeLessThanOrEqual(7);
+	});
 });
 
 describe("sanitizePathTemplateValue", () => {

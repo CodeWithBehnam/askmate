@@ -5,7 +5,6 @@ import type {
 	DraftRetrySnapshot,
 	MutationOutcome,
 	RetryRequestSnapshot,
-	RunPhase,
 	RunRequestOptions,
 	SelectionIdentity,
 	SelectionResolution
@@ -25,6 +24,8 @@ export function awaitWithAbortAndTimeout<T>(
 ): Promise<T> {
 	const { abortSignal, timeoutMs, timeoutMessage = "Request timed out." } = options;
 	if (abortSignal?.aborted) {
+		// The request is abandoned here, so a rejection that arrives later must not surface as an unhandled one.
+		void request.then(undefined, () => undefined);
 		return Promise.reject(createAbortError());
 	}
 
@@ -64,7 +65,8 @@ export function canRunContinue(activeRun: ActiveRun | null, run: ActiveRun, isCl
 	return !isClosed && !run.abortController.signal.aborted && isRunIdentityCurrent(activeRun, run);
 }
 
-export function withRunPhase(run: ActiveRun, phase: RunPhase): ActiveRun {
+/** Moves a run to another phase. Generic over the run's own phase union, so added phases need no change here. */
+export function withRunPhase<TRun extends { phase: string }>(run: TRun, phase: TRun["phase"]): TRun {
 	return { ...run, phase };
 }
 

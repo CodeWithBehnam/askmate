@@ -1,11 +1,5 @@
+import { createFenceStepper } from "../safety/markdownFences";
 import type { FrontmatterBlock, MarkdownHeadingSection } from "../shared/types";
-
-const FENCE_OPEN_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-
-interface OpenFence {
-	char: string;
-	length: number;
-}
 
 function getFrontmatterEndLine(lines: string[]): number {
 	if (lines[0]?.trim() !== "---") {
@@ -17,27 +11,6 @@ function getFrontmatterEndLine(lines: string[]): number {
 		}
 	}
 	return 0;
-}
-
-function readFenceOpen(line: string): OpenFence | null {
-	const match = line.match(FENCE_OPEN_PATTERN);
-	if (!match) {
-		return null;
-	}
-	const fence = match[1];
-	// CommonMark: a backtick fence's info string cannot contain backticks, otherwise the line is inline code.
-	if (fence[0] === "`" && match[2].includes("`")) {
-		return null;
-	}
-	return { char: fence[0], length: fence.length };
-}
-
-function closesFence(line: string, fence: OpenFence): boolean {
-	const trimmed = line.trim();
-	if (!/^ {0,3}(`{3,}|~{3,})\s*$/.test(line)) {
-		return false;
-	}
-	return trimmed[0] === fence.char && trimmed.length >= fence.length;
 }
 
 const ATX_HEADING_PATTERN = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
@@ -57,9 +30,16 @@ function countOccurrences(line: string, token: string): number {
 	return line.split(token).length - 1;
 }
 
-/** Returns the opener of a multi-line comment or math block that starts on this line, "none" if it opens and closes here, or null. */
+/**
+ * Returns the opener of a multi-line comment or math block that starts on this line, "none" if it opens and closes here,
+ * or null. An opener sits at column zero to three: a more indented line is code, not a comment.
+ */
 function readBlockOpen(line: string): BlockOpener | "none" | null {
-	const trimmed = line.trim();
+	const unindented = line.replace(/^ {0,3}/, "");
+	if (unindented.startsWith(" ") || unindented.startsWith("\t")) {
+		return null;
+	}
+	const trimmed = unindented.trim();
 	if (trimmed.startsWith("<!--")) {
 		return trimmed.indexOf("-->", 4) === -1 ? "html-comment" : "none";
 	}
@@ -83,12 +63,21 @@ function closesBlock(line: string, opener: BlockOpener): boolean {
 	}
 }
 
-export function parseMarkdownHeadingSections(markdown: string): MarkdownHeadingSection[] {
+const ATX_HEADING_TEXT_PATTERN = /^ {0,3}#{1,6}[ \t]+\S/;
+
+interface HeadingScan {
+	sections: MarkdownHeadingSection[];
+	/** Lines that look like headings but sit inside a comment or math block that never closes. */
+	hiddenHeadingLines: number[];
+}
+
+function scanHeadings(markdown: string): HeadingScan {
 	const lines = markdown.split(/\r?\n/);
 	const sections: MarkdownHeadingSection[] = [];
 	const stack: MarkdownHeadingSection[] = [];
-	let openFence: OpenFence | null = null;
+	const fences = createFenceStepper();
 	let openBlock: BlockOpener | null = null;
+	let headingLikeInBlock: number[] = [];
 	// First line of the paragraph that directly precedes the current line, or -1 when there is none.
 	let paragraphStart = -1;
 
@@ -117,24 +106,21 @@ export function parseMarkdownHeadingSections(markdown: string): MarkdownHeadingS
 		stack.push(section);
 	};
 
-	// Lines inside YAML frontmatter, fenced code or comments and math blocks are not headings.
+	// Lines inside YAML frontmatter, fenced code or comments and math blocks are not headings. A comment or math block
+	// is opaque, so its lines never reach the fence tracker, and a fence is opaque to comment and math openers.
 	for (let lineIndex = getFrontmatterEndLine(lines); lineIndex < lines.length; lineIndex += 1) {
 		const line = lines[lineIndex];
-		if (openFence) {
-			if (closesFence(line, openFence)) {
-				openFence = null;
-			}
-			continue;
-		}
 		if (openBlock) {
+			if (ATX_HEADING_TEXT_PATTERN.test(line)) {
+				headingLikeInBlock.push(lineIndex);
+			}
 			if (closesBlock(line, openBlock)) {
 				openBlock = null;
+				headingLikeInBlock = [];
 			}
 			continue;
 		}
-		const fence = readFenceOpen(line);
-		if (fence) {
-			openFence = fence;
+		if (fences.step(line).state !== "none") {
 			paragraphStart = -1;
 			continue;
 		}
@@ -168,10 +154,55 @@ export function parseMarkdownHeadingSections(markdown: string): MarkdownHeadingS
 		}
 	}
 
-	return sections;
+	return { sections, hiddenHeadingLines: openBlock ? headingLikeInBlock : [] };
 }
 
-export function splitMarkdownFrontmatter(markdown: string): FrontmatterBlock {
+export function parseMarkdownHeadingSections(markdown: string): MarkdownHeadingSection[] {
+	return scanHeadings(markdown).sections;
+}
+
+/**
+ * Lines inside `section` that look like headings but were swallowed by an unclosed comment or math block. Such a
+ * section reaches the end of the note, so replacing it would delete the headings after it: callers should force a
+ * preview whenever this is not empty.
+ */
+export function findSectionHiddenHeadings(markdown: string, section: MarkdownHeadingSection): number[] {
+	return scanHeadings(markdown).hiddenHeadingLines.filter((line) => line > section.headingLine && line < section.endLineExclusive);
+}
+
+export interface FrontmatterSplitOptions {
+	/**
+	 * Accept the leading block as frontmatter only when every non-blank line looks like YAML. This is the default, so a
+	 * reply that opens with a thematic break is not mistaken for frontmatter. Pass false for a note's own frontmatter,
+	 * which must be preserved even when it is not valid YAML.
+	 */
+	requireYaml?: boolean;
+}
+
+// A mapping key, optionally quoted. Keys may hold spaces ("date created"), but not start with a list dash or comment mark.
+const YAML_KEY_PATTERN = /^(?:"[^"]*"|'[^']*'|[^\s#:"'-][^:]*?):(?:\s|$)/;
+
+/** True for a block of lines that reads as a YAML mapping: a key first, then keys, list items, comments and indented lines. */
+function looksLikeYaml(block: readonly string[]): boolean {
+	const meaningful = block.filter((line) => line.trim() !== "");
+	if (meaningful.length === 0) {
+		return true;
+	}
+	let sawKey = false;
+	for (const line of meaningful) {
+		if (/^\s*#/.test(line)) {
+			continue;
+		}
+		if (YAML_KEY_PATTERN.test(line)) {
+			sawKey = true;
+		} else if (!sawKey || !(/^\s+\S/.test(line) || /^-(?:\s|$)/.test(line))) {
+			return false;
+		}
+	}
+	return sawKey;
+}
+
+export function splitMarkdownFrontmatter(markdown: string, options: FrontmatterSplitOptions = {}): FrontmatterBlock {
 	const lines = markdown.split(/\r?\n/);
 	if (lines[0]?.trim() !== "---") {
 		return { exists: false, malformed: false, frontmatter: "", body: markdown, endLineExclusive: 0 };
@@ -180,6 +211,10 @@ export function splitMarkdownFrontmatter(markdown: string): FrontmatterBlock {
 	const eol = markdown.includes("\r\n") ? "\r\n" : "\n";
 	for (let index = 1; index < lines.length; index += 1) {
 		if (lines[index].trim() === "---") {
+			if ((options.requireYaml ?? true) && !looksLikeYaml(lines.slice(1, index))) {
+				// Two thematic breaks around prose, not a property block: the whole text is body.
+				return { exists: false, malformed: false, frontmatter: "", body: markdown, endLineExclusive: 0 };
+			}
 			return {
 				exists: true,
 				malformed: false,
