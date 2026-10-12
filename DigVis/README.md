@@ -1,5 +1,7 @@
 # AskMate DigVis
 
+> **Stale since 1.12.0.** This package describes AskMate as of 1.11.1 (last updated 2026-10-01). Release 1.12.0 added `src/skills`, `src/diagrams`, `src/mcp`, `src/providers/tools`, `src/safety` and `src/setup`, split request building, widened the settings schema, and added MCP and the skill and diagram pipelines. The module maps, data flows, trust boundaries and test map below do not cover them. For the current design read `docs/` (user-facing behaviour), `CONTRIBUTING.md` (invariants) and the header comments of each new module. Regenerate this package before relying on it.
+
 ## Purpose
 
 This DigVis package gives a visual, source-backed map of the AskMate Obsidian plugin. It is for maintainers who need to understand architecture, runtime flows, data movement, safety boundaries, testing, and likely change points before editing code.

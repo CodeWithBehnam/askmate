@@ -1,556 +1,181 @@
-<a id="top"></a>
+<!-- TODO(lead): README images use relative paths (assets/...). Check that the hero and screenshots also render on https://community.obsidian.md/plugins/askmate. If they do not, switch them to raw.githubusercontent.com URLs pinned to the release tag. -->
+<!-- TODO(lead): assets/hero-light.svg, assets/hero-dark.svg and assets/screenshots/{setup-card,sidebar-answer,diagram-studio,mcp-approval}.png must exist before the tag. scripts/roadmap-smoke-tests.ts fails once the version is 1.12.0 and one is missing. -->
+<!-- TODO(lead): add an "Artifact attestations" line to the trust strip only after "gh attestation verify" succeeds on the published 1.12.0 assets. -->
+<!-- TODO(lead): a competitor comparison table is left out on purpose. The research facts dated 12/10/2026 were not re-checked against each plugin's own README. Add one only with a source and a date for every cell. -->
 
 <p align="center">
-  <img src="docs/assets/askmate-hero.svg" alt="AskMate hero banner showing AI note Q&A, summaries, workflows, safe Apply, and image generation inside Obsidian" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero-light.svg" alt="AskMate: ask your notes, draw them and apply changes safely inside Obsidian" width="100%">
+  </picture>
 </p>
 
 <h1 align="center">AskMate</h1>
 
-<p align="center">
-  <strong>AI Q&A, summaries, rewrites, workflows, safe note edits, and image generation inside Obsidian.</strong>
-</p>
+<p align="center"><strong>Ask your notes. Draw them. Apply changes safely.</strong></p>
+
+AskMate is an AI sidebar for Obsidian. It answers questions about the note you are reading, draws it as a Mermaid diagram that actually renders, calls your MCP tools only when you approve each call, and changes a note only after you accept the diff.
 
 <p align="center">
-  <a href="https://github.com/CodeWithBehnam/askmate/releases"><img src="https://img.shields.io/github/v/release/CodeWithBehnam/askmate?style=for-the-badge&label=release&color=8B5CF6" alt="Latest release"></a>
-  <a href="https://github.com/CodeWithBehnam/askmate/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/CodeWithBehnam/askmate/release.yml?style=for-the-badge&label=release%20build" alt="Release workflow status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/CodeWithBehnam/askmate?style=for-the-badge&color=34D399" alt="License"></a>
-  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-1.13.0%2B-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian 1.13.0 or newer"></a>
-  <a href="https://github.com/CodeWithBehnam/askmate/stargazers"><img src="https://img.shields.io/github/stars/CodeWithBehnam/askmate?style=for-the-badge&color=22D3EE" alt="GitHub stars"></a>
-  <a href="https://github.com/CodeWithBehnam/askmate/issues"><img src="https://img.shields.io/github/issues/CodeWithBehnam/askmate?style=for-the-badge&color=F59E0B" alt="Open issues"></a>
+  <a href="https://obsidian.md/plugins?id=askmate"><strong>Install from Community plugins</strong></a> ·
+  <a href="#manual-install">Manual install</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/-AI%20notes-8B5CF6?style=flat-square" alt="AI notes">
-  <img src="https://img.shields.io/badge/-Q%26A-22D3EE?style=flat-square" alt="Q&A">
-  <img src="https://img.shields.io/badge/-summaries-34D399?style=flat-square" alt="Summaries">
-  <img src="https://img.shields.io/badge/-rewrites-F472B6?style=flat-square" alt="Rewrites">
-  <img src="https://img.shields.io/badge/-workflows-F59E0B?style=flat-square" alt="Workflows">
-  <img src="https://img.shields.io/badge/-safe%20Apply-10B981?style=flat-square" alt="Safe Apply">
-  <img src="https://img.shields.io/badge/-image%20generation-6366F1?style=flat-square" alt="Image generation">
-</p>
+<p align="center">No telemetry · No AskMate server · Keys stay in Obsidian SecretStorage · Nothing in your notes changes until you approve · MIT licence · Desktop, Obsidian 1.13.0 or newer</p>
 
-## Table of Contents
+![AskMate answering a question about the open note in the Obsidian sidebar](assets/screenshots/sidebar-answer.png)
 
-- [About The Project](#about-the-project)
-  - [Built With](#built-with)
-  - [Use Cases](#use-cases)
-  - [Provider Comparison](#provider-comparison)
-- [Getting Started](#getting-started)
-  - [Requirements](#requirements)
-  - [Installation](#installation)
-  - [Quick Setup](#quick-setup)
-- [Usage](#usage)
-  - [Example Prompts](#example-prompts)
-  - [Ask About A Note](#ask-about-a-note)
-  - [Create Or Apply Output](#create-or-apply-output)
-  - [Generate Images](#generate-images)
-  - [Streaming Replies](#streaming-replies)
-  - [Editor Right-Click Menu](#editor-right-click-menu)
-  - [Custom Instructions](#custom-instructions)
-  - [Conversations: Saved Threads And Export](#conversations-saved-threads-and-export)
-  - [Switch Model Or Provider](#switch-model-or-provider)
-  - [Run Workflows](#run-workflows)
-  - [Console Layout](#console-layout)
-- [Privacy And Network Use](#privacy-and-network-use)
-- [FAQ](#faq)
-- [Roadmap](#roadmap)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [Contributing And Support](#contributing-and-support)
-- [Acknowledgements](#acknowledgements)
-- [License](#license)
+## What you get
 
-## About The Project
-
-AskMate is a desktop-only Obsidian plugin that adds a right-sidebar AI assistant for the note you are reading or editing.
-
-Use it to ask questions, summarize, rewrite, translate, run reusable workflows, generate images, and safely write AI output back into your vault.
-
-### Built With
-
-<p>
-  <a href="https://obsidian.md"><img src="https://img.shields.io/badge/Obsidian-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian"></a>
-  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"></a>
-  <a href="https://bun.sh"><img src="https://img.shields.io/badge/Bun-000000?style=for-the-badge&logo=bun&logoColor=white" alt="Bun"></a>
-  <a href="https://esbuild.github.io"><img src="https://img.shields.io/badge/esbuild-FFCF00?style=for-the-badge&logo=esbuild&logoColor=111827" alt="esbuild"></a>
-  <a href="https://openai.com"><img src="https://img.shields.io/badge/OpenAI-111827?style=for-the-badge&logo=openai&logoColor=white" alt="OpenAI"></a>
-  <a href="https://www.anthropic.com"><img src="https://img.shields.io/badge/Anthropic-191919?style=for-the-badge" alt="Anthropic"></a>
-  <a href="https://ai.google.dev/gemini-api"><img src="https://img.shields.io/badge/Gemini-4285F4?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Google Gemini"></a>
-  <a href="https://openrouter.ai"><img src="https://img.shields.io/badge/OpenRouter-111827?style=for-the-badge" alt="OpenRouter"></a>
-</p>
-
-### Use Cases
-
-| Use case | How AskMate helps |
+| Feature | What you get |
 | --- | --- |
-| Students | Turn lecture notes into summaries, flashcards, study questions, and action items. |
-| Researchers | Extract claims, compare ideas, map evidence, and find gaps across note context. |
-| Writers | Rewrite rough notes, polish tone, translate drafts, and preserve structure. |
-| Product managers | Convert meetings and research notes into decisions, risks, next steps, and briefs. |
-| Developers | Explain technical notes, draft documentation, generate diagrams, and review plans. |
-| Knowledge workers | Ask targeted questions, organize scattered notes, and safely apply updates back to the vault. |
+| **Mermaid Diagram Studio** | Ask for a diagram in plain words. AskMate picks the type, gives it one of eight looks, checks it against Obsidian's own Mermaid, repairs it once if needed, and never shows a broken one as finished. |
+| **MCP tools** | Connect MCP servers over HTTP, or run one locally on desktop. Off by default, trusted per device, and every call asks first with the full arguments on screen. |
+| **Safe Apply** | Replace a selection, append, or replace a section. You see a diff first, edits made during the preview are never overwritten, and tool output never writes to your vault. |
+| **Skills** | Reusable `SKILL.md` instructions. One ships built in, your own start inert until you review them. |
+| **Ask about the note** | Selection or whole note as context, `@links`, `@backlinks`, `@tag:` and `@recent` mentions, streaming replies, saved conversations. |
+| **Workflows** | Eighteen built-in prompts and your own: summaries, action plans, flashcards, translation and more, from the sidebar, palette or editor menu. |
+| **Your provider** | OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, or a local OpenAI-compatible server. |
+| **Images** | `/image` creates pictures with OpenAI `gpt-image-2`. |
 
-### Provider Comparison
+## Quick start
 
-| Provider | Text support | Image support | API key needed | Notes |
-| --- | --- | --- | --- | --- |
-| OpenAI | Yes | Yes, through `gpt-image-2` | Yes | Best fit when you want GPT-5.5 text plus image generation in one provider. |
-| Azure OpenAI | Yes | No | Yes | Use an Azure OpenAI `/openai/v1` base URL and type your Azure deployment name as the model. Deployments cannot be listed with an API key, so there is no model refresh. |
-| Azure AI Foundry | Yes | No | Yes | Use an Azure AI inference endpoint such as `https://<resource>.services.ai.azure.com/models` and enter the model or deployment name used by your Foundry resource. |
-| OpenRouter | Yes | No | Yes | Use OpenRouter model IDs and route text requests through an OpenAI-compatible API. |
-| Anthropic Claude | Yes | No | Yes | Good for text workflows, critique, summarization, and long-form analysis. The default model is `claude-sonnet-5-5`; `claude-opus-5-5` and `claude-haiku-4-5-20251001` are also offered. Saved retired Claude 3 and 3.5 model IDs are switched to the default automatically. |
-| Google Gemini | Yes | No | Yes | Good for text workflows with Gemini models through Google's API. |
-| Local or self-hosted | Yes | No | Optional | Works with OpenAI-compatible endpoints such as local or self-hosted models. Set the base URL, for example `http://localhost:11434/v1`; AskMate adds `/chat/completions` itself. |
+1. **Install.** In Obsidian open Settings, Community plugins, Browse, search for AskMate, then Install and Enable. A notice offers a Set up button.
+2. **Connect.** In the AskMate sidebar choose OpenAI, Anthropic, Gemini or Local, paste your API key and press Connect. The key goes into Obsidian SecretStorage, a test runs, and a failure is explained in plain words.
+3. **Ask.** Open a note and press a starter chip: Summarise this note, Make a diagram or Find gaps.
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+![The AskMate Connect card with four provider chips and a key field](assets/screenshots/setup-card.png)
 
-## Getting Started
+AskMate is free. You pay your provider directly under its own pricing, or run a local model at no charge. Image generation needs a paid OpenAI API account. Your provider's billing page is the authority on what you are charged.
 
-### Requirements
-
-- Obsidian `1.13.0` or newer. Older Obsidian versions are offered AskMate 1.8.2, the last release that supports them.
-- Desktop Obsidian.
-- An API key for your selected provider, unless your local endpoint does not require one.
-- OpenAI API access for image generation with `gpt-image-2`.
-
-AskMate is marked desktop-only because it has been designed and tested for desktop Obsidian: the right-sidebar assistant, wide diff and review dialogs, and keyboard send shortcuts. It does not use Node.js or Electron APIs, but it has not been tested on Obsidian mobile yet.
-
-#### Accounts And Costs
-
-AskMate itself is free and has no AskMate account. It calls third-party AI services with your own credentials:
-
-- Every hosted provider (OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude and Google Gemini) needs an account with that provider and an API key. These providers charge for API usage, usually per token, under their own pricing.
-- Image generation always needs a paid OpenAI API account with access to `gpt-image-2`, whichever chat provider you use. OpenAI may also require organisation verification for that model.
-- Only a local or self-hosted endpoint that you run yourself works without a paid provider account.
-
-AskMate's usage budgets can warn or block oversized requests, but your provider's billing dashboard is the authority on what you are charged.
-
-### Installation
-
-#### From Obsidian Community Plugins
-
-After AskMate is available in Obsidian Community Plugins:
-
-1. Open Obsidian Settings.
-2. Go to Community plugins.
-3. Browse community plugins.
-4. Search for `AskMate`.
-5. Install and enable the plugin.
-
-#### Manual Installation
-
-1. Download these files from the latest GitHub release:
+Try these in the composer:
 
 ```text
-main.js
-manifest.json
-styles.css
+Summarise this note into action items.
+Draw this as a diagram.
+@backlinks What do these notes agree on?
+/polish keep it short
 ```
 
-2. Create this folder in your vault:
+## Mermaid Diagram Studio
 
-```text
-YourVault/.obsidian/plugins/askmate/
-```
+Say `Draw this as a diagram`, type `/diagram`, or press Make a diagram. AskMate chooses a type that fits your note, from flowcharts and sequences to Gantt, timelines, mind maps, architecture and more, and uses only what is in the note. Eight looks (Blueprint, Sketchbook, Editorial Ink, Sunrise, Lagoon, Grape Soda, Slate and Terminal) use colours checked for contrast in light and dark themes, and Another look draws it again.
 
-3. Copy the three release files into that folder.
-4. Restart Obsidian or reload plugins.
-5. Enable AskMate from Community plugins.
+Every diagram is parsed and rendered with the Mermaid that ships in Obsidian before you see it. If it fails, AskMate repairs it once, and if it still fails it shows the source and disables Insert for that reply. Diagram requests never go to paid image generation. See [diagrams](docs/diagrams.md).
 
-### Quick Setup
+![A Mermaid diagram preview card with Insert, New note, Copy source, Fix and Another look](assets/screenshots/diagram-studio.png)
 
-1. Open AskMate settings in Obsidian and go to `Providers and models`. A `Finish setup` list at the top shows what is still missing.
-2. Choose a chat provider: OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Google Gemini, or Local or self-hosted.
-3. Add or select the provider API key secret.
-4. For Azure OpenAI, set the v1 base URL, for example `https://<resource>.openai.azure.com/openai/v1`, and type your Azure deployment name as the model. For Azure AI Foundry, set the inference endpoint, for example `https://<resource>.services.ai.azure.com/models`, and enter the model or deployment name. For local endpoints, set the OpenAI-compatible base URL, for example `http://localhost:11434/v1`. Remote base URLs must use `https://`; plain `http://` is accepted only for localhost and private network addresses (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `*.local`).
-5. Click `Test connection`. The result appears under the button. For Azure OpenAI and Azure AI Foundry this sends a minimal text request that may use a few tokens.
-6. Click the refresh button next to `Model` (`Refresh models`), or enter a model ID manually. Azure OpenAI has no model refresh, because deployments cannot be listed with an API key.
-7. Choose your default text model.
-8. Optional: configure image prompt planning and add an OpenAI key for `gpt-image-2`.
-9. Optional: open `Instructions` to set how AskMate should answer (language, tone, audience, format) and add rules for specific folders, and star your favourite workflows so they appear when you right-click selected text.
-10. Optional: configure workflows, output templates, context budgets, send shortcut, usage budgets, and privacy defaults.
+## Apply changes safely
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+Nothing reaches a note unless you choose Apply, New note or Insert.
 
-## Usage
+- **Diff first.** You see what will change. Replacing a whole note always asks.
+- **Right note, right text.** Apply targets the note captured when you asked, and matches selected text exactly.
+- **No surprises.** If the note changed during the preview, or the reply was cut short, AskMate refuses to replace text.
+- **Safe text.** Replies are sanitised before they render or write: remote images, scripts, plugin code blocks and risky links are neutralised.
 
-### Example Prompts
+See [apply](docs/apply.md).
 
-Copy and paste any of these into AskMate:
+## Connect tools with MCP
 
-```text
-Summarize this note into action items.
-```
+The Model Context Protocol lets AskMate use tools outside Obsidian. Add a Streamable HTTP server, or on desktop a local command, in settings. Paste the `mcpServers` JSON from Claude Desktop, Cursor or VS Code to import.
 
-```text
-Rewrite this in a clearer tone.
-```
+- Off until you turn it on. Nothing starts at load.
+- You review the exact command or address and trust it on each device. Any change needs trust again.
+- Each call shows the server, the tool and the full arguments. Allow once, allow for this chat, or deny.
+- A tool that changes its description after you approved it is flagged and asks again.
+- Tool descriptions and results are untrusted text. They are cleaned, capped and kept out of the instructions.
 
-```text
-Find gaps or contradictions.
-```
+![The MCP approval card showing the server, tool name and JSON arguments](assets/screenshots/mcp-approval.png)
 
-```text
-Create a Mermaid diagram from this note.
-```
+A local server is a child process with your user's permissions, so add only commands you would run yourself. See [MCP tools](docs/mcp.md) and [skills](docs/skills.md).
 
-### Ask About A Note
+## What AskMate touches
 
-1. Open a Markdown note.
-2. Select text if you want to focus the question on a specific passage.
-3. Open AskMate from the ribbon or command palette.
-4. Ask a question, for example:
+| Area | Behaviour |
+| --- | --- |
+| Network | Your AI provider, MCP servers you add, and nothing else. No analytics. Requests go out only when you send, test, refresh models or approve a tool call. |
+| Notes it reads | The selection or the open note. Other notes only through `@` mentions or context sources you turn on. `/context` shows what the next request holds. |
+| Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode setting (Auto approve, Full or Manual) sets how often you see a diff, and replacing the whole note always asks. |
+| Clipboard | Write only, when you press Copy. |
+| Secrets | API keys and MCP tokens in Obsidian SecretStorage. Settings keep only names. |
+| Local data | `data.json` in the plugin folder: settings, trusted skill hashes, MCP definitions, saved conversations (50 threads), note history (12 turns per note, 200 across all notes), the review queue and token counts. It syncs if you sync your configuration folder. |
+| Cost | Billed by your provider. Usage budgets can warn or block large requests. |
+| MCP and child processes | Local servers run as a child process on desktop only, after you trust them, and can reach files outside the vault. Remote servers see the arguments of calls you approve. |
 
-```text
-What are the main claims in this note?
-```
+Details, the plain-http allowlist and rendering safety are in [privacy](docs/privacy.md) and [apply](docs/apply.md).
 
-AskMate answers in the sidebar. By default, previous sidebar messages are shown for convenience but are not sent as chat history unless threaded chat is enabled.
+## Is AskMate right for you?
 
-Every finished reply has these actions:
+**A good fit** if you want an assistant that works on the note in front of you, you are happy to bring your own API key or run a local model, you want diagrams and tool calls you can inspect, and you want to approve every edit.
 
-- `Copy`: copies the raw Markdown of the reply to the clipboard.
-- `Insert at cursor`: inserts the reply into the note you last edited, replacing the selection if there is one. If the sidebar has focus, AskMate uses the note you were last in. Incomplete replies are inserted with a warning.
+**Look elsewhere** if you want an agent that roams the whole vault and edits files on its own, a hosted plan with no key to manage, or mobile support. AskMate is desktop only.
 
-The command palette has `AskMate: Copy last answer` and `AskMate: Insert last answer at cursor` for the newest reply.
+## Manual install
 
-### Streaming Replies
+Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/CodeWithBehnam/askmate/releases/latest), put them in `<YourVault>/.obsidian/plugins/askmate/` (your vault's configuration folder), reload Obsidian and enable AskMate. Obsidian 1.11.4 to 1.12.x is offered AskMate 1.8.2, the last release for those versions.
 
-AskMate shows text replies as the provider generates them, for every text provider. The Stop button cancels the HTTP request itself. Note and Apply output modes still write only after the reply has finished.
+## Documentation
 
-Streaming is controlled by `Stream replies` under `Responses` in settings (on by default). If the streaming connection cannot be made, for example because a local server such as Ollama or LM Studio, an Azure resource or a corporate proxy does not allow requests from Obsidian, AskMate falls back to a single buffered response, so nothing breaks. HTTP errors such as 401 or 429 are reported as they are and are not retried. Turn the setting off if your endpoint handles streaming badly.
-
-If a stream breaks after some text has arrived, AskMate keeps the partial text, marks it as incomplete and will not use it to replace note text. Token usage for streamed replies comes from the provider's final event; local OpenAI-compatible servers often leave it out, in which case no usage is recorded for that reply.
-
-### Editor Right-Click Menu
-
-Select text in a note and right-click to see an AskMate section:
-
-- `AskMate: Ask about selection` opens the sidebar with the composer focused. In the Console layout it is prefilled with `@selection `, so you only type your question.
-- Your favourite workflows (star them under `Workflows and automation` → `Workflow sidebar`) appear below it, up to six. With no favourites, AskMate offers rewrite and polish, explain simply, summarise, and translate. Hidden workflows never appear.
-
-Workflows started from the menu behave exactly like their command palette versions and create a result note. With no selection, the menu offers `Ask about this note`. Turn the menu off with `Show AskMate in the editor context menu` under `Request defaults`.
-
-### Custom Instructions
-
-The `Instructions` settings page tells AskMate how to answer you, for example "answer in British English, keep a formal tone, write for a first-year student".
-
-- `Instructions for every request` apply to every text request: questions, workflows and batch runs.
-- `Folder instructions` add rules for notes inside a folder and its subfolders. A rule for `Projects` applies to `Projects/a.md` and `Projects/x/b.md`, but not to `ProjectsOld/c.md`. Folder names are case-sensitive. When several folders match, the broadest rule comes first and the most specific last.
-
-Instructions are added after AskMate's built-in instructions and cannot override its safety, evidence or Apply output rules. They show in `/inspect` and count towards token estimates. They are not used for image prompt planning, which must return strict JSON. The separate `Workflow custom instructions` setting still applies to workflows only.
-
-### Conversations: Saved Threads And Export
-
-AskMate keeps your sidebar chat as a named thread. Threads survive restarts, and you can switch between them.
-
-- `/new` starts a new conversation. The current one stays saved.
-- `/threads` opens a switcher showing each title and when it was last updated.
-- `/rename <title>` renames the current conversation. Titles default to your first question.
-- `/delete-thread` deletes a saved conversation after you confirm.
-- `/clear` clears the current conversation and removes it from your saved conversations.
-- `/export [title]` writes the conversation to a Markdown note in your AskMate result folder and opens it. The note has your questions and AskMate's replies as separate sections, links to the notes each question was asked about, and marks incomplete replies. Generated images appear as embeds when they were saved to your vault.
-
-The same actions are in the sidebar header (`New conversation`, `Saved conversations`, `Export conversation to note`) and the command palette (`AskMate: Export conversation to note`). Turn saving off, or delete every saved thread, with `Save conversations` and `Delete saved conversations` in settings. AskMate keeps up to 50 threads of 200 messages each.
-
-### Switch Model Or Provider
-
-Click the model in the Console status bar, or the `Switch model or provider` button next to the reasoning selector in the Compact and Expanded layouts, to pick a provider and model. In the Console layout you can also type:
-
-```text
-/model                    list the current provider, model and available models
-/model gpt-5.5-mini       switch model; a unique start or part of the name works
-/model my-finetune!       use a model ID that is not listed (add !)
-/provider                 list providers and show which have no API key
-/provider anthropic       switch the chat provider
-```
-
-The choice is saved to settings, and reasoning effort support is checked again for the new model.
-
-### Create Or Apply Output
-
-Choose an output mode before sending:
-
-- `Chat`: show the answer in the sidebar.
-- `New note`: create a Markdown result note.
-- `Apply`: write generated text back into the captured source note after safety checks.
-
-Apply mode can preview diffs, preserve or confirm frontmatter changes, replace selected text, append generated output to the captured note when no text was selected, replace a heading section, explicitly replace the full note, or queue a suggested change for later review.
-
-Use the Apply approval mode setting to choose how much confirmation AskMate asks for before text writes:
-
-- `Auto approve`: skips selected-text, append, and heading-section diff previews, but still confirms full-note replacement and keeps hard safety checks.
-- `Full`: asks with a diff for full-note and heading-section replacements, but skips selected-text and append previews.
-- `Manual`: asks with a diff before every text Apply write.
-
-If a reply is incomplete (it hit the token limit, or the provider filtered or refused it), AskMate shows a warning on the message and refuses to use it to replace note text. Appending it still works. When the note or selection was cut short by the context budget, AskMate asks for confirmation before any replacement. When `Send note and attached context` was off for the request, the model never saw the text, so AskMate refuses to replace it and offers append instead; the same applies when image references were withheld and the text being replaced contains images.
-
-Queue for review keeps every pending suggestion until you apply or dismiss it; the `Review queue max items` limit never drops pending items. When pending items reach that limit, AskMate refuses to queue more until you review some. Applied and dismissed items keep only metadata, such as the note path, title and question, not the note text. Queued items and note history follow a note when you rename it and are removed when you delete it.
-
-### Generate Images
-
-Use the Image button or start a request with `/image` or `/img`.
-
-```text
-/image Create a clean editorial illustration that captures the core idea of this note.
-```
-
-AskMate can save generated PNG files, create image result notes, or insert Obsidian image embeds depending on the selected output mode.
-
-With `Detect image requests automatically` on (the default), a message that starts with a direct request to create an image, such as `Draw me a cat` or `Generate an image of a lighthouse`, also generates an image. Questions that only mention images, such as `How do I design a logo?`, stay text requests. Turn the setting off to generate images only with `/image`, `/img` or the Image button.
-
-Image generation always goes to the OpenAI Images API with `gpt-image-2`, even when another chat provider is selected.
-
-### Run Workflows
-
-AskMate includes workflows for summaries, action plans, simple explanations, question drills, critiques, pros and cons, meeting notes, decision briefs, translation, quote extraction, rewriting, and more.
-
-To favorite, hide or reorder sidebar workflows, open `Workflows and automation` → `Workflow sidebar` in settings. Drag a row by its handle, or focus it and press Alt+Up or Alt+Down. Favorites always appear first.
-
-You can also create custom workflows under `Workflows and automation` → `Custom workflows` in settings. Each workflow opens in its own editor page, which also has `Delete workflow`. Custom workflows can use variables such as:
-
-```text
-{{noteTitle}}
-{{sourcePath}}
-{{contextSource}}
-{{selectedText}}
-{{currentDate}}
-{{currentDateTime}}
-{{customInstructions}}
-```
-
-Each custom workflow has an `Output kind`. `Revised note` means the output is a full revised version of the note and may replace it. `New content` means summaries, analysis or other new material that is appended or saved as a note. In batch runs with review-queue mode, revised-note output is queued as a full-note replacement and new-content output is queued as an append. Custom workflow commands are added, renamed and removed straight away, including after an import, with no restart.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-### Console Layout
-
-Console is AskMate's default sidebar layout: keyboard-first, for people who prefer typing to clicking. Updating AskMate moves you to Console once. To switch back, type `/layout compact` or `/layout expanded` in the sidebar, or choose under `Sidebar layout` in AskMate settings; AskMate keeps that choice. Type `/layout console` to return.
-
-The conversation is monospaced, one line per event. A status bar at the bottom shows the output mode, the model, the reasoning effort and today's token use. Click the mode to cycle between Chat, Note and Apply.
-
-Type a question to ask about the note, or a command:
-
-```text
-/help                     list every command, workflow and mention
-/polish keep it short     run a workflow, with optional extra instructions
-/apply                    write answers into the note from now on (/chat and /note too)
-/note list the risks      ask once, saving this answer as a new note
-/image a lighthouse       generate an image with OpenAI Images
-/effort high              set reasoning effort: none, low, medium, high or xhigh
-/context                  show what the next request would send
-/inspect why?             open the final prompt for a question
-/history                  show AskMate history for this note
-/clear                    clear the conversation
-/new                      start a new conversation (the current one stays saved)
-/threads                  switch to a saved conversation
-/rename Budget review     rename the current conversation
-/delete-thread            delete a saved conversation
-/export                   export this conversation to a note
-/model gpt-5.5            show or switch the model
-/provider anthropic       show or switch the chat provider
-```
-
-Every workflow has a command named after its short name, for example `/summarise`, `/critique`, `/translate` and `/polish`. Text after a workflow command is added as extra instructions for that run. Type a few letters and press `Tab` or `Enter` to complete, so `/pol` becomes `/polish`.
-
-Add mentions anywhere in the line to choose what is sent:
-
-```text
-@selection        only the selected text; AskMate stops if nothing is selected
-@note             the whole note, even when text is selected
-@folder           notes in the folder set in AskMate settings
-@folder:Projects  notes in a folder you name
-@[[Vendors]]      another note as extra context
-@links            notes the current note links to, in the order they appear
-@backlinks        notes that link to the current note, most links first
-@tag:project      notes with that tag in the body or frontmatter (nested tags included)
-@recent           the 5 most recently modified notes; @recent:10 for more, up to 20
-```
-
-`@tag:` is case-insensitive, the `#` is optional, and `@tag:project` also matches `#project/alpha`; suggestions list the tags in your vault. Each of `@links`, `@backlinks`, `@tag:` and `@recent` attaches at most 10 notes, which count against your context budget and per-note size limits. `/context` lists which notes were included and which were left out.
-
-Mentions can sit next to punctuation (`Summarise @note.`). A note, folder, tag or mention that finds nothing is reported instead of being skipped.
-
-Keys: `Tab` or `Enter` accepts the highlighted suggestion, `↑` recalls earlier input, and `Esc` closes suggestions or stops a running request. Start a line with `//` to send a question that begins with a slash; it is always sent as text.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-## Privacy And Network Use
-
-> [!IMPORTANT]
-> Privacy-first defaults:
->
-> - No telemetry and no AskMate server.
-> - Contacts AI providers only when you run a request, click `Test connection` or `Refresh models`, or run the `Test provider connection` command. Note content is sent only with requests.
-> - API keys are stored through Obsidian `SecretStorage`.
-> - Prompt inspector is local and does not contact a provider by itself.
-> - Note history, saved conversations, the review queue and usage statistics are stored in the plugin's `data.json` inside your vault.
-
-#### Network Use
-
-AskMate talks only to the services you configure: OpenAI, Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic, Google Gemini, or your local or self-hosted endpoint. It makes these calls:
-
-- Requests you run (questions, workflows, batch runs, image generation). Depending on your settings and request, a request can include your prompt, selected text, the current note, workflow instructions, opted-in extra context such as other notes, folders, a style guide, a glossary, image metadata or note history, image prompt planning content, or generated image prompts. Text requests go to the chat provider you choose; image prompt planning goes to the planning provider you choose.
-- Image generation always goes to the OpenAI Images API with `gpt-image-2`, even when another chat provider is selected.
-- `Test connection`, `Refresh models` and the `Test provider connection` command send your API key to the selected provider to check the connection or list models. They send no note content. For Azure OpenAI and Azure AI Foundry, the test sends a minimal text request that may use a few tokens.
-
-With `Stream replies` on, text requests are sent with the browser `fetch` so the reply can stream and Stop can cancel it; every other call uses Obsidian's `requestUrl`. Both go only to the endpoints above.
-
-OpenAI text requests use the Responses API with `store: false`, so OpenAI is asked not to keep the response for later retrieval. Each provider's own retention and abuse-monitoring policies still apply.
-
-Remote provider base URLs must use `https://`. Plain `http://` is accepted only for localhost and private network addresses.
-
-The prompt inspector is local. It lets you review the final prompt before sending and does not contact a provider by itself.
-
-Model replies are sanitised before AskMate renders them in the sidebar: remote images become links and are not loaded, HTML that would load network resources is shown as text, and code blocks in languages that other plugins run (such as `dataviewjs`, `dataview` and `tasks`) are shown as plain text. Mermaid diagrams and maths still render. Context image previews show only vault images and embedded `data:` images, never remote URLs.
-
-#### Local Storage
-
-Provider API keys are stored through Obsidian `SecretStorage`. AskMate stores selected secret names, not raw keys, and drops unknown or obsolete settings keys (including any plain-text API key from older builds) when it saves.
-
-The plugin's settings file, `.obsidian/plugins/askmate/data.json` in your vault, also stores:
-
-- Note history: the question and answer of successful AskMate turns per note (up to 12 turns per note by default). It is on by default. Turn it off with `Store note-specific history` under `Context sources` in settings, or clear one note's history with `Clear note history` in the sidebar's note history view. Including that history in future requests is a separate switch and is off by default.
-- Saved conversations: when `Save conversations` is on (the default), the full text of your questions and AskMate's replies, plus the model name and the paths of related notes and saved images, is stored as threads. Image data is not stored. Turn the setting off to stop saving, and use `Delete saved conversations` to remove existing threads.
-- The review queue: pending suggestions keep the proposed text until you apply or dismiss them; full-note replacements also keep a snapshot of the original note. Applied and dismissed items keep only metadata.
-- Usage statistics: per-request token counts, provider, model, title and note path, plus per-day token totals. They contain no note text. Clear them with `Reset statistics` under `Usage and guardrails` → `Usage statistics` in AskMate settings.
-
-If you sync your `.obsidian` folder (for example with Obsidian Sync, iCloud or git), this data syncs with it. Generated notes and images are saved as ordinary files in your vault.
-
-Provider requests are subject to the selected provider's API terms and privacy policy.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
+[Commands](docs/commands.md) · [Workflows](docs/workflows.md) · [Providers](docs/providers.md) · [Apply and output](docs/apply.md) · [Privacy and data](docs/privacy.md) · [Troubleshooting](docs/troubleshooting.md)
 
 ## FAQ
 
-### Does AskMate send my whole vault?
+<details>
+<summary>Does AskMate send my whole vault?</summary>
 
-No. AskMate sends only the context included for the request you run. By default, that means selected text or the current or remembered Markdown note. Extra notes, folders, style guides, glossaries, image metadata, and note history are included only when you enable those context sources. Other notes are also sent when you ask for them with `@[[Note]]`, `@folder`, `@links`, `@backlinks`, `@tag:` or `@recent`; each of the last four attaches at most 10 notes, all of them count against your context budget, and `/context` lists exactly which notes were included. Turning off `Send note and attached context` withholds all of them.
+No. A request holds your prompt and the context you chose: by default the selection or the open note. Other notes are added only by an `@` mention or a context source you enabled. `/context` lists exactly what would go, and turning off `Send note and attached context` withholds all of it.
 
-### Can I use local models?
+</details>
 
-Yes. Choose the Local or self-hosted provider and set an OpenAI-compatible base URL such as `http://localhost:11434/v1`. AskMate adds `/chat/completions` itself, so do not paste the full endpoint path. Plain `http://` works only for localhost and private network addresses. Local endpoints can be used for text chat and workflows. Image generation still uses OpenAI `gpt-image-2`.
+<details>
+<summary>Can I use a local model or Azure?</summary>
 
-### Can I use Azure OpenAI?
+Yes. Choose Local or self-hosted and set an OpenAI-compatible address such as `http://localhost:11434/v1`. Azure OpenAI and Azure AI Foundry are supported with your own endpoint and deployment name. See [providers](docs/providers.md).
 
-Yes. Choose Azure OpenAI, set the v1 base URL such as `https://<resource>.openai.azure.com/openai/v1`, add an API key secret, and type your Azure deployment name as the model (deployments cannot be listed with an API key). Azure OpenAI is text-only in Phase 1. Image generation still uses OpenAI `gpt-image-2`.
+</details>
 
-### Can I use Azure AI Foundry?
+<details>
+<summary>Does image generation need OpenAI?</summary>
 
-Yes. Choose Azure AI Foundry, set the Azure AI inference endpoint such as `https://<resource>.services.ai.azure.com/models`, add an API key secret, and enter the model or deployment name used by your Foundry resource. AskMate sends text requests to `/models/chat/completions?api-version=2024-05-01-preview`. Azure AI Foundry is text-only. Image generation still uses OpenAI `gpt-image-2`.
+Yes. Images always use OpenAI `gpt-image-2`, whichever chat provider you choose, and need an OpenAI API key with access to that model.
 
-### Does image generation require OpenAI?
+</details>
 
-Yes. AskMate image generation uses OpenAI `gpt-image-2`, so it requires an OpenAI API key with access to that image model. Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Gemini, and local providers can be used only for text chat and image prompt planning.
+<details>
+<summary>My note shows Mermaid code, not a picture.</summary>
 
-### Can I apply changes safely?
+Obsidian 1.14 and later ask once per vault whether to display Mermaid diagrams. Allow it in the banner. AskMate never changes that choice.
 
-Yes. Apply mode targets the note captured when the request was built, can preview Markdown diffs before writing, replaces selected text exactly when a selection was captured, appends generated output to the captured note when no text was selected, asks for confirmation before explicit full-note replacement, supports frontmatter controls, and can queue suggested changes for review instead of applying them immediately. Apply approval mode controls how often previews appear, but it does not disable captured-file targeting, exact selected-text matching, explicit full-note confirmation, truncated-context confirmation, or frontmatter safeguards.
+</details>
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+<details>
+<summary>Can an MCP server read my files?</summary>
 
-## Roadmap
+A local server runs as a child process with your account's permissions, so it can. That is why it needs your trust per device and your approval per call, and why you should only add commands you trust. A remote server sees only the arguments you approve.
 
-AskMate's current roadmap and status surfaces focus on making note work safer, clearer, and easier to review:
+</details>
 
-- Evidence-linked answers for source-grounded replies and jump-to-source actions.
-- Markdown diff Apply preview for safer appends, selected-text replacements, heading-section replacements, and explicit full-note changes.
-- Frontmatter controls for preserving, confirming, or replacing YAML during explicit full-note Apply.
-- Batch workflow runner support for running workflows across folders.
-- Final prompt inspector tooling for reviewing the assembled prompt before sending.
-- Note-specific AskMate history for per-note follow-up context.
-- Style guide and glossary context roles for persistent writing and terminology guidance.
-- Queue for review mode for AI-suggested changes that should be checked before applying.
-- Smart result-note placement for keeping generated notes near their source notes.
-- Usage budgets and guardrails for warning or blocking oversized or over-budget requests.
-- Broader provider support across Azure OpenAI, Azure AI Foundry, OpenRouter, Anthropic Claude, Gemini, and OpenAI-compatible endpoints for text chat and image prompt planning.
+<details>
+<summary>Does it work on mobile?</summary>
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+Not yet. AskMate is marked desktop only because it was designed and tested for desktop Obsidian.
 
-## Troubleshooting
+</details>
 
-### AskMate used the wrong note
+<details>
+<summary>How do I report a bug or a security problem?</summary>
 
-AskMate remembers the most recent Markdown note because the sidebar can take focus. If the preview points to the wrong note, click back into the intended note or select the exact text, then ask again.
+Use the [issue templates](https://github.com/CodeWithBehnam/askmate/issues/new/choose) for bugs and ideas. Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
-### Apply cannot find selected text
+</details>
 
-AskMate only applies selected-text output when it can safely find the original selected text. Select the text again and use Apply from the assistant response. If no text was selected when the request was built, default Apply appends generated output to the captured note instead of replacing the note.
+## Contributing
 
-### My model is not listed
+Read [CONTRIBUTING.md](CONTRIBUTING.md). Changes are checked with `bun run lint`, `bun run typecheck:tests`, `bun run test` and `bun run build`.
 
-Click the refresh button next to `Model` (`Refresh models`) after adding or changing an API key. If the provider does not list the model you need, enter the model ID manually.
+## Licence
 
-### Image generation fails
-
-`gpt-image-2` may require OpenAI API access and organization verification. Check your OpenAI dashboard, then try again.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-## Development
-
-Install dependencies:
-
-```bash
-bun install
-```
-
-Run the smoke tests and the `bun test` suite in `tests/`:
-
-```bash
-bun run test
-```
-
-Build:
-
-```bash
-bun run build
-```
-
-Watch during development:
-
-```bash
-bun run dev
-```
-
-Release assets are:
-
-```text
-main.js
-manifest.json
-styles.css
-```
-
-To build and copy the release assets into a development vault, set `ASKMATE_VAULT_PLUGIN_DIR` to that vault's plugin folder and run `bun run install:vault`:
-
-```bash
-ASKMATE_VAULT_PLUGIN_DIR="<YourVault>/.obsidian/plugins/askmate" bun run install:vault
-```
-
-`ASKMATE_VAULT_PLUGIN_DIR` is required; there is no default path. Optional variables: `ASKMATE_VAULT_NAME` (vault name for the reload request), `ASKMATE_OBSIDIAN_CLI_PATH` (Obsidian binary, macOS default `/Applications/Obsidian.app/Contents/MacOS/obsidian`), `ASKMATE_INSTALL_FILES` (comma-separated files to copy), `ASKMATE_RELOAD_TIMEOUT_MS` (default `10000`), `ASKMATE_VERIFY_ONLY` and `ASKMATE_SKIP_RELOAD` (`1` or `true`).
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-## Contributing And Support
-
-- Read `CONTRIBUTING.md` before opening a pull request.
-- Use the issue templates for bug reports and feature requests.
-- Report security concerns through `SECURITY.md`, not public issues.
-
-## Acknowledgements
-
-AskMate is built on the work of these tools, APIs, and communities:
-
-- [Obsidian](https://obsidian.md) and the Obsidian plugin API.
-- [OpenAI](https://openai.com) for GPT-5.5 text support and `gpt-image-2` image generation.
-- [Azure OpenAI](https://azure.microsoft.com/products/ai-services/openai-service), [OpenRouter](https://openrouter.ai), [Anthropic](https://www.anthropic.com), and [Google Gemini](https://ai.google.dev/gemini-api) for provider options.
-- [Bun](https://bun.sh), [TypeScript](https://www.typescriptlang.org), and [esbuild](https://esbuild.github.io) for the development toolchain.
-- [Shields.io](https://shields.io) for README badges.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-## License
-
-AskMate is released under the MIT License. See `LICENSE`.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
+MIT. See [LICENSE](LICENSE).

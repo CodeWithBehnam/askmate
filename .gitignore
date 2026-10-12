@@ -3,5 +3,8 @@ main.js
 *.map
 .DS_Store
 prompt-exports/
-docs/
 AGENTS.md
+
+# docs/**/*.md and assets/** are tracked on purpose: the README links to them. Only private working notes stay out.
+docs/plans/
+docs/reviews/

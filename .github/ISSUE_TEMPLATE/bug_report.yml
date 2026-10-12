@@ -30,14 +30,14 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Expected behaviour
       description: What did you expect to happen?
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
+      label: Actual behaviour
       description: What happened instead?
     validations:
       required: true
@@ -45,14 +45,14 @@ body:
     id: askmate-version
     attributes:
       label: AskMate version
-      placeholder: 1.7.0
+      placeholder: 1.12.0
     validations:
       required: true
   - type: input
     id: obsidian-version
     attributes:
       label: Obsidian version
-      placeholder: 1.11.4
+      placeholder: 1.14.4
     validations:
       required: true
   - type: dropdown
@@ -81,6 +81,28 @@ body:
         - Not provider-related
     validations:
       required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where did it happen?
+      options:
+        - Setup and connecting a provider
+        - Asking a question in the sidebar
+        - Mermaid diagrams
+        - MCP tools
+        - Skills
+        - Apply, Insert or result notes
+        - Workflows
+        - Image generation
+        - Settings
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: mcp-server
+    attributes:
+      label: MCP server (only if tools are involved)
+      description: The server type and how it starts, for example a remote URL or a local command. Do not paste tokens.
   - type: textarea
     id: logs
     attributes:

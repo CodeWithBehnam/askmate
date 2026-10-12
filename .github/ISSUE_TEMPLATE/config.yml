@@ -3,3 +3,6 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/CodeWithBehnam/askmate/security/advisories/new
     about: Please report security issues privately instead of opening a public issue.
+  - name: Troubleshooting guide
+    url: https://github.com/CodeWithBehnam/askmate/blob/main/docs/troubleshooting.md
+    about: Common messages, causes and fixes for connecting, diagrams, tools and Apply.

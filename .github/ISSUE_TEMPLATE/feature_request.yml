@@ -32,8 +32,12 @@ body:
     attributes:
       label: Area
       options:
+        - Setup and first run
         - Providers
         - Chat and context
+        - Mermaid diagrams
+        - MCP tools
+        - Skills
         - Workflows
         - Output and Apply
         - Images

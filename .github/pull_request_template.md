@@ -12,9 +12,11 @@
 
 ## Validation
 
+- [ ] `bun run lint`
+- [ ] `bun run typecheck:tests`
 - [ ] `bun run test`
 - [ ] `bun run build`
-- [ ] Manual Obsidian check, if UI or plugin behavior changed
+- [ ] Manual Obsidian check, if UI or plugin behaviour changed
 
 ## Manual Checks
 
@@ -30,8 +32,10 @@
 
 ## Checklist
 
-- [ ] README updated, if behavior changed
+- [ ] README and `docs/` updated, if behaviour changed
 - [ ] Settings migration considered, if settings changed
-- [ ] Apply safety preserved, including no-selection append behavior, if output/editing changed
-- [ ] Provider privacy and SecretStorage behavior preserved, if provider code changed
+- [ ] Apply safety preserved, including no-selection append behaviour, if output/editing changed
+- [ ] Provider privacy and SecretStorage behaviour preserved, if provider code changed
+- [ ] MCP stays off by default, tools never write to the vault, and `child_process` stays in `src/mcp/launch.ts`, if MCP code changed
+- [ ] Model, skill and tool text is still sanitised before it renders or is written, if output code changed
 - [ ] Release assets considered, if this is a release change
