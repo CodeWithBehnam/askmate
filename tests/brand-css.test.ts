@@ -634,3 +634,41 @@ describe("the stylesheet and the markup agree", () => {
 		expect(dead, "state classes that nothing sets").toEqual([]);
 	});
 });
+
+describe("the suggestion list for slash commands and mentions", () => {
+	const list = ".askmate-console-completions";
+	const shown = `${list}:not([hidden])`;
+
+	/** Every top-level rule that sets a display on the list, whatever layout it is scoped to. */
+	const listDisplayRules = rules.filter(
+		(rule) => rule.at === "" && selectors(rule).some((selector) => selector.includes(list)) && declaration(rule, "display") !== undefined
+	);
+
+	test("is shown in every composer layout, because Compact and Expanded read commands and mentions too", () => {
+		const visible = listDisplayRules.filter((rule) => declaration(rule, "display") === "block");
+		expect(visible.length, "a rule that shows the list").toBeGreaterThan(0);
+		for (const rule of visible) {
+			for (const selector of selectors(rule)) {
+				expect(selector, "not tied to the Console layout").not.toContain("askmate-composer-layout");
+			}
+		}
+		expect(declarationOf(shown, "display")).toBe("block");
+	});
+
+	test("the shown rule outranks the rule that hides the list by default, and still honours the hidden attribute", () => {
+		const hiding = listDisplayRules
+			.filter((rule) => declaration(rule, "display") === "none")
+			.flatMap(selectors)
+			.filter((selector) => selector.includes(list));
+		expect(hiding.length, "a rule that hides the list by default").toBeGreaterThan(0);
+		for (const selector of hiding) {
+			expect(compareSpecificity(specificity(shown), specificity(selector)), `${shown} against ${selector}`).toBeGreaterThan(0);
+		}
+		expect(shown).toContain(":not([hidden])");
+	});
+
+	test("scrolls instead of growing, so a long list never pushes the prompt off the sidebar", () => {
+		expect(declarationOf(shown, "max-height")).toBe("220px");
+		expect(declarationOf(shown, "overflow-y")).toBe("auto");
+	});
+});

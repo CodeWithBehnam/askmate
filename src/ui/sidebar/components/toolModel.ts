@@ -1,3 +1,4 @@
+import type { McpServerStatus } from "../../../mcp";
 import type { SavedToolCall, SavedToolStatus } from "../../../threads/threadModel";
 import type { ToolApprovalCard, ToolUiEvent, ToolUiStatus } from "../../../requests/runTypes";
 
@@ -104,11 +105,14 @@ function savedStatus(status: ToolUiStatus): SavedToolStatus {
 	return status === "denied" ? "denied" : "failed";
 }
 
-/** What a saved conversation keeps about tool calls: names, outcome and a line. Arguments and raw results are never stored. */
+/**
+ * What a saved conversation keeps about tool calls: the server and tool name, the outcome, and for a failed call the
+ * error line. Arguments and results are never stored, because a result is third-party data (mail, rows, file text) and
+ * the conversation is written to data.json, which can be synced to other devices.
+ */
 export function summariseToolCalls(events: readonly ToolUiEvent[]): SavedToolCall[] {
 	return events.map((event) => {
-		const line = event.error ?? event.resultPreview ?? "";
-		const summary = previewToolResult(line, 300).replace(/\s+/g, " ");
+		const summary = previewToolResult(event.error ?? "", 300).replace(/\s+/g, " ");
 		return {
 			server: event.server,
 			tool: event.tool,
@@ -121,4 +125,23 @@ export function summariseToolCalls(events: readonly ToolUiEvent[]): SavedToolCal
 export function describeSavedToolCall(call: SavedToolCall): string {
 	const outcome = call.status === "completed" ? "used" : call.status === "denied" ? "was denied" : "failed";
 	return `${toolCardName(call)} ${outcome}${call.summary ? `: ${call.summary}` : ""}`;
+}
+
+export interface ToolUsePlan {
+	/** Send the question with tools, so the service can start or retry its servers. */
+	attempt: boolean;
+	/** A server is set up but not trusted on this device, and nothing else can answer. */
+	trustNeeded: boolean;
+}
+
+/**
+ * Server states the service can act on when a run starts. A server that failed is retried by the service itself once its
+ * short wait is over, but only when a run asks for tools, so a failed server must not rule the run out here.
+ */
+const SERVER_STATES_TO_PREPARE: ReadonlySet<string> = new Set(["ready", "idle", "error", "needs-auth"]);
+
+/** Whether a chat question carries tools, from the state of the configured servers. */
+export function planToolUse(servers: readonly McpServerStatus[]): ToolUsePlan {
+	const attempt = servers.some((server) => SERVER_STATES_TO_PREPARE.has(server.state.kind));
+	return { attempt, trustNeeded: !attempt && servers.some((server) => server.state.kind === "needs-trust") };
 }

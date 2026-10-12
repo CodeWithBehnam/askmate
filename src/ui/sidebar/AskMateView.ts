@@ -78,7 +78,6 @@ import {
 	formatConsoleStatus,
 	getConsoleCompletions,
 	parseConsoleInput,
-	resolveLayoutName,
 	type ConsoleAction,
 	type ConsoleCommand,
 	type ConsoleCompletion,
@@ -88,7 +87,7 @@ import { createScratchHost, mountSvg, nextRenderId, sourceHash } from "../../dia
 import { MAX_SKILLS_PER_REQUEST, type Skill, type SkillSuggestion } from "../../skills";
 import { NO_NOTE_SOURCE } from "../../context/ContextService";
 import type { ProviderConnectionTestResult } from "../../providers";
-import type { DiagramRunResult, RunPhaseEvent, RunResult, ToolApprovalCard, ToolApprovalChoice, ToolUiEvent } from "../../requests/runTypes";
+import type { DiagramRunResult, ExtendedBuildOptions, RunPhaseEvent, RunResult, SkillSelection, ToolApprovalCard, ToolApprovalChoice, ToolUiEvent } from "../../requests/runTypes";
 import {
 	checkApiKeyInput,
 	getProviderCatalogEntry,
@@ -104,7 +103,7 @@ import { createAnnouncer, type Announcer } from "./components/announcer";
 import { onboardingTipText } from "./components/onboardingTip";
 import { renderDiagramCard, type DiagramCardHandle, type DiagramPreviewHost, type DrawResult } from "./components/DiagramCard";
 import { presentRunError, type ErrorPresentation } from "./components/errorFix";
-import { parsePlainComposerCommand, resolveDraftRequest, type DraftResolution } from "./components/draftRequest";
+import { parsePlainComposerCommand, readComposerLine, resolveDraftRequest, type DraftResolution } from "./components/draftRequest";
 import {
 	buildFixQuestion,
 	canonicalDiagramText,
@@ -141,7 +140,7 @@ import {
 import { buildStatusSegments, createStatusSegments, formatMcpStatus, type StatusSegmentsHandle } from "./components/statusSegments";
 import { DRAWING_DIAGRAM_TEXT, isRenderCurrent, planStreamRender, streamRenderDelay } from "./components/streamingDiagram";
 import { createToolCallCard, renderSavedToolCalls, type ToolCardHandle } from "./components/ToolCallCard";
-import { mergeToolEvent, summariseToolCalls } from "./components/toolModel";
+import { mergeToolEvent, planToolUse, summariseToolCalls, type ToolUsePlan } from "./components/toolModel";
 import { createRunController, type RunController, type RunRecord } from "./runController";
 
 let consoleViewCounter = 0;
@@ -175,7 +174,7 @@ interface SetupFlowState {
 	/** What was typed into the card, and the provider it was typed for. A draft is never carried to another provider. */
 	draft: SetupCardDraft;
 	draftProvider: TextProviderId | null;
-	test: { status: "ok" | "failed"; providerId: TextProviderId; model: string; copy?: SetupErrorCopy; at: number } | null;
+	test: { status: "ok" | "failed"; providerId: TextProviderId; model: string; copy?: SetupErrorCopy; at: number; suggestedModel?: string } | null;
 	testing: boolean;
 	localError: SetupCardError | null;
 }
@@ -313,6 +312,8 @@ export class AskMateView extends ItemView {
 		localError: null
 	};
 	private hasOpenNote = false;
+	/** The note about a tool server that is not trusted yet is said once per sidebar, not on every question. */
+	private toolTrustNoticeShown = false;
 	/** Skills chosen for the next question only. Conversation-wide skills live in `threadMeta.skillIds`. */
 	private onceSkillIds: string[] = [];
 	private skillChipsEl: HTMLElement | null = null;
@@ -620,21 +621,15 @@ export class AskMateView extends ItemView {
 		this.applyConsolePromptSemantics();
 	}
 
-	/** The console prompt is a combobox with a suggestion list; the other layouts keep a plain text box. */
+	/** The prompt is a combobox with a suggestion list in every layout, because commands and mentions work in every layout. */
 	private applyConsolePromptSemantics(): void {
 		if (!this.questionEl) {
 			return;
 		}
-		if (this.isConsoleLayout()) {
-			this.questionEl.setAttribute("role", "combobox");
-			this.questionEl.setAttribute("aria-autocomplete", "list");
-			this.questionEl.setAttribute("aria-controls", `${this.consoleIdPrefix}-completions`);
-			this.questionEl.setAttribute("aria-expanded", String(Boolean(this.consoleCompletion)));
-			return;
-		}
-		for (const attribute of ["role", "aria-autocomplete", "aria-controls", "aria-expanded", "aria-activedescendant"]) {
-			this.questionEl.removeAttribute(attribute);
-		}
+		this.questionEl.setAttribute("role", "combobox");
+		this.questionEl.setAttribute("aria-autocomplete", "list");
+		this.questionEl.setAttribute("aria-controls", `${this.consoleIdPrefix}-completions`);
+		this.questionEl.setAttribute("aria-expanded", String(Boolean(this.consoleCompletion)));
 	}
 
 	private renderOnboardingTips(): void {
@@ -715,7 +710,7 @@ export class AskMateView extends ItemView {
 		}
 		const shortcut = this.plugin.settings.sendShortcut;
 		const suffix = shortcut === "ctrl-enter" ? "Ctrl/Cmd+Enter to send." : "Enter to send, Shift+Enter for newline.";
-		return `Ask about the note, use /image, or choose a workflow... ${suffix}`;
+		return `Ask about the note, or type / for commands and @ for context. ${suffix}`;
 	}
 
 	private shouldSubmitFromKeydown(event: KeyboardEvent): boolean {
@@ -792,7 +787,7 @@ export class AskMateView extends ItemView {
 			}
 		});
 		this.questionEl.addEventListener("keydown", (event) => {
-			if (this.isConsoleLayout() && this.handleConsoleKeydown(event)) {
+			if (this.handleComposerKeydown(event)) {
 				return;
 			}
 			if (!this.shouldSubmitFromKeydown(event)) {
@@ -1005,7 +1000,7 @@ export class AskMateView extends ItemView {
 		}, 200);
 	}
 
-	private getRequestPreviewKey(question: string, forceImage: boolean, options: RunRequestOptions): string {
+	private getRequestPreviewKey(question: string, forceImage: boolean, options: ExtendedBuildOptions): string {
 		return JSON.stringify([
 			this.requestPreviewContextGeneration,
 			question,
@@ -1048,7 +1043,8 @@ export class AskMateView extends ItemView {
 			summary.classList.remove("has-blocker");
 			return;
 		}
-		const { options, ...command } = draft;
+		const { options: draftOptions, skillNames, ...command } = draft;
+		const options = this.withSkillSelection(draftOptions, skillNames);
 		const previewKey = this.getRequestPreviewKey(command.question, command.forceImage, options);
 		if (previewKey === this.lastRequestPreviewKey) {
 			return;
@@ -1347,6 +1343,7 @@ export class AskMateView extends ItemView {
 		this.statusBarObserver = null;
 		this.stopActiveRun(false);
 		this.runs.shutdown();
+		this.forgetToolGrants();
 		if (this.requestPreviewTimer !== null) {
 			window.clearTimeout(this.requestPreviewTimer);
 			this.requestPreviewTimer = null;
@@ -1445,31 +1442,31 @@ export class AskMateView extends ItemView {
 			await this.submitConsoleInput();
 			return;
 		}
-		if (!this.ensureIdleForNewRequest()) {
-			return;
-		}
-		// "/layout console" also works here, so the way back to the Console layout is the same everywhere.
-		const layoutCommand = this.questionEl.value.trim().match(/^\/layout\s+(\S+)$/i);
-		const requestedLayout = layoutCommand ? resolveLayoutName(layoutCommand[1]) : null;
-		if (requestedLayout) {
-			this.questionEl.value = "";
-			await this.switchLayout(requestedLayout);
-			return;
-		}
-
 		const rawQuestion = this.questionEl.value.trim();
-		if (!rawQuestion) {
-			this.notify("Type a question first.");
-			return;
-		}
-		// The setup, skills, diagram, tools and test commands work in every layout.
-		if (/^\/(?:setup|connect|welcome|skills?|diagram|mcp|test|images)(?:\s|$)/i.test(rawQuestion)) {
+		const line = rawQuestion ? readComposerLine(rawQuestion, this.consoleCommands) : null;
+		// Slash commands and @mentions work in every layout. A line with neither is a plain question and goes on as it always did.
+		if (line?.kind === "command") {
+			if (line.action.kind === "layout") {
+				if (!this.ensureIdleForNewRequest()) {
+					return;
+				}
+				this.questionEl.value = "";
+				await this.switchLayout(line.action.layout);
+				return;
+			}
+			// Commands such as /help work while a request runs; the actions that send a request check idleness themselves.
 			await this.submitConsoleInput();
 			return;
 		}
+		if (!this.ensureIdleForNewRequest()) {
+			return;
+		}
+		if (!line) {
+			this.notify("Type a question first.");
+			return;
+		}
 		// "/image ..." goes to OpenAI Images whatever chat provider is selected, so check the matching readiness.
-		const command = parsePlainComposerCommand(rawQuestion);
-		const isReady = command.forceImage
+		const isReady = line.forceImage
 			? await this.isProviderReadyForSubmit("Add an OpenAI API key in AskMate settings before generating an image.", () => this.plugin.isImageGenerationConfigured(), "image")
 			: await this.isProviderReadyForSubmit("Connect an AI provider before sending.");
 		if (!isReady) {
@@ -1480,9 +1477,9 @@ export class AskMateView extends ItemView {
 
 		// The text stays in the box until the request has been built and confirmed, so a failure never loses it.
 		await this.runRequest({
-			question: command.question,
-			title: command.forceImage ? "AskMate Image" : "AskMate Answer",
-			options: this.getRequestDraftOptions(command.forceImage),
+			question: line.question,
+			title: line.forceImage ? "AskMate Image" : "AskMate Answer",
+			options: this.getRequestDraftOptions(line.forceImage),
 			onSent: () => this.clearComposerIf(rawQuestion)
 		});
 	}
@@ -1660,7 +1657,13 @@ export class AskMateView extends ItemView {
 		});
 	}
 
-	private async buildRunRequest(spec: RunSpec, intentKind: RequestIntentKind, title: string, threadMessages: ChatMessageLike[]): Promise<AskRequest> {
+	private async buildRunRequest(
+		spec: RunSpec,
+		intentKind: RequestIntentKind,
+		title: string,
+		threadMessages: ChatMessageLike[],
+		skillSelection: SkillSelection
+	): Promise<AskRequest> {
 		const options = spec.options;
 		const built = await this.plugin.buildRequest(spec.question, title, {
 			...options,
@@ -1672,23 +1675,42 @@ export class AskMateView extends ItemView {
 			additionalContextPaths: options.additionalContextPaths ?? this.additionalContextPaths,
 			folderContext: options.folderContext ?? this.getFolderContextOptions(),
 			threadMessages,
-			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
+			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled,
+			// Built with the skills the run will carry, so the size check, the preview and the inspector all see their text.
+			skillSelection
 		});
-		return intentKind === "diagram"
-			? withDiagramMetadata(built, spec.diagram ?? built.metadata.diagram ?? firstLook(this.plugin.settings.diagrams))
-			: built;
+		// A look that was asked for applies whatever made this a diagram request: the wording, a workflow, a skill or a chip.
+		const look = spec.diagram ?? (intentKind === "diagram" ? built.metadata.diagram ?? firstLook(this.plugin.settings.diagrams) : undefined);
+		return look ? withDiagramMetadata(built, look) : built;
 	}
 
-	/** Tools are offered on ordinary chat questions when a tool server is ready; never for diagrams, images, notes or applied answers. */
-	private shouldUseTools(request: AskRequest): boolean {
+	/** The skills a question carries: those named for it, the ones kept on for the conversation, and the automatic ones. */
+	private skillSelectionFor(explicitRefs: readonly string[], autoEnabled = true): SkillSelection {
+		return buildSkillSelection({
+			explicit: explicitRefs.map((ref) => this.skillIdFor(ref)),
+			sticky: this.threadMeta.skillIds ?? [],
+			autoEnabled
+		});
+	}
+
+	/**
+	 * Options for a preview or an inspection: the skills the line names, plus the chips and the conversation's own. Reading
+	 * them uses up no one-shot chip, so what is shown is what Enter would send.
+	 */
+	private withSkillSelection(options: RunRequestOptions, named: readonly string[]): ExtendedBuildOptions {
+		return { ...options, skillSelection: this.skillSelectionFor(Array.from(new Set([...named, ...this.onceSkillIds]))) };
+	}
+
+	/** Tools are offered on ordinary chat questions when a tool server can be used; never for diagrams, images, notes or applied answers. */
+	private planTools(request: AskRequest): ToolUsePlan {
 		const mcp = this.plugin.mcpService;
 		if (!mcp || request.metadata.outputMode !== "chat" || request.metadata.modelCapability !== "text") {
-			return false;
+			return { attempt: false, trustNeeded: false };
 		}
 		if (request.metadata.intentKind === "diagram" || request.metadata.forceImage || request.metadata.autoImage) {
-			return false;
+			return { attempt: false, trustNeeded: false };
 		}
-		return mcp.status().some((server) => server.state.kind === "ready" || server.state.kind === "idle");
+		return planToolUse(mcp.status());
 	}
 
 	private async runRequest(spec: RunSpec): Promise<void> {
@@ -1748,9 +1770,15 @@ export class AskMateView extends ItemView {
 			includeThreadHistory: options.includeThreadHistory ?? this.plugin.settings.threadedChatEnabled
 		});
 		let ticket: RetryTicket = { draft, built: null };
+		// Chips and the picker name skills for this question only, so the question keeps them: Retry, Another look and Fix are
+		// the same question, and must run with the skills the person chose for it. The choice is made before the request is
+		// built, so the size check and the inspector read the same skills the run carries.
+		const explicitRefs = Array.from(new Set([...(spec.skillRefs ?? []), ...this.onceSkillIds]));
+		const chipsForThisQuestion = [...this.onceSkillIds];
+		const selection = this.skillSelectionFor(explicitRefs, spec.suppressAutoSkills !== true);
 
 		try {
-			request = spec.builtRequest ?? await this.buildRunRequest(spec, intentKind, requestTitle, threadMessages);
+			request = spec.builtRequest ?? await this.buildRunRequest(spec, intentKind, requestTitle, threadMessages, selection);
 			ticket = { draft, built: createBuiltRetrySnapshot(request) };
 
 			if (!this.isRunActive(run)) {
@@ -1791,19 +1819,15 @@ export class AskMateView extends ItemView {
 			if (isDiagramRun) {
 				this.showDrawingNote(message.body, DRAWING_DIAGRAM_TEXT);
 			}
-			// Chips and the picker name skills for this question only, so the question keeps them: Retry, Another look and
-			// Fix are the same question, and must run with the skills the person chose for it.
-			const explicitRefs = Array.from(new Set([...(spec.skillRefs ?? []), ...this.onceSkillIds]));
 			spec.skillRefs = explicitRefs;
-			const selection = buildSkillSelection({
-				explicit: explicitRefs.map((ref) => this.skillIdFor(ref)),
-				sticky: this.threadMeta.skillIds ?? [],
-				autoEnabled: spec.suppressAutoSkills !== true
-			});
-			// The skills picked for one question are used up by it.
-			if (this.onceSkillIds.length > 0) {
-				this.onceSkillIds = [];
+			// The skills picked for one question are used up by it. A chip added while the size warning was open waits for the next.
+			if (chipsForThisQuestion.length > 0) {
+				this.onceSkillIds = this.onceSkillIds.filter((id) => !chipsForThisQuestion.includes(id));
 				this.refreshSkillChips();
+			}
+			const tools = this.planTools(request);
+			if (tools.trustNeeded) {
+				this.noteToolsNeedTrust();
 			}
 			const result: RunResult = await this.plugin.runOpenAIRequest(request, {
 				onTextDelta: (delta) => {
@@ -1821,7 +1845,9 @@ export class AskMateView extends ItemView {
 				abortSignal: run.abortController.signal,
 				forceImage: shouldGenerateImage,
 				skillSelection: selection,
-				...(this.shouldUseTools(request) ? { toolsEnabled: true } : {}),
+				// "Allow for this chat" is scoped to this conversation, and ends with it.
+				chatId: this.threadMeta.id,
+				...(tools.attempt ? { toolsEnabled: true } : {}),
 				onToolEvent: (event) => {
 					toolEvents = mergeToolEvent(toolEvents, event);
 					if (this.isRunActive(run)) {
@@ -2117,6 +2143,20 @@ export class AskMateView extends ItemView {
 		return handle;
 	}
 
+	/** Says why a question went without tools when the only tool servers are waiting for the person's trust. */
+	private noteToolsNeedTrust(): void {
+		if (this.toolTrustNoticeShown) {
+			return;
+		}
+		this.toolTrustNoticeShown = true;
+		this.notify("A tool server needs your trust on this device, so AskMate answered without tools. Open AskMate settings, then Skills and tools, to review it.");
+	}
+
+	/** "Allow for this chat" decisions belong to one conversation, so they end when it is left, cleared or deleted. */
+	private forgetToolGrants(): void {
+		this.plugin.mcpService?.forgetChat(this.threadMeta.id);
+	}
+
 	/** Asks inside the answer, with the full arguments, and waits. Stopping the run or closing the sidebar answers "deny". */
 	private async confirmToolCall(run: RunRecord, message: MessageElements, request: ToolApprovalCard): Promise<ToolApprovalChoice> {
 		if (!this.isRunActive(run)) {
@@ -2133,7 +2173,8 @@ export class AskMateView extends ItemView {
 		this.announcer?.announce({ kind: "approval", toolName: request.title || request.tool, serverName: request.server });
 		this.maybeScrollMessagesToBottom();
 		try {
-			return await handle.requestApproval(request, { canAllowForChat: true });
+			// The service says whether a grant can be scoped to this conversation; a button that would grant nothing is not shown.
+			return await handle.requestApproval(request, { canAllowForChat: request.canAllowForChat === true });
 		} finally {
 			if (this.isRunActive(run)) {
 				this.setRunPhase(run, "tool-calling");
@@ -2782,8 +2823,8 @@ export class AskMateView extends ItemView {
 	}
 
 	/**
-	 * Only the Console layout understands @selection; elsewhere a selection is already the default scope, so the
-	 * text is skipped there rather than sent to the model as a literal word.
+	 * The Console shows @selection in the box as typed. Elsewhere a selection is already the default scope, so the mention
+	 * is left out to keep the box to what the person writes.
 	 */
 	focusComposer(consoleText: string): void {
 		if (!this.questionEl) {
@@ -3103,12 +3144,12 @@ export class AskMateView extends ItemView {
 			: "Text provider and model for the next request");
 	}
 
-	private async openPromptInspector(questionOverride?: string, optionsOverride?: RunRequestOptions): Promise<void> {
+	private async openPromptInspector(questionOverride?: string, optionsOverride?: RunRequestOptions, skillNames: readonly string[] = []): Promise<void> {
 		try {
 			const raw = questionOverride?.trim() || this.questionEl.value.trim() || "Preview request";
 			if (optionsOverride) {
 				const plain = parsePlainComposerCommand(raw);
-				const inspection = await this.plugin.inspectFinalPrompt(plain.question, plain.forceImage ? "AskMate Image" : "AskMate Answer", optionsOverride);
+				const inspection = await this.plugin.inspectFinalPrompt(plain.question, plain.forceImage ? "AskMate Image" : "AskMate Answer", this.withSkillSelection(optionsOverride, skillNames));
 				new AskMatePromptInspectorModal(this.app, inspection).open();
 				return;
 			}
@@ -3118,7 +3159,7 @@ export class AskMateView extends ItemView {
 				this.notify(draft.hint);
 				return;
 			}
-			const inspection = await this.plugin.inspectFinalPrompt(draft.question, draft.title, draft.options);
+			const inspection = await this.plugin.inspectFinalPrompt(draft.question, draft.title, this.withSkillSelection(draft.options, draft.skillNames));
 			new AskMatePromptInspectorModal(this.app, inspection).open();
 		} catch (error) {
 			this.notify(this.plugin.getErrorMessage(error));
@@ -3169,6 +3210,9 @@ export class AskMateView extends ItemView {
 	}
 
 	private showThread(saved: SavedThread): void {
+		if (saved.id !== this.threadMeta.id) {
+			this.forgetToolGrants();
+		}
 		this.threadMeta = { ...saved, messages: [] };
 		this.messages = fromSavedMessages(saved.messages);
 		this.pendingTurns.clear();
@@ -3233,6 +3277,7 @@ export class AskMateView extends ItemView {
 			return;
 		}
 		this.stopActiveRun(false);
+		this.forgetToolGrants();
 		this.threadMeta = this.createFreshThread();
 		this.messages = [];
 		this.pendingTurns.clear();
@@ -3270,6 +3315,7 @@ export class AskMateView extends ItemView {
 		await this.saveThreadNow();
 		// A request may have started while the save was being written.
 		this.assertNoActiveRequest("starting a new conversation");
+		this.forgetToolGrants();
 		this.threadMeta = this.createFreshThread();
 		this.messages = [];
 		this.pendingTurns.clear();
@@ -3287,7 +3333,7 @@ export class AskMateView extends ItemView {
 		if (threads.length === 0) {
 			this.notify(this.plugin.threads.isEnabled()
 				? "No saved conversations yet. Ask a question first."
-				: "Saving conversations is off. Turn on Save conversations in AskMate settings to keep threads.");
+				: "Saving conversations is off. Turn on Remember conversations in AskMate settings, under Privacy and memory, to keep threads.");
 			return;
 		}
 		new AskMateThreadPickerModal(this.app, threads, this.threadMeta.id, purpose, (thread) => {
@@ -3329,6 +3375,7 @@ export class AskMateView extends ItemView {
 		const outcome = await this.runs.withClaim("delete-thread", async () => {
 			const removed = await this.plugin.threads.remove(thread.id);
 			if (removed && isCurrent) {
+				this.forgetToolGrants();
 				this.threadMeta = this.createFreshThread();
 				this.messages = [];
 				this.pendingTurns.clear();
@@ -3524,11 +3571,16 @@ export class AskMateView extends ItemView {
 		modeButton?.classList.toggle("is-apply", mode === "apply");
 	}
 
-	/** Returns true when the console handled the key (completion, history or stop). */
-	private handleConsoleKeydown(event: KeyboardEvent): boolean {
+	/** Returns true when the composer handled the key: a suggestion in any layout, or history and stop in the Console. */
+	private handleComposerKeydown(event: KeyboardEvent): boolean {
 		if (event.isComposing) {
 			return false;
 		}
+		return this.handleCompletionKeydown(event) || (this.isConsoleLayout() && this.handleConsoleKeydown(event));
+	}
+
+	/** Moves through, accepts or closes the suggestion list. The list is the same in every layout. */
+	private handleCompletionKeydown(event: KeyboardEvent): boolean {
 		const completion = this.consoleCompletion;
 		if (completion && completion.items.length > 0) {
 			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -3562,6 +3614,11 @@ export class AskMateView extends ItemView {
 				return true;
 			}
 		}
+		return false;
+	}
+
+	/** The Console's own keys: Escape stops a request, and the arrows browse the lines typed before. */
+	private handleConsoleKeydown(event: KeyboardEvent): boolean {
 		if (event.key === "Escape" && this.activeRun) {
 			event.preventDefault();
 			this.stopActiveRun();
@@ -3600,11 +3657,19 @@ export class AskMateView extends ItemView {
 	}
 
 	private updateConsoleCompletions(): void {
-		if (!this.isConsoleLayout() || !this.questionEl) {
+		if (!this.questionEl) {
 			this.closeConsoleCompletions();
 			return;
 		}
 		const value = this.questionEl.value;
+		// Ordinary prose, typed in any layout, offers nothing, so the lists behind the suggestions are not built for it.
+		const beforeCaret = value.slice(0, this.questionEl.selectionStart ?? value.length);
+		if (!beforeCaret.startsWith("/") && !/(^|\s)@\S*$/.test(beforeCaret)) {
+			if (this.consoleCompletion) {
+				this.closeConsoleCompletions();
+			}
+			return;
+		}
 		const providerId = this.plugin.getChatProviderId();
 		const result = getConsoleCompletions(value, this.questionEl.selectionStart ?? value.length, this.consoleCommands, {
 			models: listProviderModels(providerId, this.plugin.settings),
@@ -3667,9 +3732,7 @@ export class AskMateView extends ItemView {
 			this.consoleCompletionsEl.empty();
 		}
 		this.questionEl?.removeAttribute("aria-activedescendant");
-		if (this.isConsoleLayout()) {
-			this.questionEl?.setAttribute("aria-expanded", "false");
-		}
+		this.questionEl?.setAttribute("aria-expanded", "false");
 	}
 
 	/** Echo of a typed command. Kept out of `messages`, so commands never become thread history. Said once per submit. */
@@ -3753,8 +3816,8 @@ export class AskMateView extends ItemView {
 	}
 
 	/**
-	 * Starts a new conversation and keeps the old one in Saved conversations. Commands call this in every composer layout, because
-	 * only the Console layout reads slash commands. It rejects, with the reason, while a request is running.
+	 * Starts a new conversation and keeps the old one in Saved conversations. The palette command calls this, and so do /new and the
+	 * header button in every layout. It rejects, with the reason, while a request is running.
 	 */
 	async startNewConversation(): Promise<void> {
 		await this.startNewThread();
@@ -3896,7 +3959,7 @@ export class AskMateView extends ItemView {
 				return;
 			case "context": {
 				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
-				const lines = await this.describeConsoleContext(options);
+				const lines = await this.describeConsoleContext(this.withSkillSelection(options, action.mentions.skills));
 				this.commitConsoleCommand(raw);
 				this.printConsoleOutput(lines.text, lines.blocked ? "error" : "info");
 				return;
@@ -3904,7 +3967,7 @@ export class AskMateView extends ItemView {
 			case "inspect": {
 				const options = this.applyConsoleMentions(this.getRequestDraftOptions(false), action.mentions);
 				this.commitConsoleCommand(raw);
-				await this.openPromptInspector(action.question || "Preview request", options);
+				await this.openPromptInspector(action.question || "Preview request", options, action.mentions.skills);
 				return;
 			}
 			case "history":
@@ -4092,7 +4155,9 @@ export class AskMateView extends ItemView {
 			welcomeOpen: this.setup.welcomeOpen,
 			hasOpenNote: this.hasOpenNote,
 			hasStoredKey: this.hasStoredKey(selected),
-			localError: this.setup.localError
+			localError: this.setup.localError,
+			savedBaseUrl: this.plugin.settings.providers[selected]?.baseUrl,
+			savedModel: this.plugin.settings.providers[selected]?.model
 		});
 		// What was typed survives a redraw, and so does the keyboard focus inside the card. The view's draft is current
 		// because every keystroke reports to it; reading it back from the old card would undo a clear.
@@ -4126,7 +4191,12 @@ export class AskMateView extends ItemView {
 			}
 		}, this.setup.draft);
 		if (hadFocus) {
-			this.setupHandle.focusKey();
+			// A control that had the keyboard is gone with the redraw: it goes to the first field, or after a connection to the starters.
+			if (model.phase === "connected") {
+				this.setupHandle.focusStart();
+			} else {
+				this.setupHandle.focusKey();
+			}
 		}
 	}
 
@@ -4236,7 +4306,8 @@ export class AskMateView extends ItemView {
 				return;
 			}
 		} else {
-			const baseUrl = draft.baseUrl.trim() || catalog.defaultBaseUrl;
+			// An empty field means the address is unchanged: the saved one, then the provider's usual one.
+			const baseUrl = draft.baseUrl.trim() || settings.providers[providerId].baseUrl.trim() || catalog.defaultBaseUrl;
 			if (!/^https?:\/\/\S+$/i.test(baseUrl)) {
 				this.failSetup("The address must start with http:// or https://, for example http://localhost:11434/v1.", "check-address");
 				return;
@@ -4250,7 +4321,7 @@ export class AskMateView extends ItemView {
 		await this.runConnectionTest();
 	}
 
-	/** Tests the selected provider and says the result in plain words, on the card and in the line it returns. */
+	/** Tests the selected provider and says the result in plain words, on the card, to assistive technology, and in the line it returns. */
 	private async runConnectionTest(): Promise<{ ok: boolean; line: string }> {
 		if (this.setup.testing) {
 			return { ok: false, line: "A connection test is already running." };
@@ -4260,13 +4331,14 @@ export class AskMateView extends ItemView {
 		this.setup.testing = true;
 		this.setup.test = null;
 		this.setup.localError = null;
+		this.announcer?.say(`Checking ${ref.providerName}.`);
 		this.refreshSetupCard();
 		this.refreshConsoleStatus();
-		let result: Pick<ProviderConnectionTestResult, "ok" | "message" | "modelFound">;
+		let result: Pick<ProviderConnectionTestResult, "ok" | "message" | "modelFound" | "suggestedModel">;
 		try {
 			result = await this.plugin.testProviderConnectionDetailed();
 		} catch (error) {
-			result = { ok: false, message: this.plugin.getErrorMessage(error), modelFound: null };
+			result = { ok: false, message: this.plugin.getErrorMessage(error), modelFound: null, suggestedModel: null };
 		}
 		this.setup.testing = false;
 		if (this.isClosed) {
@@ -4282,17 +4354,45 @@ export class AskMateView extends ItemView {
 				// The person is on the card: the next step is a starter, so the card turns into one.
 				this.setup.welcomeOpen = true;
 			}
+			this.announcer?.say(this.setup.welcomeOpen ? `${line} Starter buttons are below.` : line);
 			await this.markFirstRunComplete();
 		} else {
 			const failure = result.ok ? new Error(`The model ${ref.model} was not found. ${result.message}`) : new Error(result.message);
-			const copy = mapProviderErrorToSetupCopy(failure, context);
-			this.setup.test = { status: "failed", providerId: ref.providerId, model: ref.model, copy, at: Date.now() };
+			const suggested = result.ok ? result.suggestedModel?.trim() ?? "" : "";
+			const mapped = mapProviderErrorToSetupCopy(failure, context);
+			// The server's own list is the best answer to a missing model, so the button uses its closest match instead of a static list.
+			const copy: SetupErrorCopy = suggested
+				? { ...mapped, message: `${mapped.message} The closest model it lists is ${suggested}.`, action: { kind: "choose-model", label: `Use ${suggested}` } }
+				: mapped;
+			this.setup.test = { status: "failed", providerId: ref.providerId, model: ref.model, copy, at: Date.now(), ...(suggested ? { suggestedModel: suggested } : {}) };
 			line = copy.message;
+			this.announcer?.say(line);
 		}
 		this.refreshSetupCard();
 		this.refreshConsoleStatus();
 		void this.refreshReadiness();
 		return { ok, line };
+	}
+
+	/** Switches to the model the server itself listed, then checks the connection again. */
+	private async useSuggestedModel(model: string): Promise<void> {
+		await this.switchChatModel(this.plugin.getChatProviderModelRef().providerId, model);
+		await this.runConnectionTest();
+	}
+
+	/** Reads the server's own model list first, so the picker offers models that exist there and not only the built-in suggestions. */
+	private async chooseModelFromServer(): Promise<void> {
+		if (this.activeRun) {
+			this.openModelPicker();
+			return;
+		}
+		try {
+			await this.plugin.refreshSelectedProviderModels();
+		} catch (error) {
+			// The picker still opens, with the list it has; the person is told why that list may be short.
+			this.notify(`AskMate could not read the model list from the server. ${this.plugin.getErrorMessage(error)}`);
+		}
+		this.openModelPicker();
 	}
 
 	private async markFirstRunComplete(): Promise<void> {
@@ -4313,9 +4413,11 @@ export class AskMateView extends ItemView {
 				// which is not necessarily the chat provider yet.
 				this.openSetupFlow();
 				return;
-			case "choose-model":
-				this.openModelPicker();
+			case "choose-model": {
+				const suggested = this.setup.test?.status === "failed" ? this.setup.test.suggestedModel : undefined;
+				this.runUiTask(suggested ? this.useSuggestedModel(suggested) : this.chooseModelFromServer());
 				return;
+			}
 			case "check-address": {
 				// Like Update key, the card stays on the chip in use: a local error belongs to the chip the person typed on, which is
 				// not necessarily the chat provider yet. Only a local server's address can be fixed in the card; the address of any other
@@ -4418,6 +4520,7 @@ export class AskMateView extends ItemView {
 		this.threadMeta = withThreadSkillIds(this.threadMeta, next);
 		this.refreshSkillChips();
 		this.refreshConsoleStatus();
+		this.scheduleRequestPreviewRefresh();
 		this.queueThreadSave();
 		const title = this.skillTitle(skill);
 		if (!turnOn) {
@@ -4489,11 +4592,13 @@ export class AskMateView extends ItemView {
 				}
 				this.refreshSkillChips();
 				this.refreshConsoleStatus();
+				this.scheduleRequestPreviewRefresh();
 				this.questionEl.focus();
 			},
 			onAccept: (chip) => {
 				this.onceSkillIds = Array.from(new Set([...this.onceSkillIds, chip.id]));
 				this.refreshSkillChips();
+				this.scheduleRequestPreviewRefresh();
 				this.questionEl.focus();
 			}
 		});
@@ -4537,7 +4642,7 @@ export class AskMateView extends ItemView {
 		}
 	}
 
-	private async describeConsoleContext(options: RunRequestOptions): Promise<{ text: string; blocked: boolean }> {
+	private async describeConsoleContext(options: ExtendedBuildOptions): Promise<{ text: string; blocked: boolean }> {
 		const inspection = await this.plugin.inspectFinalPrompt("Preview request", "AskMate Answer", options);
 		const request = inspection.request;
 		const metadata = request.metadata;

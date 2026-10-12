@@ -2304,7 +2304,8 @@ body.theme-dark {
 	outline-offset: -2px;
 }
 
-.askmate-sidebar.askmate-composer-layout-console .askmate-console-completions:not([hidden]) {
+/* The suggestion list for slash commands and mentions belongs to every composer layout, so it is not tied to the Console. */
+.askmate-console-completions:not([hidden]) {
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: block;
 	font-size: var(--font-ui-smaller);

@@ -10,6 +10,7 @@ import {
 	type SetupStage,
 	type StarterChip
 } from "../../../setup";
+import { TEXT_PROVIDER_LABELS } from "../../../settings/constants";
 import type { TextProviderId } from "../../../shared/types";
 
 /**
@@ -32,6 +33,9 @@ export interface SetupCardInput {
 	hasStoredKey: boolean;
 	/** A problem found before anything was sent, such as an empty key field. It outranks the stage's own error. */
 	localError?: SetupCardError | null;
+	/** The address and model saved for the selected provider. A local server keeps its own port, so the card must start from it. */
+	savedBaseUrl?: string;
+	savedModel?: string;
 }
 
 export interface SetupProviderChip {
@@ -61,6 +65,12 @@ export interface SetupCardModel {
 	provider: ProviderCatalogEntry;
 	showKeyField: boolean;
 	showAddressField: boolean;
+	/** What the address field shows until something is typed: the saved address, or the provider's usual one. */
+	addressDefault: string;
+	/** What the model field suggests until something is typed: the saved model, or the provider's usual one. */
+	modelPlaceholder: string;
+	/** A line saying where the providers the chips leave out are set up; only on the first step. */
+	otherProvidersHint: string | null;
 	hasStoredKey: boolean;
 	primaryLabel: string;
 	/** What the main button does: connect from this card, or hand over to the settings page for a provider the card cannot finish. */
@@ -72,7 +82,10 @@ export interface SetupCardModel {
 }
 
 export const SETUP_PRIVACY_LINE =
-	"AskMate sends only the note text you ask about to the provider you choose. Conversations are saved in this vault's plugin data (data.json); you can delete them in settings.";
+	"AskMate sends your question, the note or selection you ask about, and recent turns of this conversation to the provider you choose, plus any extra context or skills you turn on. Conversations are saved in this vault's plugin data (data.json); you can delete them in settings.";
+
+const OTHER_PROVIDER_IDS: readonly TextProviderId[] = ["azure-openai", "azure-ai", "openrouter"];
+const NO_NOTE_STARTERS_HINT = "Open a note, then pick a starter. They work on the note you have open.";
 
 const HIDDEN_PHASE: SetupCardPhase = "connect";
 
@@ -147,7 +160,7 @@ function titleFor(phase: SetupCardPhase, provider: ProviderCatalogEntry, finishI
 	}
 }
 
-function detailFor(phase: SetupCardPhase, provider: ProviderCatalogEntry, hasStoredKey: boolean): string {
+function detailFor(phase: SetupCardPhase, provider: ProviderCatalogEntry, hasStoredKey: boolean, hasOpenNote: boolean): string {
 	switch (phase) {
 		case "connect":
 			if (!provider.needsKey) {
@@ -161,8 +174,14 @@ function detailFor(phase: SetupCardPhase, provider: ProviderCatalogEntry, hasSto
 		case "failed":
 			return "Fix the problem below, then try again.";
 		case "connected":
-			return "Pick a starter to see what AskMate does with the note you have open.";
+			return hasOpenNote ? "Pick a starter to see what AskMate does with the note you have open." : NO_NOTE_STARTERS_HINT;
 	}
+}
+
+/** "Azure OpenAI, Azure AI Foundry or OpenRouter" from the labels the settings page uses. */
+function describeOtherProviders(): string {
+	const labels = OTHER_PROVIDER_IDS.map((id) => TEXT_PROVIDER_LABELS[id]);
+	return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
 }
 
 /** For a provider the card cannot fill in: the gap in the stage's own words and why it is closed in settings, or a test offer when nothing is missing. */
@@ -201,11 +220,17 @@ export function deriveSetupCardModel(input: SetupCardInput): SetupCardModel {
 		visible: phase !== null,
 		phase: shown,
 		title: titleFor(shown, provider, finishInSettings),
-		detail: !canFinishInCard(provider) && shown === "connect" ? settingsDetail(stage, provider, finishInSettings) : detailFor(shown, provider, input.hasStoredKey),
+		detail: !canFinishInCard(provider) && shown === "connect" ? settingsDetail(stage, provider, finishInSettings) : detailFor(shown, provider, input.hasStoredKey, input.hasOpenNote),
 		providers,
 		provider,
 		showKeyField: provider.needsKey && fields,
 		showAddressField: !provider.needsKey && fields,
+		addressDefault: input.savedBaseUrl?.trim() || provider.defaultBaseUrl,
+		modelPlaceholder: input.savedModel?.trim() || provider.defaultModel,
+		// Shown only while no chip stands for one of those providers, so a person who uses one is never told to look elsewhere.
+		otherProvidersHint: shown === "connect" && providers.length === SETUP_CARD_PROVIDER_IDS.length
+			? `Using ${describeOtherProviders()}? Choose Open settings, then Chat provider.`
+			: null,
 		hasStoredKey: input.hasStoredKey,
 		primaryLabel: primaryLabelFor(shown, provider, input.hasStoredKey, finishInSettings),
 		primaryAction: finishInSettings ? "open-settings" : "connect",

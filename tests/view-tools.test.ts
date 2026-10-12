@@ -18,6 +18,7 @@ import {
 	mergeToolEvent,
 	previewToolResult,
 	showHiddenCharacters,
+	planToolUse,
 	summariseToolCalls,
 	toolCardName,
 	toolStatusText
@@ -94,21 +95,45 @@ describe("tool call model", () => {
 		expect(isFinalToolStatus("running")).toBe(false);
 	});
 
-	test("a saved conversation keeps names, outcome and one line, never the arguments", () => {
+	test("a saved conversation keeps names and outcome, and the error line of a failed call, never arguments or results", () => {
 		const saved = summariseToolCalls([
-			event({ id: "a", status: "done", resultPreview: "Found\n3 notes" }),
+			event({ id: "a", status: "done", resultPreview: "From: alice@example.com\nSubject: salary review" }),
 			event({ id: "b", status: "error", error: "Server closed the connection" }),
 			event({ id: "c", status: "denied" }),
 			event({ id: "d", status: "running" })
 		]);
 		expect(saved).toEqual([
-			{ server: "Notes", tool: "search", status: "completed", summary: "Found 3 notes" },
+			{ server: "Notes", tool: "search", status: "completed" },
 			{ server: "Notes", tool: "search", status: "failed", summary: "Server closed the connection" },
 			{ server: "Notes", tool: "search", status: "denied" },
 			{ server: "Notes", tool: "search", status: "failed" }
 		]);
+		// A tool result is third-party data: none of it reaches the file that syncs to other devices.
+		expect(JSON.stringify(saved)).not.toContain("alice");
+		expect(JSON.stringify(saved)).not.toContain("salary");
 		expect(JSON.stringify(saved)).not.toContain("plan");
 		expect(describeSavedToolCall(saved[2]!)).toBe("Notes: search was denied");
+		expect(describeSavedToolCall(saved[0]!)).toBe("Notes: search used");
+	});
+});
+
+describe("when a question carries tools", () => {
+	const server = (kind: string): McpServerStatus => ({ id: kind, label: kind, transport: "http", state: { kind } as McpServerStatus["state"] });
+
+	test("a server the service can start or retry is offered the question, and one that is off or waiting for trust is not", () => {
+		for (const kind of ["ready", "idle", "error", "needs-auth"]) {
+			expect(planToolUse([server(kind)]).attempt).toBe(true);
+		}
+		for (const kind of ["off", "needs-trust", "connecting"]) {
+			expect(planToolUse([server(kind)]).attempt).toBe(false);
+		}
+		expect(planToolUse([])).toEqual({ attempt: false, trustNeeded: false });
+	});
+
+	test("trust is only the reason when nothing else can answer", () => {
+		expect(planToolUse([server("needs-trust")])).toEqual({ attempt: false, trustNeeded: true });
+		expect(planToolUse([server("needs-trust"), server("idle")])).toEqual({ attempt: true, trustNeeded: false });
+		expect(planToolUse([server("needs-trust"), server("off")]).trustNeeded).toBe(true);
 	});
 });
 

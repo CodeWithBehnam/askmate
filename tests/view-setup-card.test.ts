@@ -118,6 +118,46 @@ describe("when the card shows", () => {
 	});
 });
 
+describe("what the card starts from", () => {
+	const local = (overrides: Partial<SetupCardInput> = {}) =>
+		deriveSetupCardModel(input({ stage: stageOf("openai-compatible"), selectedProvider: "openai-compatible", flowOpen: true, ...overrides }));
+
+	test("a local server starts from its saved address and model, and from the usual ones when none is saved", () => {
+		const saved = local({ savedBaseUrl: " http://localhost:1234/v1 ", savedModel: "qwen2.5" });
+		expect(saved.addressDefault).toBe("http://localhost:1234/v1");
+		expect(saved.modelPlaceholder).toBe("qwen2.5");
+		const fresh = local();
+		expect(fresh.addressDefault).toBe(fresh.provider.defaultBaseUrl);
+		expect(fresh.modelPlaceholder).toBe(fresh.provider.defaultModel);
+		expect(local({ savedBaseUrl: "  ", savedModel: "" }).addressDefault).toBe(fresh.provider.defaultBaseUrl);
+	});
+
+	test("with no note open the connected card says so in words, not only in a tooltip", () => {
+		const stage = stageOf("openai", { apiKeySecretName: "k" }, { status: "ok", providerId: "openai", model: DEFAULT_SETTINGS.providers.openai.model });
+		const without = deriveSetupCardModel(input({ stage, flowOpen: true, hasOpenNote: false }));
+		expect(without.detail).toBe("Open a note, then pick a starter. They work on the note you have open.");
+		const withNote = deriveSetupCardModel(input({ stage, flowOpen: true, hasOpenNote: true }));
+		expect(withNote.detail).toBe("Pick a starter to see what AskMate does with the note you have open.");
+	});
+
+	test("the first step says where the providers without a chip are set up, and nothing else does", () => {
+		const first = deriveSetupCardModel(input());
+		expect(first.otherProvidersHint).toBe("Using Azure OpenAI, Azure AI Foundry or OpenRouter? Choose Open settings, then Chat provider.");
+		// Someone whose provider already has a chip is not sent elsewhere, and later steps stay short.
+		expect(deriveSetupCardModel(input({ stage: stageOf("openrouter"), selectedProvider: "openrouter" })).otherProvidersHint).toBeNull();
+		const copy = mapProviderErrorToSetupCopy(new Error("HTTP 401"), { providerId: "openai" });
+		const failed = stageOf("openai", { apiKeySecretName: "k" }, { status: "failed", providerId: "openai", model: DEFAULT_SETTINGS.providers.openai.model, copy });
+		expect(deriveSetupCardModel(input({ stage: failed, flowOpen: true })).otherProvidersHint).toBeNull();
+	});
+
+	test("the privacy line names what is really sent: the question, the note, earlier turns and the context turned on", () => {
+		expect(SETUP_PRIVACY_LINE).toContain("your question");
+		expect(SETUP_PRIVACY_LINE).toContain("recent turns of this conversation");
+		expect(SETUP_PRIVACY_LINE).toContain("extra context or skills you turn on");
+		expect(SETUP_PRIVACY_LINE).not.toContain("only the note text");
+	});
+});
+
 describe("providers that are not one of the four chips", () => {
 	const azureComplete = { apiKeySecretName: "k", baseUrl: "https://res.openai.azure.com/openai/v1", model: "my-deployment" };
 
@@ -352,5 +392,69 @@ describe("the card DOM", () => {
 		expect(fields).toHaveLength(2);
 		expect(fields[0]?.type).toBe("text");
 		expect(fields[0]?.value).toBe(model.provider.defaultBaseUrl);
+	});
+
+	test("the local card shows the saved address and model, and Enter in either field connects", () => {
+		const parent = createFakeEl();
+		const { handlers, log } = callbacks();
+		const model = deriveSetupCardModel(input({ stage: stageOf("openai-compatible"), selectedProvider: "openai-compatible", flowOpen: true, savedBaseUrl: "http://localhost:1234/v1", savedModel: "qwen2.5" }));
+		renderSetupCard(parent, model, handlers, emptyDraft);
+		const fields = parent.querySelectorAll<HTMLInputElement>(".askmate-setup-key-row input");
+		expect(fields[0]?.value).toBe("http://localhost:1234/v1");
+		expect(fields[1]?.placeholder).toBe("qwen2.5");
+		expect(parent.querySelectorAll(".askmate-setup-field label")[1]?.textContent).toBe("Model (optional)");
+		fireDomEvent(fields[0]!, "keydown", { key: "Enter" });
+		fireDomEvent(fields[1]!, "keydown", { key: "Enter" });
+		expect(log).toEqual(["connect:openai-compatible:", "connect:openai-compatible:"]);
+	});
+
+	test("while a check runs nothing is disabled, so the keyboard keeps its place, and the main button ignores a second press", () => {
+		const parent = createFakeEl();
+		// Focus only lands on an element that is in the document.
+		activeDocument.body.appendChild(parent);
+		const { handlers, log } = callbacks();
+		const stage = stageOf("openai", { apiKeySecretName: "k" }, { status: "testing", providerId: "openai", model: DEFAULT_SETTINGS.providers.openai.model });
+		renderSetupCard(parent, deriveSetupCardModel(input({ stage, flowOpen: true, hasStoredKey: true })), handlers, emptyDraft);
+		const field = parent.querySelector<HTMLInputElement>(".askmate-setup-key-row input");
+		expect(field?.disabled).toBe(false);
+		expect(field?.readOnly).toBe(true);
+		expect(field?.getAttribute("aria-disabled")).toBe("true");
+		field?.focus();
+		expect(activeDocument.activeElement).toBe(field);
+		fireDomEvent(field!, "keydown", { key: "Enter" });
+		const primary = parent.querySelector<HTMLButtonElement>(".askmate-setup-actions button.mod-cta");
+		expect(primary?.disabled).toBe(false);
+		expect(primary?.getAttribute("aria-disabled")).toBe("true");
+		primary?.click();
+		// Neither Enter nor the button starts a second check while one is running.
+		expect(log).toEqual([]);
+		parent.remove();
+	});
+
+	test("after a connection the keyboard goes to the first starter that can be used, or to the heading when none can", () => {
+		const stage = stageOf("openai", { apiKeySecretName: "k" }, { status: "ok", providerId: "openai", model: DEFAULT_SETTINGS.providers.openai.model });
+		const withNote = createFakeEl();
+		activeDocument.body.appendChild(withNote);
+		renderSetupCard(withNote, deriveSetupCardModel(input({ stage, flowOpen: true, hasOpenNote: true })), callbacks().handlers, emptyDraft).focusStart();
+		expect(activeDocument.activeElement?.classList.contains("askmate-starter-chip")).toBe(true);
+		expect(activeDocument.activeElement?.textContent).toBe("Summarise this note");
+		withNote.remove();
+		const withoutNote = createFakeEl();
+		activeDocument.body.appendChild(withoutNote);
+		renderSetupCard(withoutNote, deriveSetupCardModel(input({ stage, flowOpen: true, hasOpenNote: false })), callbacks().handlers, emptyDraft).focusStart();
+		expect(activeDocument.activeElement?.classList.contains("askmate-setup-title")).toBe(true);
+		expect(activeDocument.activeElement?.getAttribute("tabindex")).toBe("-1");
+		withoutNote.remove();
+	});
+
+	test("the first step has the line about the other providers, under the chips", () => {
+		const parent = createFakeEl();
+		renderSetupCard(parent, deriveSetupCardModel(input()), callbacks().handlers, emptyDraft);
+		const hint = (root: HTMLElement): string | undefined => Array.from(root.querySelectorAll("p"), (paragraph) => paragraph.textContent ?? "").find((text) => text.includes("Azure AI Foundry"));
+		expect(hint(parent)).toContain("Choose Open settings");
+		const stage = stageOf("openai", { apiKeySecretName: "k" }, { status: "ok", providerId: "openai", model: DEFAULT_SETTINGS.providers.openai.model });
+		const later = createFakeEl();
+		renderSetupCard(later, deriveSetupCardModel(input({ stage, flowOpen: true })), callbacks().handlers, emptyDraft);
+		expect(hint(later)).toBeUndefined();
 	});
 });

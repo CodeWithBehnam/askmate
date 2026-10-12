@@ -9,7 +9,8 @@ import {
 import type { ComposerLayout, ContextScope, OutputMode, ReasoningEffort, Workflow } from "../../shared/types";
 
 /**
- * Pure command language for the Console sidebar layout: slash commands, @mentions, completion, help and the status line.
+ * Pure command language of the sidebar: slash commands, @mentions, completion, help and the status line. Every composer layout
+ * reads it; the Console shows the status line and the history as well.
  * The view only wires these to Obsidian, so every rule here is unit tested.
  */
 
@@ -885,7 +886,8 @@ export function formatConsoleHelp(commands: readonly ConsoleCommand[]): string {
 		"  \\@word          a backslash sends the word as text; code spans and code blocks are never read",
 		"",
 		"Keys",
-		"  Tab or Enter accepts a suggestion, ↑ recalls earlier input, Esc closes suggestions or stops a request.",
+		"  Tab or Enter accepts a suggestion, and Esc closes the suggestions.",
+		"  In the Console layout, ↑ recalls earlier input and Esc also stops a request.",
 		"  Start with // to send a question that begins with a slash."
 	].join("\n");
 }

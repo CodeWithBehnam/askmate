@@ -1,12 +1,15 @@
 import { DEFAULT_IMAGE_PROMPT } from "../../../settings/constants";
 import type { RunRequestOptions, Workflow } from "../../../shared/types";
-import { parseConsoleInput, type ConsoleCommand, type ConsoleMentions } from "../consoleCommands";
+import { parseConsoleInput, type ConsoleAction, type ConsoleCommand, type ConsoleMentions } from "../consoleCommands";
 import { DEFAULT_DIAGRAM_QUESTION, MERMAID_SKILL_ID } from "./diagramModel";
 
 /**
  * What the composer would send for the text in it. The request preview and Inspect prompt both read this, so they
  * describe the request that Enter would really start, including workflow commands. A line that is a command and not a
  * request (for example /model) resolves to a neutral hint, because there is nothing to build for it.
+ *
+ * Slash commands and @mentions work in every layout. Outside the Console a line with neither is a plain question and is
+ * read exactly as it always was.
  */
 
 export type DraftRequestKind = "answer" | "image" | "workflow" | "diagram" | "inspect";
@@ -45,25 +48,54 @@ export function parsePlainComposerCommand(value: string): { question: string; fo
 		: { question: value, forceImage: false };
 }
 
-function plain(raw: string, deps: DraftDeps): DraftResolution {
-	const command = parsePlainComposerCommand(raw);
+/** A line read for the layouts that keep a plain question plain: the question as it goes to the model, or the command to run. */
+export type ComposerLine =
+	| { kind: "plain"; question: string; forceImage: boolean }
+	| { kind: "command"; action: ConsoleAction };
+
+function hasMentions(mentions: ConsoleMentions): boolean {
+	return mentions.scope !== "auto" || mentions.folder !== null || mentions.notes.length > 0 || mentions.vault.length > 0 || mentions.skills.length > 0;
+}
+
+/**
+ * Reads a line from the composer. A line with no command, no @mention, no mode prefix and no "//" escape is a plain
+ * question, and so is "/image ..." (including a bare "/image", which asks for the default picture); everything else is a
+ * command line for the Console parser. The parser leaves an unknown @word such as an email address alone, so ordinary
+ * prose stays prose.
+ */
+export function readComposerLine(raw: string, commands: readonly ConsoleCommand[]): ComposerLine {
+	const trimmed = raw.trim();
+	const action = parseConsoleInput(trimmed, commands);
+	if (action.kind === "ask" && !action.literal && action.outputMode === null && !hasMentions(action.mentions)) {
+		return { kind: "plain", question: action.question, forceImage: false };
+	}
+	const imageLine = IMAGE_COMMAND.test(trimmed);
+	if (imageLine && ((action.kind === "image" && !hasMentions(action.mentions)) || (action.kind === "error" && /^\/(?:image|img)$/i.test(trimmed)))) {
+		return { kind: "plain", ...parsePlainComposerCommand(trimmed) };
+	}
+	return { kind: "command", action };
+}
+
+function plain(line: Extract<ComposerLine, { kind: "plain" }>, deps: DraftDeps): DraftResolution {
 	return {
 		kind: "request",
-		draftKind: command.forceImage ? "image" : "answer",
-		question: command.question,
-		title: command.forceImage ? "AskMate Image" : "AskMate Answer",
-		forceImage: command.forceImage,
-		options: deps.baseOptions(command.forceImage),
+		draftKind: line.forceImage ? "image" : "answer",
+		question: line.question,
+		title: line.forceImage ? "AskMate Image" : "AskMate Answer",
+		forceImage: line.forceImage,
+		options: deps.baseOptions(line.forceImage),
 		skillNames: []
 	};
 }
 
 export function resolveDraftRequest(raw: string, deps: DraftDeps): DraftResolution {
-	if (!deps.isConsole) {
-		return plain(raw, deps);
-	}
 	try {
-		const action = parseConsoleInput(raw, deps.commands);
+		// The Console reads every line as a command line, which keeps its preview identical to what it sends.
+		const line = deps.isConsole ? null : readComposerLine(raw, deps.commands);
+		if (line?.kind === "plain") {
+			return plain(line, deps);
+		}
+		const action = line?.kind === "command" ? line.action : parseConsoleInput(raw, deps.commands);
 		switch (action.kind) {
 			case "ask": {
 				const draft = deps.baseOptions(false);

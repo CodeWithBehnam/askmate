@@ -310,6 +310,14 @@ describe("help and status", () => {
 		expect(help).toContain("@[[Note]]");
 	});
 
+	test("help says which keys belong to the Console layout, because the other layouts have the commands but not those keys", () => {
+		const keys = formatConsoleHelp(commands).split("\n").filter((line) => /Tab|Esc|recalls/.test(line));
+		expect(keys).toEqual([
+			"  Tab or Enter accepts a suggestion, and Esc closes the suggestions.",
+			"  In the Console layout, ↑ recalls earlier input and Esc also stops a request."
+		]);
+	});
+
 	test("status shows budget percentage when a daily budget is set", () => {
 		const segments = formatConsoleStatus({ mode: "apply", providerName: "OpenAI", model: "gpt-5.5", effort: "medium", dayUsedTokens: 18000, dayBudgetTokens: 100000 });
 		expect(segments.map((segment) => segment.text)).toEqual(["APPLY", "gpt-5.5", "medium", "day 18%"]);

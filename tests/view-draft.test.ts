@@ -3,7 +3,7 @@ import { buildConsoleCommands } from "../src/ui/sidebar/consoleCommands";
 import { WORKFLOWS } from "../src/workflows/builtInWorkflows";
 import { canUndoDraft, DRAFT_SEPARATOR, mergeIntoDraft } from "../src/ui/sidebar/components/composerDraft";
 import { describeOutputBadge, modeAfterRun } from "../src/ui/sidebar/components/outputMode";
-import { COMMAND_HINT, parsePlainComposerCommand, resolveDraftRequest, type DraftDeps } from "../src/ui/sidebar/components/draftRequest";
+import { COMMAND_HINT, parsePlainComposerCommand, readComposerLine, resolveDraftRequest, type DraftDeps } from "../src/ui/sidebar/components/draftRequest";
 import { DEFAULT_IMAGE_PROMPT } from "../src/settings/constants";
 import type { RunRequestOptions } from "../src/shared/types";
 
@@ -135,10 +135,50 @@ describe("resolveDraftRequest", () => {
 		expect(resolveDraftRequest("/skill meeting-notes", deps()).kind).toBe("none");
 	});
 
-	test("outside the console only /image is special", () => {
-		const plain = deps({ isConsole: false });
-		expect(resolveDraftRequest("/model", plain)).toMatchObject({ kind: "request", question: "/model", draftKind: "answer" });
-		expect(resolveDraftRequest("/img a fox", plain)).toMatchObject({ draftKind: "image", question: "a fox", forceImage: true });
+	test("commands and mentions are read in every layout, and a line with neither stays a plain question", () => {
+		const compact = deps({ isConsole: false });
+		expect(resolveDraftRequest("/model", compact)).toEqual({ kind: "none", hint: COMMAND_HINT });
+		const workflow = resolveDraftRequest("/summarise focus on dates", compact);
+		expect(workflow).toMatchObject({ kind: "request", draftKind: "workflow", question: "PROMPT:study-summary" });
+		expect(workflow.kind === "request" && workflow.options.workflowExtra).toBe("focus on dates");
+		expect(resolveDraftRequest("/nonsense", compact)).toMatchObject({ kind: "none" });
+		let mentioned: unknown = null;
+		const withMention = resolveDraftRequest("@backlinks What do these notes agree on?", deps({
+			isConsole: false,
+			applyMentions: (options, mentions) => {
+				mentioned = mentions.vault;
+				return options;
+			}
+		}));
+		expect(withMention).toMatchObject({ kind: "request", draftKind: "answer", question: "What do these notes agree on?" });
+		expect(mentioned).toEqual([{ kind: "backlinks" }]);
+		// A plain question is read exactly as it was before: the same options, with no mention step.
+		const plain = resolveDraftRequest("What is this?", deps({ isConsole: false, applyMentions: () => { throw new Error("not for a plain question"); } }));
+		expect(plain).toMatchObject({ kind: "request", draftKind: "answer", question: "What is this?", options: { forceImage: false } });
+	});
+
+	test("/image keeps its plain reading outside the console, including the default prompt", () => {
+		const compact = deps({ isConsole: false });
+		expect(resolveDraftRequest("/img a fox", compact)).toMatchObject({ draftKind: "image", question: "a fox", forceImage: true });
+		expect(resolveDraftRequest("/image", compact)).toMatchObject({ draftKind: "image", question: DEFAULT_IMAGE_PROMPT, forceImage: true });
+	});
+
+	test("outside the console a backslash before a mention sends the word, and // sends the line as text", () => {
+		const compact = deps({ isConsole: false });
+		expect(resolveDraftRequest("write \\@tag in the note", compact)).toMatchObject({ draftKind: "answer", question: "write @tag in the note" });
+		const literal = resolveDraftRequest("//usr is a folder", compact);
+		expect(literal).toMatchObject({ kind: "request", question: "/usr is a folder" });
+		expect(literal.kind === "request" && literal.options.intentKind).toBe("freeform_text");
+	});
+
+	test("readComposerLine separates a plain question from a command", () => {
+		expect(readComposerLine("What is this?", commands)).toEqual({ kind: "plain", question: "What is this?", forceImage: false });
+		expect(readComposerLine("Mail alice@example.com about it", commands)).toMatchObject({ kind: "plain" });
+		expect(readComposerLine("/image a fox", commands)).toEqual({ kind: "plain", question: "a fox", forceImage: true });
+		expect(readComposerLine("/img", commands)).toEqual({ kind: "plain", question: DEFAULT_IMAGE_PROMPT, forceImage: true });
+		for (const line of ["/help", "/summarise", "@links hello", "/note a question", "//text", "/layout compact", "/ima fox", "/image @links a fox", "/nonsense"]) {
+			expect(readComposerLine(line, commands).kind).toBe("command");
+		}
 	});
 
 	test("an empty /image uses the default prompt", () => {

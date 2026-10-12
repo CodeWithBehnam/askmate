@@ -22,6 +22,8 @@ export interface SetupCardCallbacks {
 export interface SetupCardHandle {
 	el: HTMLElement;
 	focusKey(): void;
+	/** After a connection: the first starter that can be used, or the card's heading when none can, so the keyboard keeps its place. */
+	focusStart(): void;
 	getDraft(): SetupCardDraft;
 	/** Empties the key field and the card's own copy of the key. A key is used once; nothing here may hold it afterwards. */
 	clearKey(): void;
@@ -49,6 +51,10 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 	const title = card.createDiv({ cls: "askmate-setup-title", text: model.title });
 	title.setAttribute("role", "heading");
 	title.setAttribute("aria-level", "2");
+	// Not in the tab order, but a place the keyboard can be put when the control that had it is gone.
+	title.tabIndex = -1;
+	// While a check runs the controls are not disabled: a disabled control cannot keep the keyboard focus, and the card is redrawn around it.
+	const checking = model.phase === "testing";
 	card.createEl("p", { text: model.detail });
 
 	const steps = card.createDiv({ cls: "askmate-setup-steps" });
@@ -66,14 +72,35 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 		const button = providers.createEl("button", { cls: provider.selected ? "askmate-setup-provider is-selected" : "askmate-setup-provider", text: provider.label });
 		button.type = "button";
 		button.setAttribute("aria-pressed", String(provider.selected));
-		button.disabled = model.phase === "testing";
+		button.disabled = checking;
 		button.addEventListener("click", () => callbacks.onSelectProvider(provider.id));
+	}
+	if (model.otherProvidersHint) {
+		card.createEl("p", { text: model.otherProvidersHint });
 	}
 
 	let current: SetupCardDraft = { ...draft };
 	const emit = (patch: Partial<SetupCardDraft>): void => {
 		current = { ...current, ...patch };
 		callbacks.onDraft(current);
+	};
+
+	// Enter in any field connects, as it does in the key field.
+	const connectOnEnter = (input: HTMLInputElement): void => {
+		input.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" && !event.isComposing) {
+				event.preventDefault();
+				if (!checking) {
+					callbacks.onConnect(model.provider.id, current);
+				}
+			}
+		});
+	};
+	const holdWhileChecking = (input: HTMLInputElement): void => {
+		if (checking) {
+			input.readOnly = true;
+			input.setAttribute("aria-disabled", "true");
+		}
 	};
 
 	let keyInput: HTMLInputElement | null = null;
@@ -86,14 +113,9 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 			input.spellcheck = false;
 			input.placeholder = model.hasStoredKey ? "Stored on this device. Paste a new key to replace it." : "Paste your API key";
 			input.value = current.apiKey;
-			input.disabled = model.phase === "testing";
+			holdWhileChecking(input);
 			input.addEventListener("input", () => emit({ apiKey: input.value }));
-			input.addEventListener("keydown", (event) => {
-				if (event.key === "Enter" && !event.isComposing) {
-					event.preventDefault();
-					callbacks.onConnect(model.provider.id, current);
-				}
-			});
+			connectOnEnter(input);
 			keyInput = input;
 			secretInput = input;
 			if (model.provider.keyUrl) {
@@ -103,14 +125,17 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 			}
 		} else {
 			const address = addField(row, "Server address", "text");
-			address.value = current.baseUrl || model.provider.defaultBaseUrl;
-			address.disabled = model.phase === "testing";
+			// The saved address, so a server on its own port is not replaced by the usual one the first time Connect is pressed.
+			address.value = current.baseUrl || model.addressDefault;
+			holdWhileChecking(address);
 			address.addEventListener("input", () => emit({ baseUrl: address.value }));
-			const modelInput = addField(row, "Model", "text");
-			modelInput.placeholder = model.provider.defaultModel;
+			connectOnEnter(address);
+			const modelInput = addField(row, "Model (optional)", "text");
+			modelInput.placeholder = model.modelPlaceholder;
 			modelInput.value = current.model;
-			modelInput.disabled = model.phase === "testing";
+			holdWhileChecking(modelInput);
 			modelInput.addEventListener("input", () => emit({ model: modelInput.value }));
+			connectOnEnter(modelInput);
 			keyInput = address;
 			if (model.provider.helpUrl) {
 				const link = row.createEl("a", { cls: "askmate-setup-link", text: "Get a local server", href: model.provider.helpUrl });
@@ -140,8 +165,19 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 		const openSettings = (): void => callbacks.onAction({ kind: "open-settings", label: "Open settings" });
 		const primary = actions.createEl("button", { cls: "mod-cta", text: model.primaryLabel });
 		primary.type = "button";
-		primary.disabled = model.phase === "testing";
-		primary.addEventListener("click", () => (model.primaryAction === "open-settings" ? openSettings() : callbacks.onConnect(model.provider.id, current)));
+		if (checking) {
+			primary.setAttribute("aria-disabled", "true");
+		}
+		primary.addEventListener("click", () => {
+			if (checking) {
+				return;
+			}
+			if (model.primaryAction === "open-settings") {
+				openSettings();
+			} else {
+				callbacks.onConnect(model.provider.id, current);
+			}
+		});
 		// A provider finished in settings already has that button as its main one.
 		if (model.primaryAction !== "open-settings") {
 			const settings = actions.createEl("button", { text: "Open settings" });
@@ -171,6 +207,10 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 	return {
 		el: card,
 		focusKey: () => keyInput?.focus(),
+		focusStart: () => {
+			const first = Array.from(card.querySelectorAll<HTMLButtonElement>(".askmate-starter-chip")).find((button) => !button.disabled);
+			(first ?? title).focus();
+		},
 		getDraft: () => ({ ...current }),
 		clearKey: () => {
 			if (secretInput) {

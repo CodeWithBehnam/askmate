@@ -160,11 +160,49 @@ describe("the diagram card", () => {
 		expect(parent.querySelector(".askmate-diagram-placeholder")).toBeNull();
 		expect(parent.querySelector(".askmate-diagram-title")?.textContent).toBe("Flowchart");
 		expect(parent.querySelector(".askmate-diagram-meta")?.textContent).toBe("Blueprint look");
-		expect(labels(parent)).toEqual(["Insert", "New note", "Copy source", "Another look"]);
+		expect(labels(parent)).toEqual(["Insert at end", "New note", "Copy source", "Another look"]);
 		for (const button of Array.from(parent.querySelectorAll<HTMLButtonElement>(".askmate-diagram-actions button"))) {
 			button.click();
 		}
 		expect(log).toEqual(["insert", "note", "copy", "look"]);
+	});
+
+	test("Insert says where it puts the diagram: at the end of the note, and Copy source is the way to place it elsewhere", async () => {
+		const { parent, handle } = draw(valid, "drawn");
+		await handle.ready;
+		const insert = parent.querySelector<HTMLButtonElement>(".askmate-diagram-actions button");
+		expect(insert?.textContent).toBe("Insert at end");
+		expect(insert?.getAttribute("title")).toBe("Adds the diagram at the end of the note. Use Copy source to place it somewhere else.");
+		expect(insert?.disabled).toBe(false);
+	});
+
+	for (const [name, info] of [["drawn", valid], ["repaired", repaired]] as const) {
+		test(`a ${name} diagram has its source as text under the picture, closed until it is wanted`, async () => {
+			const { parent, handle } = draw(info, "drawn");
+			await handle.ready;
+			const details = parent.querySelector<HTMLDetailsElement>(".askmate-diagram-body details");
+			expect(details?.querySelector("summary")?.textContent).toBe("Diagram source");
+			expect(details?.querySelector("pre")?.textContent).toBe(SOURCE);
+			expect(details?.open).toBe(false);
+			// The picture is an image to assistive technology, and says where its text is.
+			const frame = parent.querySelector(".askmate-diagram-preview");
+			expect(frame?.getAttribute("role")).toBe("img");
+			expect(frame?.getAttribute("aria-label")).toBe("Flowchart. The diagram source is below as text.");
+			expect(details?.previousElementSibling).toBe(frame);
+		});
+	}
+
+	test("the source is not shown twice when the picture could not be drawn", async () => {
+		for (const result of ["unavailable", "failed"] as const) {
+			const { parent, handle } = draw(valid, result);
+			await handle.ready;
+			expect(parent.querySelectorAll("pre")).toHaveLength(1);
+			expect(parent.querySelector(".askmate-diagram-preview")).toBeNull();
+			expect(parent.querySelector(".askmate-diagram-fallback pre")?.textContent).toBe(SOURCE);
+		}
+		const { parent } = draw(fallback, "drawn");
+		expect(parent.querySelectorAll("pre")).toHaveLength(1);
+		expect(parent.querySelector(".askmate-diagram-preview")).toBeNull();
 	});
 
 	test("shows the drawing placeholder until the preview is ready", async () => {
@@ -180,7 +218,7 @@ describe("the diagram card", () => {
 		expect(preview.drawn).toEqual([]);
 		expect(parent.querySelector(".askmate-diagram-fallback pre")?.textContent).toBe(fallback.source);
 		expect(parent.querySelectorAll(".askmate-diagram-fallback li")).toHaveLength(4);
-		expect(labels(parent)).toEqual(["Insert", "New note", "Copy source", "Fix", "Another look"]);
+		expect(labels(parent)).toEqual(["Insert at end", "New note", "Copy source", "Fix", "Another look"]);
 		const [insert, note, , fix] = Array.from(parent.querySelectorAll<HTMLButtonElement>(".askmate-diagram-actions button"));
 		expect(insert?.disabled).toBe(true);
 		expect(note?.disabled).toBe(true);
