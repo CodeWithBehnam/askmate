@@ -157,6 +157,25 @@ describe("text contrast (4.5:1)", () => {
 			}
 		});
 
+		test(`${theme}: Obsidian text and muted text stay readable on the warning and danger tints`, () => {
+			// A pending or failed tool card, a changed-tool notice, a failed diagram and every warning callout sit on these tints.
+			const palette = OBSIDIAN[theme];
+			for (const name of ["warning", "danger"]) {
+				for (const [label, surface] of surfaces(theme)) {
+					const tinted = mix(color(theme, name), surface, percent(theme, "tint-1"));
+					expect(contrast(parseHex(palette.text), tinted), `text-normal on the ${name} tint over ${label}`).toBeGreaterThanOrEqual(4.5);
+					expect(contrast(parseHex(palette.muted), tinted), `text-muted on the ${name} tint over ${label}`).toBeGreaterThanOrEqual(4.5);
+				}
+			}
+		});
+
+		test(`${theme}: the danger colour reads as text on its own tint, where a failed tool call shows its error`, () => {
+			const danger = color(theme, "danger");
+			for (const [label, surface] of surfaces(theme)) {
+				expect(contrast(danger, mix(danger, surface, percent(theme, "tint-1"))), `danger on the danger tint over ${label}`).toBeGreaterThanOrEqual(4.5);
+			}
+		});
+
 		test(`${theme}: text on filled buttons`, () => {
 			expect(contrast(color(theme, "on-brand"), color(theme, "brand"))).toBeGreaterThanOrEqual(4.5);
 			expect(contrast(color(theme, "on-brand"), color(theme, "brand-hover"))).toBeGreaterThanOrEqual(4.5);

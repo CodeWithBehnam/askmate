@@ -31,6 +31,17 @@ const MAX_README_WORDS = 2000;
 const WINDOW_FETCH_ALLOWED = new Set([join("src", "plugin", "AskMatePlugin.ts"), join("src", "providers", "sseTransport.ts")]);
 /** The only module allowed to import child_process, behind Platform.isDesktopApp. */
 const CHILD_PROCESS_ALLOWED = new Set([join("src", "mcp", "launch.ts")]);
+/**
+ * Class names the source builds from a prefix inside a class list (`askmate-message-${role}`), with every value the prefix can
+ * take. A rule for one of these counts as used only for a listed value, so a rule for a value the code never produces is
+ * reported like any other unused rule. This lists what the code emits; it is not a list of exceptions.
+ */
+const CLASS_FAMILIES: Readonly<Record<string, readonly string[]>> = {
+	"askmate-message-": ["user", "assistant", "system"],
+	"askmate-avatar-": ["user", "assistant", "system"],
+	"askmate-accent-": ["blue", "violet", "green", "amber", "rose", "slate"],
+	"askmate-diff-line-": ["added", "removed", "context", "omitted"]
+};
 
 const failures: string[] = [];
 
@@ -239,7 +250,6 @@ function listCommittableFiles(): ReadonlySet<string> | null {
 
 function runRepoGuards(): void {
 	const sources = readSourceFiles("src");
-	const allSource = [readFileSync("main.ts", "utf8"), ...sources.values()].join("\n");
 	const plugin = sources.get(join("src", "plugin", "AskMatePlugin.ts")) ?? "";
 	const view = sources.get(join("src", "ui", "sidebar", "AskMateView.ts")) ?? "";
 	const builders = sources.get(join("src", "requests", "requestBuilders.ts")) ?? "";
@@ -312,19 +322,30 @@ function runRepoGuards(): void {
 		check(contents.includes(needle), `missing safety wiring: ${label} (${needle})`);
 	}
 
-	// CSS selectors must still be used somewhere, either literally or through a dynamically built class prefix.
-	const dynamicPrefixes = new Set<string>();
-	for (const match of allSource.matchAll(/askmate-[a-z0-9-]*-(?=\$\{|"\s*\+)/g)) {
-		dynamicPrefixes.add(match[0]);
+	// Every CSS class must be one the code can put on an element: named as a whole word in comment-free source, or one of the values
+	// of a class family. A templated name is a family only inside a class list. A templated element id (askmate-chart-${...}) is
+	// not a class, so it must not excuse a rule that happens to share its prefix.
+	const code = Array.from(codeOnly.values()).join("\n");
+	const templatedName = /askmate-[a-z0-9-]*-(?=\$\{|"\s*\+)/g;
+	for (const line of code.split("\n")) {
+		for (const match of line.matchAll(templatedName)) {
+			const isElementId = /\b(?:id|\w+Id|\w+IdPrefix)\s*=\s*`/.test(line);
+			check(isElementId || match[0] in CLASS_FAMILIES, `src builds names from ${match[0]}, which is neither an element id nor listed in CLASS_FAMILIES (list its values there, or assign it to an id variable)`);
+		}
 	}
-	const cssClasses = new Set(Array.from(styles.matchAll(/\.(askmate-[a-z0-9-]+)/g), (match) => match[1]));
+	for (const prefix of Object.keys(CLASS_FAMILIES)) {
+		check(code.includes(`${prefix}\${`), `CLASS_FAMILIES lists ${prefix}, but src no longer builds class names from it`);
+	}
+	const classIsEmitted = (name: string): boolean =>
+		new RegExp(`(?<![a-z0-9-])${name}(?![a-z0-9-])`).test(code) ||
+		Object.entries(CLASS_FAMILIES).some(([prefix, values]) => name.startsWith(prefix) && values.includes(name.slice(prefix.length)));
+	const cssWithoutComments = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+	const cssClasses = new Set(Array.from(cssWithoutComments.matchAll(/\.(askmate-[a-z0-9-]+)/g), (match) => match[1]));
 	for (const cssClass of cssClasses) {
-		const used = allSource.includes(cssClass) || Array.from(dynamicPrefixes).some((prefix) => cssClass.startsWith(prefix));
-		check(used, `styles.css selector .${cssClass} is not used in src`);
+		check(classIsEmitted(cssClass), `styles.css selector .${cssClass} is not used in src`);
 	}
 
 	// CSS features the community review scan flags (rules.md). State classes set from TypeScript replace :has.
-	const cssWithoutComments = styles.replace(/\/\*[\s\S]*?\*\//g, "");
 	for (const [pattern, label] of [[/:has\(/, ":has() selector"], [/clip-path\s*:/, "clip-path"], [/column-gap\s*:/, "column-gap (use gap)"]] as Array<[RegExp, string]>) {
 		check(!pattern.test(cssWithoutComments), `styles.css uses ${label}`);
 	}

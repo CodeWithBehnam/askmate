@@ -145,6 +145,18 @@ body.theme-dark {
 	margin: 0;
 }
 
+/*
+ * Tool cards, the diagram card and the "drawing" note are added to the message after the text. They span every column, so the
+ * grid puts them in rows of their own below the reply. Without a column they would be placed in the narrow avatar column (or
+ * in the evidence row), which squeezes the whole message to a sliver.
+ */
+.askmate-message > .askmate-tool-cards,
+.askmate-message > .askmate-diagram-card,
+.askmate-message > .askmate-diagram-placeholder {
+	grid-column: 1 / -1;
+	min-width: 0;
+}
+
 .askmate-message-system {
 	align-items: center;
 	background: color-mix(in srgb, var(--background-secondary-alt) 88%, var(--background-primary));
@@ -212,6 +224,11 @@ body.theme-dark {
 	color: var(--text-normal);
 }
 
+/* The actions that stay in view (Insert, Copy, Apply) read in the full text colour; the More actions button beside them stays muted. */
+.askmate-message-action.is-primary {
+	color: var(--text-normal);
+}
+
 .askmate-message-action:disabled {
 	cursor: not-allowed;
 	opacity: 0.48;
@@ -265,15 +282,17 @@ body.theme-dark {
 	align-self: start;
 }
 
-/* Message states. The view sets these on the message wrapper: is-pending before the first text, is-streaming while text arrives. */
+/* Message states. The view puts is-loading on the sidebar while a request runs; the reply being written is its last message. */
 .askmate-message-assistant .askmate-message-body:empty::before {
 	/* Static words rather than an animation, so the busy state is visible with reduced motion on as well. */
 	color: var(--text-muted);
 	content: "Working…";
 }
 
-.askmate-message.is-streaming .askmate-rendered-markdown > :last-child::after,
-.askmate-message.is-streaming .askmate-message-body:not(.askmate-message-body-markdown)::after {
+/* The caret closes the last line of text; after a list it sits in the last item, so it does not drop to a line of its own. */
+.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-rendered-markdown > :last-child:not(ul, ol)::after,
+.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-rendered-markdown > :is(ul, ol):last-child > li:last-child::after,
+.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-message-body:not(.askmate-message-body-markdown)::after {
 	animation: askmate-caret 1s steps(2, start) infinite;
 	background: var(--askmate-brand);
 	content: "";
@@ -284,20 +303,17 @@ body.theme-dark {
 	width: 2px;
 }
 
-.askmate-message.is-error {
+/* A failed request. The two classes outrank .askmate-message-assistant, which is declared above and sets the background. */
+.askmate-message.askmate-message-error {
 	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
 	border-color: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
 }
 
 /* A leading mark, so an error is not shown by colour alone. */
-.askmate-message.is-error .askmate-message-body::before {
+.askmate-message.askmate-message-error .askmate-message-body::before {
 	color: var(--askmate-danger);
 	content: "! ";
 	font-weight: 800;
-}
-
-.askmate-message.is-stopped {
-	border-style: dashed;
 }
 
 .askmate-message-body-markdown.is-simple-markdown {
@@ -632,53 +648,6 @@ body.theme-dark {
 	--askmate-brand-mark-size: 12px;
 }
 
-.askmate-avatar-robot-antenna {
-	background: var(--askmate-on-brand);
-	border: 2px solid color-mix(in srgb, var(--askmate-on-brand) 72%, transparent);
-	border-radius: 999px;
-	height: 5px;
-	left: 50%;
-	position: absolute;
-	top: 3px;
-	transform: translateX(-50%);
-	width: 5px;
-}
-
-.askmate-avatar-robot-face {
-	background: color-mix(in srgb, var(--askmate-on-brand) 92%, transparent);
-	border-radius: 8px;
-	height: 16px;
-	position: relative;
-	width: 19px;
-}
-
-.askmate-avatar-robot-eyes {
-	display: flex;
-	gap: 5px;
-	justify-content: center;
-	padding-top: 4px;
-}
-
-.askmate-avatar-robot-eyes span {
-	background: var(--askmate-brand);
-	border-radius: 999px;
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--askmate-brand) 12%, transparent);
-	height: 3px;
-	width: 3px;
-}
-
-.askmate-avatar-robot-smile {
-	background: transparent;
-	border: 0;
-	border-bottom: 2px solid var(--askmate-brand);
-	border-radius: 0 0 999px 999px;
-	height: 5px;
-	left: 5px;
-	position: absolute;
-	top: 8px;
-	width: 9px;
-}
-
 .askmate-avatar-person-head {
 	background: var(--text-muted);
 	border-radius: 999px;
@@ -973,11 +942,55 @@ body.theme-dark {
 .askmate-output-controls {
 	align-items: center;
 	display: flex;
-	flex-wrap: nowrap;
-	gap: 6px;
+	/*
+	 * Wraps when the controls are too wide for the sidebar, or when the mode badge below takes a line of its own. The column gap
+	 * is 5px so the controls still fit one row at a 300px sidebar, where six pixels would push the last one onto a new line.
+	 */
+	flex-wrap: wrap;
+	gap: 4px 5px;
 	justify-content: flex-end;
 	min-width: 0;
 	width: auto;
+}
+
+/* Shown whenever the next answer is not plain chat, so a note or apply mode is never a surprise. The glyph repeats what the colour says. */
+.askmate-output-badge {
+	border: 1px solid var(--askmate-border);
+	border-radius: 999px;
+	color: var(--text-normal);
+	flex: 1 1 100%;
+	font-size: calc(var(--font-ui-smaller) - 1px);
+	font-weight: 650;
+	line-height: 1.2;
+	min-width: 0;
+	order: -1;
+	overflow: hidden;
+	padding: 3px 8px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.askmate-output-badge::before {
+	font-weight: 800;
+	margin-inline-end: 5px;
+}
+
+.askmate-output-badge.is-note {
+	border-color: color-mix(in srgb, var(--askmate-accent) 60%, var(--askmate-border));
+}
+
+.askmate-output-badge.is-note::before {
+	color: var(--askmate-accent);
+	content: "+";
+}
+
+.askmate-output-badge.is-apply {
+	border-color: color-mix(in srgb, var(--askmate-warning) 60%, var(--askmate-border));
+}
+
+.askmate-output-badge.is-apply::before {
+	color: var(--askmate-warning);
+	content: "!";
 }
 
 .askmate-output-toggle {
@@ -1238,8 +1251,6 @@ body.theme-dark {
 }
 
 /* Only the reply that is being written pulses, not every assistant avatar in the log. */
-.askmate-messages > .askmate-message-assistant.is-pending .askmate-avatar-assistant,
-.askmate-messages > .askmate-message-assistant.is-streaming .askmate-avatar-assistant,
 .askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-avatar-assistant {
 	animation: askmate-pulse 1.4s ease-in-out infinite;
 }
@@ -1707,8 +1718,13 @@ body.theme-dark {
 	margin-top: 0;
 }
 
+/* Each state opens with a mark as well as a colour, so a message is never told apart by hue alone. */
 .askmate-settings-feedback.is-error {
 	color: var(--askmate-danger);
+}
+
+.askmate-settings-feedback.is-warning {
+	color: var(--askmate-warning);
 }
 
 .askmate-settings-feedback.is-success {
@@ -1719,7 +1735,26 @@ body.theme-dark {
 	color: var(--text-muted);
 }
 
-.askmate-settings-setup {
+.askmate-settings-feedback.is-error::before {
+	content: "× ";
+}
+
+.askmate-settings-feedback.is-warning::before {
+	content: "! ";
+}
+
+.askmate-settings-feedback.is-success::before {
+	content: "✓ ";
+}
+
+.askmate-settings-feedback.is-error::before,
+.askmate-settings-feedback.is-warning::before,
+.askmate-settings-feedback.is-success::before {
+	font-weight: 800;
+}
+
+/* Two classes, because Obsidian's grouped settings reset a row's border and side padding with the same weight. */
+.setting-item.askmate-settings-setup {
 	border-inline-start: 3px solid var(--askmate-warning);
 	padding-inline-start: 12px;
 }
@@ -1911,6 +1946,17 @@ body.theme-dark {
 	user-select: none;
 }
 
+/* A line that holds hidden characters. They are also written out in square brackets, so this only adds emphasis. */
+.askmate-diff-line.is-flagged {
+	border-inline-start: 3px solid var(--askmate-warning);
+	padding-inline-start: 5px;
+}
+
+/* The skill review draws its changes without line numbers: one text column, not the three of the Apply preview. */
+.askmate-skill-review-modal .askmate-diff-line {
+	grid-template-columns: minmax(0, 1fr);
+}
+
 .askmate-prompt-inspector-label {
 	font-weight: 600;
 	margin-top: 12px;
@@ -2091,7 +2137,7 @@ body.theme-dark {
 }
 
 /* The dot belongs on one-line notes only. Before a card or a preview it would sit alone on its own line. */
-.askmate-sidebar.askmate-composer-layout-console .askmate-message-system:not(.askmate-console-echo, .askmate-console-output, .askmate-onboarding-message, .askmate-message-has-image, .askmate-message-card) .askmate-message-body::before {
+.askmate-sidebar.askmate-composer-layout-console .askmate-message-system:not(.askmate-console-echo, .askmate-console-output, .askmate-onboarding-message, .askmate-message-has-image) .askmate-message-body::before {
 	color: var(--text-faint);
 	content: "· ";
 }
@@ -2316,13 +2362,7 @@ body.theme-dark {
 	white-space: nowrap;
 }
 
-/* Setup, skills and MCP segments: plain text, or a status chip, with a button state when they open something. */
-.askmate-console-segment .askmate-status-chip {
-	background: transparent;
-	border: 0;
-	padding: 0;
-}
-
+/* Setup and tools segments are also status chips; their flattened look is declared with the chips, below. */
 .askmate-sidebar .askmate-console-segment:is(.is-setup, .is-skills, .is-mcp) {
 	background: transparent;
 	color: inherit;
@@ -2477,6 +2517,29 @@ body.theme-dark {
 	content: "…";
 }
 
+/*
+ * In the console status bar a chip is one more segment: the same element carries both classes. The pill is flattened and the
+ * glyph keeps showing the state. It is a block so a long label still ends in an ellipsis, and it sits after the chip states
+ * so its divider is not recoloured by them.
+ */
+.askmate-console-segment.askmate-status-chip {
+	background: transparent;
+	border: 0;
+	border-inline-end: 1px solid var(--askmate-border);
+	border-radius: 0;
+	display: block;
+	padding: 2px 8px;
+}
+
+.askmate-console-segment.askmate-status-chip::before {
+	margin-inline-end: 5px;
+}
+
+/* After the rules above, so hidden wins over their display. */
+.askmate-status-chip[hidden] {
+	display: none;
+}
+
 /* ---------- Primary buttons inside the sidebar use the brand colour ---------- */
 .askmate-sidebar button.mod-cta {
 	background: var(--askmate-brand);
@@ -2496,6 +2559,7 @@ body.theme-dark {
 	counter-reset: askmate-step;
 	display: flex;
 	flex-direction: column;
+	font-size: var(--font-ui-small);
 	gap: 10px;
 	min-width: 0;
 	padding: 12px;
@@ -2509,6 +2573,22 @@ body.theme-dark {
 	gap: 8px;
 	line-height: 1.25;
 	margin: 0;
+}
+
+.askmate-setup-card p {
+	margin: 0;
+}
+
+.askmate-setup-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* In the console layout the log is monospaced; the card is a set of controls, so it keeps the interface font. */
+.askmate-sidebar.askmate-composer-layout-console .askmate-setup-host {
+	font-family: var(--font-interface);
+	margin-block: 6px;
 }
 
 .askmate-setup-step {
@@ -2604,17 +2684,49 @@ body.theme-dark {
 	font-weight: 800;
 }
 
+/* The key, or the address and model, with the link to get one at the end of the row and level with the bottom of the fields. */
 .askmate-setup-key-row {
-	align-items: center;
+	align-items: flex-end;
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	gap: 6px 8px;
 }
 
-.askmate-setup-key-row input {
-	flex: 1 1 140px;
+.askmate-setup-field {
+	display: flex;
+	flex: 1 1 180px;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+
+.askmate-setup-field label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.askmate-setup-field input {
 	font-family: var(--font-monospace);
 	min-width: 0;
+	width: 100%;
+}
+
+.askmate-setup-link {
+	color: var(--askmate-brand);
+	flex: 0 0 auto;
+	font-size: var(--font-ui-smaller);
+	padding-block: 6px;
+	text-decoration: underline;
+}
+
+.askmate-setup-link:hover {
+	color: var(--askmate-brand-hover);
+}
+
+.askmate-setup-privacy {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
 }
 
 .askmate-setup-actions {
@@ -2624,13 +2736,18 @@ body.theme-dark {
 	gap: 6px;
 }
 
+/* The mark sits beside the message, in its own column; the details and the fix button line up under the message. */
 .askmate-setup-error {
+	align-items: start;
 	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
 	border: 1px solid color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
 	border-inline-start: 3px solid var(--askmate-danger);
 	border-radius: var(--askmate-radius-sm);
 	color: var(--text-normal);
+	display: grid;
 	font-size: var(--font-ui-smaller);
+	gap: 4px 6px;
+	grid-template-columns: auto minmax(0, 1fr);
 	line-height: 1.4;
 	overflow-wrap: anywhere;
 	padding: 6px 8px;
@@ -2638,8 +2755,31 @@ body.theme-dark {
 
 .askmate-setup-error::before {
 	color: var(--askmate-danger);
-	content: "! ";
+	content: "!";
 	font-weight: 800;
+	grid-column: 1;
+	grid-row: 1;
+}
+
+.askmate-setup-error > * {
+	grid-column: 2;
+	min-width: 0;
+}
+
+.askmate-setup-error > button {
+	justify-self: start;
+}
+
+.askmate-setup-error summary {
+	cursor: pointer;
+}
+
+.askmate-setup-error pre {
+	font-family: var(--font-monospace);
+	margin: 4px 0 0;
+	max-height: 120px;
+	overflow: auto;
+	white-space: pre-wrap;
 }
 
 .askmate-starter-chips {
@@ -2676,6 +2816,31 @@ body.theme-dark {
 	flex-wrap: wrap;
 	gap: 6px;
 	min-width: 0;
+}
+
+.askmate-skill-chips[hidden] {
+	display: none;
+}
+
+/* The line that offers Undo after AskMate added text to the draft. */
+.askmate-draft-undo {
+	align-items: center;
+	color: var(--text-muted);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: var(--font-ui-smaller);
+	gap: 4px 8px;
+	min-width: 0;
+}
+
+.askmate-draft-undo button {
+	font-size: var(--font-ui-smaller);
+	height: auto;
+	padding: 2px 8px;
+}
+
+.askmate-draft-undo[hidden] {
+	display: none;
 }
 
 .askmate-skill-chip {
@@ -2775,12 +2940,34 @@ body.theme-dark {
 	padding: 6px 10px;
 }
 
+.askmate-diagram-title {
+	font-size: var(--font-ui-small);
+	font-weight: 650;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 .askmate-diagram-meta {
 	color: var(--text-muted);
 	font-family: var(--font-monospace);
 	font-size: calc(var(--font-ui-smaller) - 1px);
 	min-width: 0;
 	overflow-wrap: anywhere;
+}
+
+/* The one slot that holds the drawn preview or the source. */
+.askmate-diagram-body {
+	min-width: 0;
+}
+
+/* Why Insert or New note is unavailable, under the buttons. */
+.askmate-diagram-hint {
+	border-top: 1px solid var(--askmate-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	margin: 0;
+	padding: 6px 10px;
 }
 
 /* A framed viewport. A wide diagram scrolls at its natural size instead of shrinking until the text is unreadable. */
@@ -2863,6 +3050,27 @@ body.theme-dark {
 	flex: 0 0 auto;
 	height: 14px;
 	width: 14px;
+}
+
+/* The same words under a reply while it is being drawn or fixed: one quiet line rather than a preview-sized box. */
+.askmate-message > .askmate-diagram-placeholder {
+	justify-content: flex-start;
+	margin-block-start: 6px;
+	min-height: 0;
+	padding: 6px 10px;
+}
+
+/*
+ * Mermaid draws into this container so a failed render leaves nothing behind in the page. It stays laid out, off screen: with
+ * display: none Mermaid cannot measure its text. A fixed width gives it room to wrap labels.
+ */
+.askmate-mermaid-scratch {
+	inset-block-start: 0;
+	inset-inline-start: -10000px;
+	pointer-events: none;
+	position: absolute;
+	visibility: hidden;
+	width: 800px;
 }
 
 /* ---------- Tool call card ---------- */
@@ -2963,6 +3171,15 @@ body.theme-dark {
 	white-space: pre-wrap;
 }
 
+/* Inside a dialog the arguments are a <pre> that holds a <code>; the block already has the frame, so the inner one stays plain. */
+.askmate-tool-args code {
+	background: transparent;
+	border: 0;
+	color: inherit;
+	font: inherit;
+	padding: 0;
+}
+
 .askmate-tool-result {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
@@ -2973,8 +3190,57 @@ body.theme-dark {
 	white-space: pre-wrap;
 }
 
-.askmate-tool-card-header > .askmate-status-chip {
+.askmate-tool-result.is-error {
+	color: var(--askmate-danger);
+}
+
+/* The name takes the room, and the status in words sits at the end of the header line. */
+.askmate-tool-card-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.askmate-tool-card-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
 	margin-inline-start: auto;
+	white-space: nowrap;
+}
+
+.askmate-tool-card-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+/* The tool changed since it was approved. The mark and the border carry the warning, so the text stays at full contrast. */
+.askmate-tool-warning {
+	background: color-mix(in srgb, var(--askmate-warning) var(--askmate-tint-1), var(--askmate-surface));
+	border-inline-start: 3px solid var(--askmate-warning);
+	border-radius: var(--askmate-radius-sm);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	padding: 5px 8px;
+}
+
+.askmate-tool-warning::before {
+	color: var(--askmate-warning);
+	content: "! ";
+	font-weight: 800;
+}
+
+.askmate-tool-card-args summary {
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+}
+
+.askmate-tool-card-args .askmate-tool-args {
+	margin-top: 4px;
 }
 
 .askmate-tool-approval-actions {
@@ -2984,29 +3250,98 @@ body.theme-dark {
 	gap: 6px;
 }
 
-/* Deny is a quiet outline, so the safe choice is never the loudest button on the card. */
-.askmate-tool-approval-actions button.mod-warning {
-	background: transparent;
-	border: 1px solid var(--askmate-danger);
-	box-shadow: none;
+/* The row gives up its display when the card has no question to ask. */
+.askmate-tool-approval-actions[hidden] {
+	display: none;
+}
+
+/* A saved reply keeps its tool calls as one line each: the outcome in words, with the same mark as a live card. */
+.askmate-tool-card[role="listitem"] {
+	align-items: baseline;
+	flex-direction: row;
+	font-size: var(--font-ui-smaller);
+	gap: 6px;
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+	padding-block: 5px;
+}
+
+.askmate-tool-card[role="listitem"]::before {
+	font-weight: 800;
+	min-width: 1ch;
+}
+
+.askmate-tool-card[role="listitem"].is-done::before {
+	color: var(--askmate-success);
+	content: "✓";
+}
+
+.askmate-tool-card[role="listitem"].is-error::before {
 	color: var(--askmate-danger);
+	content: "!";
+}
+
+.askmate-tool-card[role="listitem"].is-denied::before {
+	color: var(--text-muted);
+	content: "×";
 }
 
 /* ---------- Settings rows and callout ---------- */
-.askmate-skill-row,
-.askmate-mcp-row {
-	border-inline-start: 3px solid transparent;
-	padding-inline-start: 10px;
-}
-
 .askmate-skill-row .setting-item-description,
 .askmate-mcp-row .setting-item-description {
 	overflow-wrap: anywhere;
 }
 
-.askmate-skill-row .askmate-status-chip,
-.askmate-mcp-row .askmate-status-chip {
+.askmate-skill-row-chip,
+.askmate-mcp-row .askmate-status-chip,
+.askmate-mcp-tools .askmate-status-chip {
+	flex: 0 0 auto;
 	margin-inline-end: 6px;
+}
+
+/* The tools sit in a wrapper of their own, which hides them from Obsidian's group spacing, so the gap above them is set here. */
+.askmate-mcp-tools {
+	margin-top: var(--size-4-6, 24px);
+}
+
+/* A tool's name is an identifier with no spaces, so the description has to be allowed to break inside it. */
+.askmate-mcp-tools .setting-item-description {
+	overflow-wrap: anywhere;
+}
+
+/*
+ * Rows whose controls are a chip and buttons (the Connection status, a skill, a tool server): the text keeps at least 10em, and
+ * the controls drop below it on a narrow window instead of squeezing the text into a sliver. Obsidian stacks a row in a column
+ * below 340px, where a min-width does nothing; a flex-basis would set the height there, which is why it is not used.
+ */
+.askmate-settings-status,
+.askmate-skill-row,
+.askmate-mcp-row {
+	flex-wrap: wrap;
+}
+
+.askmate-settings-status .setting-item-info,
+.askmate-skill-row .setting-item-info,
+.askmate-mcp-row .setting-item-info {
+	min-width: 10em;
+}
+
+.askmate-settings-status .setting-item-control,
+.askmate-skill-row .setting-item-control,
+.askmate-mcp-row .setting-item-control {
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	/* Stays at the end of the row, also when it has dropped to a line of its own. */
+	margin-inline-start: auto;
+}
+
+/* The folder rule's instructions row has no name or description, so the empty text column gives its room to the box. */
+.askmate-folder-rule-text .setting-item-info {
+	display: none;
+}
+
+.askmate-folder-rule-text .setting-item-control {
+	flex: 1 1 auto;
 }
 
 .askmate-settings-callout {
@@ -3027,10 +3362,11 @@ body.theme-dark {
 	border-inline-start-color: var(--askmate-warning);
 }
 
-.askmate-settings-callout.is-error {
-	background: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-1), var(--askmate-surface));
-	border-color: color-mix(in srgb, var(--askmate-danger) var(--askmate-tint-3), var(--askmate-border));
-	border-inline-start-color: var(--askmate-danger);
+/* Warnings also open with a mark, so they are not told apart from the plain callout by colour alone. */
+.askmate-settings-callout.is-warning::before {
+	color: var(--askmate-warning);
+	content: "! ";
+	font-weight: 800;
 }
 
 /* ---------- Approval, trust and review modals ---------- */
@@ -3058,6 +3394,57 @@ body.theme-dark {
 	max-height: 40vh;
 }
 
+/*
+ * Scrollable regions take keyboard focus (Chromium makes them focusable, and the dialogs give theirs a tabindex), and Obsidian
+ * removes the default outline from every focused element. Each of these shows the same ring as a control. It is drawn inside
+ * the edge, because the card or dialog around a region clips anything outside it.
+ */
+.askmate-tool-args:focus-visible,
+.askmate-tool-result:focus-visible,
+.askmate-diff-view:focus-visible,
+.askmate-diagram-preview:focus-visible,
+.askmate-diagram-fallback pre:focus-visible,
+.askmate-setup-error pre:focus-visible,
+.askmate-rendered-markdown pre:focus-visible,
+.askmate-rendered-markdown table:focus-visible,
+.askmate-rendered-markdown .mermaid:focus-visible,
+.askmate-usage-table-wrapper:focus-visible {
+	outline: 2px solid var(--askmate-focus);
+	outline-offset: -2px;
+}
+
+/* One fact of a trust or import dialog: what it is called, then exactly what it says. */
+.askmate-trust-fact {
+	margin-block: 10px;
+}
+
+.askmate-trust-fact-label,
+.askmate-trust-fact > .askmate-modal-message {
+	font-size: var(--font-ui-small);
+	font-weight: 650;
+	margin: 0 0 4px;
+}
+
+.askmate-trust-fact .askmate-settings-note {
+	margin: 0;
+}
+
+/* What the pasted JSON would add. It is empty until Review is pressed, and then it takes no room. */
+.askmate-mcp-import-preview {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-block: 8px;
+}
+
+.askmate-mcp-import-preview:empty {
+	display: none;
+}
+
+.askmate-mcp-import-preview .askmate-trust-fact {
+	margin-block: 0;
+}
+
 @media (pointer: coarse) {
 	.askmate-action-button,
 	.askmate-message-action,
@@ -3070,6 +3457,7 @@ body.theme-dark {
 	.askmate-setup-provider,
 	.askmate-starter-chip,
 	.askmate-skill-chip,
+	.askmate-draft-undo button,
 	.askmate-tool-approval-actions button,
 	.askmate-diagram-actions button {
 		min-height: 44px;
@@ -3083,8 +3471,6 @@ body.theme-dark {
 		transition: none;
 	}
 
-	.askmate-messages > .askmate-message-assistant.is-pending .askmate-avatar-assistant,
-	.askmate-messages > .askmate-message-assistant.is-streaming .askmate-avatar-assistant,
 	.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-avatar-assistant {
 		animation: none;
 	}
@@ -3094,8 +3480,9 @@ body.theme-dark {
 	}
 
 	/* A steady caret instead of a blinking one, and a static ring instead of a spinner. */
-	.askmate-message.is-streaming .askmate-rendered-markdown > :last-child::after,
-	.askmate-message.is-streaming .askmate-message-body:not(.askmate-message-body-markdown)::after,
+	.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-rendered-markdown > :last-child:not(ul, ol)::after,
+	.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-rendered-markdown > :is(ul, ol):last-child > li:last-child::after,
+	.askmate-sidebar.is-loading .askmate-messages > .askmate-message-assistant:last-child .askmate-message-body:not(.askmate-message-body-markdown)::after,
 	.askmate-diagram-placeholder::before {
 		animation: none;
 	}
@@ -3119,6 +3506,7 @@ body.theme-dark {
 
 	/* Chips, cards and badges lose their tinted fills, so each keeps a visible border. */
 	.askmate-status-chip,
+	.askmate-output-badge,
 	.askmate-skill-chip,
 	.askmate-skill-badge,
 	.askmate-starter-chip,
