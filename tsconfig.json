@@ -25,6 +25,7 @@
 		"**/*.ts"
 	],
 	"exclude": [
+		".claude",
 		"node_modules",
 		"tests"
 	]

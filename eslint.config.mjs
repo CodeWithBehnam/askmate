@@ -20,5 +20,5 @@ export default defineConfig([
 			}]
 		}
 	},
-	{ ignores: ["node_modules/**", "main.js", "tests/**", "scripts/**", "eslint.config.mjs", "esbuild.config.mjs", ".design-options/**", "DigVis/**", "docs/**"] }
+	{ ignores: [".claude/**", "node_modules/**", "main.js", "tests/**", "scripts/**", "eslint.config.mjs", "esbuild.config.mjs", ".design-options/**", "DigVis/**", "docs/**"] }
 ]);
