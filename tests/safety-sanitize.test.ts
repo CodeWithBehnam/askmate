@@ -349,6 +349,25 @@ describe("sanitizeModelMarkdown: work budget", () => {
 		}
 	});
 
+	test("closing-line doubt and task checkbox prefixes stay linear on hostile shapes", () => {
+		const inputs = [
+			`${"- [ ] ".repeat(30000)}\`\`\`js`,
+			`${"- [x] > ".repeat(20000)}x`,
+			`${" ".repeat(200000)}x`,
+			`\`\`\`js\n${"`".repeat(200000)}x\n\`\`\``,
+			`\`\`\`js\n${"~`".repeat(100000)}\n\`\`\``,
+			`\`\`\`js\n${"```~\n".repeat(20000)}`,
+			Array.from({ length: 5000 }, () => "```mermaid\nflowchart TD\n```\t").join("\n"),
+			Array.from({ length: 5000 }, () => "```js\n```~").join("\n"),
+			Array.from({ length: 5000 }, () => "- [ ] ```mermaid").join("\n")
+		];
+		for (const input of inputs) {
+			const started = performance.now();
+			sanitizeModelMarkdown(input);
+			expect(performance.now() - started).toBeLessThan(500);
+		}
+	});
+
 	test("an ordinary long reply is not affected by the budget", () => {
 		const paragraph = "A sentence with [a link](https://example.com), an image ![pic](images/pic.png), `code` and <b>bold</b>.\n\n";
 		const text = paragraph.repeat(2000);

@@ -16,9 +16,9 @@
 
 import { createFinding, findingKey, type Finding } from "./findings";
 import { describeLinkDestination } from "./links";
-import { findLenientFenceCloser, scanFences, type FenceSpan } from "./markdownFences";
+import { fenceCloserDoubt, findLenientFenceCloser, scanFences, type FenceCloserDoubt, type FenceSpan } from "./markdownFences";
 import { mermaidGuardFailure, validateMermaidSource, type GuardResult } from "./mermaidGuard";
-import { computeLineStarts, countOccurrences, countRun, createNextIndexOf, createScanBudget, indentWidth, isEscaped, lineNumberAt, type ScanBudget } from "./scan";
+import { computeLineStarts, countOccurrences, countRun, createNextIndexOf, createScanBudget, indentWidth, isBlankLine, isEscaped, lineNumberAt, type ScanBudget } from "./scan";
 
 /** Fence languages that only get syntax highlighting, with no known code-block processor. */
 export const PLAIN_CODE_LANGUAGES: ReadonlySet<string> = new Set([
@@ -339,7 +339,7 @@ const CONTAINER_LINE = /^\s*(?:>|[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/;
 const HTML_LINE = /^\s*</;
 const LIST_ITEM_LINE = /^\s*(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/;
 /** A line that starts a block of its own (heading, fence, quote, list item, rule, HTML), which no parser reads as a lazy continuation. */
-const BLOCK_START_LINE = /^\s*(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|(?:[-*_][ \t]*){3,}$|<)/;
+const BLOCK_START_LINE = /^[ \t]*(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|(?:[-*_][ \t]*){3,}$|<)/;
 
 /**
  * True when the line straight after a nested fence's closer is plain text that is not indented into the container. By
@@ -348,7 +348,7 @@ const BLOCK_START_LINE = /^\s*(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[-+*](?:[ \t]|$
  */
 function endsAmbiguously(lines: readonly string[], span: FenceSpan): boolean {
 	const next = span.closeLine === null ? undefined : lines[span.closeLine + 1];
-	if (next === undefined || next.trim() === "" || BLOCK_START_LINE.test(next)) {
+	if (next === undefined || isBlankLine(next) || BLOCK_START_LINE.test(next)) {
 		return false;
 	}
 	return span.quoteDepth > 0 ? !/^ {0,3}>/.test(next) : indentWidth(next) < span.containerColumn;
@@ -415,10 +415,15 @@ function indexFenceSpans(lines: string[], frontmatterOpen: boolean, strict: bool
  *   comments, maths or frontmatter) were both outside any HTML, comment, maths or frontmatter block at its opener;
  * - no HTML line and no fence inside a list item or quote sits in the run of lines just before it, and no list item or
  *   quote line either unless the fence is flush with the left margin;
+ * - every line that could end it for some parser is the scanner's own closing line: no line inside it closes it for a
+ *   parser that takes a closing run followed by more fence characters (a "```~" line), and its closing line carries no
+ *   tab, which marked does not take as a closer (see fenceCloserDoubt);
  * - every fence before it was read without doubt: at the top level as above, or nested and closed by its own closer
  *   with no plain text hugging the closer from outside the container. A fence that fails any of that may have been
  *   invisible to the parser, which would turn a later closer into an opener and swap which lines are code, so nothing
- *   after it is trusted either.
+ *   after it is trusted either;
+ * - no line before it is empty only to some parsers: a line of white space other than spaces and tabs (a no-break
+ *   space, a form feed) is blank to marked and text to CommonMark, which moves where a list item ends.
  *
  * Whatever is not trusted is still relabelled and checked, and its content is sanitised like the text around it:
  * a region the parser really renders as text is the dangerous mistake, and sanitising real code only costs a
@@ -461,6 +466,12 @@ function processBlocks(markdown: string, ctx: SanitizeContext): { text: string; 
 		let lineProtected = false;
 		const isBlank = line.trim() === "";
 		const isBreak = isSpaceOnly(line);
+		if (isBlank && !protectedFence && !isBlankLine(line)) {
+			// White space other than the space and the tab (a no-break space, a form feed, a byte order mark): CommonMark reads
+			// the line as text and marked reads it as blank, where a list item runs on over it or ends at it. Which lines are code
+			// after it is then anyone's guess, so nothing after it is trusted.
+			trustIntact = false;
+		}
 		const startState: BlockState = state;
 		const plainStart: BlockState = plainState;
 		const plainNext: BlockState = protectedFence ? plainStart : advanceBlockState(plainStart, line, splitContainerPrefix(line).rest, false);
@@ -499,13 +510,19 @@ function processBlocks(markdown: string, ctx: SanitizeContext): { text: string; 
 				const { prefix, rest, opener } = located;
 				const normalHere = startState.kind === "normal" && plainStart.kind === "normal";
 				const topLevel = span !== undefined && fences.topLevel.has(index);
-				const qualifies = span !== undefined && normalHere && (topLevel ? !chunkHasHtml && !chunkHasNested && !((chunkHasContainer || listMayContinue) && span.fenceIndent > 0) : span.closeLine !== null && !endsAmbiguously(lines, span));
+				// With no fence from the scanner nothing is known about where the code ends, which is the widest doubt.
+				const doubt: FenceCloserDoubt = span === undefined ? "late" : fenceCloserDoubt(lines, span, ctx.budget);
+				const qualifies =
+					span !== undefined &&
+					normalHere &&
+					doubt === "none" &&
+					(topLevel ? !chunkHasHtml && !chunkHasNested && !((chunkHasContainer || listMayContinue) && span.fenceIndent > 0) : span.closeLine !== null && !endsAmbiguously(lines, span));
 				const trusted = qualifies && topLevel && trustIntact;
 				// A fence-looking line that the scanner did not take for an opener, and that no fence covers, is a disagreement too.
 				if (!qualifies && (span !== undefined || fences.covered[index] === 0)) {
 					trustIntact = false;
 				}
-				result = prefix + processFenceOpener(ctx, lines, index, rest, opener, span);
+				result = prefix + processFenceOpener(ctx, lines, index, rest, opener, span, doubt);
 				pendingGuard = { from: index, to: span?.endLine ?? lines.length - 1 };
 				if (trusted && span) {
 					protectedFence = span;
@@ -631,18 +648,24 @@ function processFenceOpener(
 	index: number,
 	rest: string,
 	opener: FenceOpener,
-	span: FenceSpan | undefined
+	span: FenceSpan | undefined,
+	doubt: FenceCloserDoubt
 ): string {
 	const language = opener.language.toLowerCase();
 	if (language === "mermaid") {
 		const body = readFenceBody(lines, index + 1, span, ctx.budget);
 		const source = body.lines.join("\n");
+		// A parser that does not take the scanner's closing line (a tab after the fence) carries the diagram on past it, so
+		// everything after is judged as part of the diagram too. The report keeps the body as the scanner read it.
+		const carriesOn = doubt === "late" && span !== undefined && span.closeLine !== null && !body.truncated;
+		const judgedBody = carriesOn ? readFenceBody(lines, index + 1, span, ctx.budget, true) : body;
+		const judged = judgedBody === body ? source : judgedBody.lines.join("\n");
 		// A body that cannot be read in full within the budget is rejected unread, which keeps stacked openers linear.
-		const verdict = body.truncated || !ctx.budget.spend(source.length)
+		const verdict = judgedBody.truncated || !ctx.budget.spend(judged.length)
 			? mermaidGuardFailure("too-long")
-			: validateMermaidSource(source, { allowPluginHeader: ctx.allowPluginMermaidHeader });
+			: validateMermaidSource(judged, { allowPluginHeader: ctx.allowPluginMermaidHeader });
 		const reason = verdict.reasons[0]?.message ?? "";
-		const identity = body.truncated || source.length > MAX_IDENTITY_CHARACTERS ? null : source;
+		const identity = judgedBody.truncated || judged.length > MAX_IDENTITY_CHARACTERS ? null : judged;
 		const downgraded = !verdict.ok && accept(ctx, createFinding("unsafe-diagram", index + 1, source, { message: reason, identity }));
 		ctx.mermaid.push({ openLine: index, closed: body.closed, source, verdict, downgraded });
 		return relabelFenceLine(rest, opener, downgraded);
@@ -713,11 +736,11 @@ interface FenceBody {
  * end the checked part early. If the scanner does not see a fence here at all, the whole rest of the reply is checked, line by line as written.
  * Quote markers and list indentation are removed from the lines of a nested fence, and only from those.
  */
-function readFenceBody(lines: string[], start: number, span: FenceSpan | undefined, budget: ScanBudget): FenceBody {
+function readFenceBody(lines: string[], start: number, span: FenceSpan | undefined, budget: ScanBudget, throughEnd = false): FenceBody {
 	let end = lines.length;
 	let closed = false;
 	if (span && span.closeLine !== null) {
-		end = span.closeLine;
+		end = throughEnd ? lines.length : span.closeLine;
 		closed = true;
 	} else if (span && !span.open) {
 		end = findLenientFenceCloser(lines, span.endLine + 1, span, budget);
@@ -811,14 +834,20 @@ function detectHtmlBlockStart(rest: string): RegExp | null | undefined {
 	return undefined;
 }
 
+/**
+ * Quote markers and list markers in front of a line, and the task checkbox that may follow a list marker. marked reads
+ * the text after "- [ ] " as the item's own content, so a fence opener there opens a fence, although CommonMark has it
+ * as a paragraph. Any single character is taken for the checkbox, since Obsidian's task statuses are not limited to a
+ * space and x.
+ */
 function splitContainerPrefix(line: string): { prefix: string; rest: string } {
-	const match = /^(?:[ \t]*>|[ \t]*(?:[-+*]|\d{1,9}[.)])(?=[ \t]|$))*[ \t]*/.exec(line);
+	const match = /^(?:[ \t]*>|[ \t]*(?:[-+*]|\d{1,9}[.)])(?=[ \t]|$)(?:[ \t]+\[[^\]\n]\](?=[ \t]|$))?)*[ \t]*/.exec(line);
 	const prefix = match?.[0] ?? "";
 	return { prefix, rest: line.slice(prefix.length) };
 }
 
 function parseFenceOpener(rest: string): FenceOpener | null {
-	const match = /^(`{3,}|~{3,})(.*)$/.exec(rest);
+	const match = /^(`{3,}|~{3,})([^\n]*)$/.exec(rest);
 	if (!match) {
 		return null;
 	}

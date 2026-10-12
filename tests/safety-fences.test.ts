@@ -41,6 +41,46 @@ describe("scanFences", () => {
 		expect(scanFences(lines("~~~inline``` is fine as a tilde fence\nx"))).toHaveLength(1);
 	});
 
+	// JavaScript's trim and \s also take these as white space. CommonMark and marked indent and blank a line with the space
+	// and the tab only, so a line led by one of these is text, whatever follows it.
+	const NOT_INDENTATION = ["\u00a0", "\u3000", "\u2003", "\u202f", "\u1680", "\u000b", "\u000c", "\ufeff"];
+
+	test("a line led by white space other than a space or a tab is not an opener", () => {
+		for (const lead of NOT_INDENTATION) {
+			// Only the bare fence on the last line opens one.
+			const spans = scanFences(lines(`${lead}\`\`\`js\nx\n\`\`\``));
+			expect(spans.map((span) => [span.openLine, span.closeLine, span.open])).toEqual([[2, null, true]]);
+			expect(scanFences(lines(`> ${lead}\`\`\`js\n> x`))).toEqual([]);
+			expect(scanFences(lines(`- ${lead}\`\`\`js\n  x\n  \`\`\``)).map((span) => span.openLine)).toEqual([2]);
+		}
+	});
+
+	test("a closing run led by such white space is body text, so it does not close the fence", () => {
+		for (const lead of NOT_INDENTATION) {
+			const spans = scanFences(lines(`\`\`\`js\ncode\n${lead}\`\`\`\ntext\n\`\`\``));
+			expect(spans.map((span) => [span.openLine, span.closeLine])).toEqual([[0, 4]]);
+		}
+	});
+
+	test("a line of such white space is not blank: it ends the list item that holds a fence", () => {
+		for (const lead of NOT_INDENTATION) {
+			const spans = scanFences(lines(`* a\n  \`\`\`js\n  x\n${lead}\n  \`\`\``));
+			expect(spans.map((span) => [span.openLine, span.closeLine, span.endLine, span.open])).toEqual([[1, null, 2, false], [4, null, 4, true]]);
+		}
+		// A line of spaces and tabs is blank, and the fence goes on through it.
+		expect(scanFences(lines("* a\n  ```js\n  x\n \t \n  ```")).map((span) => [span.openLine, span.closeLine])).toEqual([[1, 4]]);
+	});
+
+	test("an info string may hold a line or paragraph separator, which is no line ending to a Markdown parser", () => {
+		for (const separator of ["\u2028", "\u2029"]) {
+			const spans = scanFences(lines(`\`\`\`js${separator}x\ncode\n\`\`\`\nafter`));
+			expect(spans.map((span) => [span.openLine, span.closeLine, span.language])).toEqual([[0, 2, "js"]]);
+			expect(scanFences(lines(`~~~${separator}\ncode\n~~~`)).map((span) => [span.openLine, span.closeLine])).toEqual([[0, 2]]);
+			// A separator after the closing run makes the line body text, as no parser takes it for white space.
+			expect(scanFences(lines(`\`\`\`\ncode\n\`\`\`${separator}\nmore`)).map((span) => [span.openLine, span.closeLine, span.open])).toEqual([[0, null, true]]);
+		}
+	});
+
 	test("an opener may be indented by up to three spaces, but four is an indented code block", () => {
 		expect(scanFences(lines("   ```js\n   x\n   ```"))).toHaveLength(1);
 		expect(scanFences(lines("    ```js\n    x\n    ```"))).toEqual([]);

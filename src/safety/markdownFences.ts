@@ -10,7 +10,7 @@
  * and an over-indented line in a list item stays code.
  */
 
-import { indentWidth, type ScanBudget } from "./scan";
+import { countRun, indentWidth, isBlankLine, stripIndent, type ScanBudget } from "./scan";
 
 export interface FenceSpan {
 	/** 0-based line of the opening fence. */
@@ -44,8 +44,10 @@ interface OpenFence {
 	containerColumn: number;
 }
 
-const FENCE_OPENER = /^(`{3,}|~{3,})(.*)$/;
+const FENCE_OPENER = /^(`{3,}|~{3,})([^\n]*)$/;
 const FENCE_CLOSER = /^(`{3,}|~{3,})[ \t]*$/;
+/** A closing run that every parser takes: no tab after it (marked does not take one), nothing else after it. */
+const SPACES_ONLY_CLOSER = /^(`{3,}|~{3,}) *$/;
 const LIST_MARKER = /^([-+*]|\d{1,9}[.)])([ \t]+|$)/;
 /** A line that starts its own block, so a less indented one can no longer continue a list item's paragraph. */
 const BLOCK_START = /^(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|(?:[-*_][ \t]*){3,}$)/;
@@ -65,7 +67,7 @@ function stripQuoteMarkers(line: string, limit = Number.POSITIVE_INFINITY): { de
 }
 
 function parseOpener(candidate: string): { marker: "`" | "~"; length: number; info: string } | null {
-	const match = FENCE_OPENER.exec(candidate.trimStart());
+	const match = FENCE_OPENER.exec(stripIndent(candidate));
 	if (!match) {
 		return null;
 	}
@@ -76,8 +78,8 @@ function parseOpener(candidate: string): { marker: "`" | "~"; length: number; in
 	return { marker: match[1][0] as "`" | "~", length: match[1].length, info: match[2].trim() };
 }
 
-function closesFence(rest: string, span: FenceDetails): boolean {
-	const match = FENCE_CLOSER.exec(rest.trimStart());
+function closesFence(rest: string, span: FenceDetails, closer: RegExp = FENCE_CLOSER): boolean {
+	const match = closer.exec(stripIndent(rest));
 	return match !== null && match[1][0] === span.marker && match[1].length >= span.length;
 }
 
@@ -118,7 +120,7 @@ export function createFenceStepper(): FenceStepper {
 		if (depth < fence.span.quoteDepth) {
 			return "ended";
 		}
-		if (rest.trim() === "") {
+		if (isBlankLine(rest)) {
 			return "continue";
 		}
 		const indent = indentWidth(rest);
@@ -149,13 +151,13 @@ export function createFenceStepper(): FenceStepper {
 			}
 
 			const { depth, rest } = stripQuoteMarkers(line);
-			if (rest.trim() === "") {
+			if (isBlankLine(rest)) {
 				paragraphOpen = false;
 				return { state: "none", endedBefore };
 			}
 
 			const indent = indentWidth(rest);
-			const trimmed = rest.trimStart();
+			const trimmed = stripIndent(rest);
 			const marker = LIST_MARKER.exec(trimmed);
 			const lazy = items.length > 0 && paragraphOpen && !marker && !BLOCK_START.test(trimmed);
 			if (!lazy && items.some((item) => item.quoteDepth > depth)) {
@@ -251,7 +253,9 @@ export function scanFences(lines: readonly string[], options: ScanFencesOptions 
  * First line at or after `from` that could close `fence` for a parser that does not end a fence with its quote or list
  * item (CommonMark does; a lenient parser may not). Parsers disagree on whether a closing fence is indented relative to
  * the container or to the margin, so only a line with at most three columns of indentation after the quote markers
- * counts, which every reading accepts as a closer; a line indented further in is still code. Returns `lines.length` when
+ * counts, which every reading accepts as a closer; a line indented further in is still code. Likewise only a run followed
+ * by spaces alone counts: marked also ends a fence at "```~" and CommonMark at "```" plus a tab, each of which the other
+ * parser carries on past, so the later of the readings is the first line both would take. Returns `lines.length` when
  * there is none, or when the optional scan budget runs out, which makes the caller read to the end of the text.
  */
 export function findLenientFenceCloser(lines: readonly string[], from: number, fence: FenceDetails, budget?: ScanBudget): number {
@@ -260,11 +264,76 @@ export function findLenientFenceCloser(lines: readonly string[], from: number, f
 			return lines.length;
 		}
 		const { rest } = stripQuoteMarkers(lines[index], fence.quoteDepth);
-		if (rest.trim() !== "" && indentWidth(rest) <= 3 && closesFence(rest, fence)) {
+		if (indentWidth(rest) <= 3 && closesFence(rest, fence, SPACES_ONLY_CLOSER)) {
 			return index;
 		}
 	}
 	return lines.length;
+}
+
+/**
+ * Whether another parser could end a fence the scanner found at a different line than the scanner does.
+ *
+ * - `none`: no line reads as a closer except the scanner's own, and that one is a closer in every reading.
+ * - `early`: a line inside the fence ends it for a parser that takes a longer closing line, because it carries more fence
+ *   characters (of either kind) after the run: marked closes at "```~" and at "~~~`", CommonMark does not.
+ * - `late`: the scanner's closing line carries a tab after the run, which CommonMark accepts and marked does not, so
+ *   that parser carries the fence on to a later closer or to the end of the text.
+ *
+ * `late` wins when both apply, because it is the reading that makes more text code. A caller that copies a fence through
+ * unread should do so only for `none`. Lines are read after quote markers and indentation are taken off, since parsers
+ * differ on how much of either a closer may carry, so an indented or quoted look-alike counts too: the cost is a fence
+ * whose content is sanitised although it was code. A line that carries text after the run (an opener with an info string)
+ * is no closer in any reading and does not count. When the optional budget runs out the answer is `late`.
+ */
+export type FenceCloserDoubt = "none" | "early" | "late";
+
+export function fenceCloserDoubt(lines: readonly string[], span: FenceSpan, budget?: ScanBudget): FenceCloserDoubt {
+	let doubt: FenceCloserDoubt = "none";
+	for (let index = span.openLine + 1; index <= span.endLine; index += 1) {
+		const line = lines[index];
+		if (budget && !budget.spend(line.length + 1)) {
+			return "late";
+		}
+		const shape = readCloserShape(line, span);
+		if (!shape.closerLike) {
+			continue;
+		}
+		if (index !== span.closeLine) {
+			doubt = "early";
+		} else if (shape.tab) {
+			return "late";
+		}
+	}
+	return doubt;
+}
+
+interface CloserShape {
+	/** A run of the fence character at least as long as the opener's, then only fence characters and white space. */
+	closerLike: boolean;
+	/** True when a tab follows the run. */
+	tab: boolean;
+}
+
+function readCloserShape(line: string, fence: FenceDetails): CloserShape {
+	let cursor = 0;
+	while (cursor < line.length && (line[cursor] === " " || line[cursor] === "\t" || line[cursor] === ">")) {
+		cursor += 1;
+	}
+	const run = countRun(line, cursor, fence.marker);
+	if (run < fence.length) {
+		return { closerLike: false, tab: false };
+	}
+	let tab = false;
+	for (cursor += run; cursor < line.length; cursor += 1) {
+		const char = line[cursor];
+		if (char === "\t") {
+			tab = true;
+		} else if (char !== " " && char !== "~" && char !== "`") {
+			return { closerLike: false, tab: false };
+		}
+	}
+	return { closerLike: true, tab };
 }
 
 /** For each line, whether it belongs to a fenced block (opening line, body or closing line). */

