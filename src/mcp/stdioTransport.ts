@@ -18,7 +18,13 @@ export interface ChildLike {
 	readonly stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
 	on(event: "exit", listener: (code: number | null, signal: string | null) => void): unknown;
 	on(event: "error", listener: (error: Error) => void): unknown;
+	/** Signals the child and, when the launcher put it in its own process group, everything it started (npx, uvx and wrapper scripts run the real server as a child). */
 	kill(signal?: "SIGTERM" | "SIGKILL"): boolean;
+	/**
+	 * True while something the child started is still running, even though the child itself has gone. Optional: a child that cannot
+	 * have descendants, or a platform that cannot tell, leaves it out.
+	 */
+	hasSurvivors?(): boolean;
 }
 
 export interface LineState {
@@ -199,7 +205,10 @@ export class StdioTransport implements McpTransport {
 		// stdio has no sessions. A dead process is replaced by creating a new transport.
 	}
 
-	/** Spec order: close stdin, wait, SIGTERM, wait, SIGKILL. */
+	/**
+	 * Spec order: close stdin, wait, SIGTERM, wait, SIGKILL. Once the child is gone, whatever it started and left running gets
+	 * the same two steps, so a wrapper that exits does not leave its server behind.
+	 */
 	async close(): Promise<void> {
 		if (this.closed) {
 			return;
@@ -208,6 +217,7 @@ export class StdioTransport implements McpTransport {
 		this.failure ??= new McpClientError("transport", "The connection was closed.");
 		this.fail(this.failure);
 		if (this.hasExited) {
+			// Not swept: the exit was not seen by this call, and a process group number that old may belong to someone else by now.
 			return;
 		}
 		const grace = this.options.graceMs ?? 2000;
@@ -221,13 +231,29 @@ export class StdioTransport implements McpTransport {
 			return won;
 		};
 		this.child.stdin.end();
-		if (await exitedWithin(grace)) {
+		if (!(await exitedWithin(grace))) {
+			this.child.kill("SIGTERM");
+			if (!(await exitedWithin(grace))) {
+				this.child.kill("SIGKILL");
+				return;
+			}
+		}
+		await this.stopSurvivors(grace);
+	}
+
+	/** The child has exited. If it left descendants running, ask them to stop, wait, then kill what is still there. */
+	private async stopSurvivors(grace: number): Promise<void> {
+		const survivors = (): boolean => this.child.hasSurvivors?.() === true;
+		if (!survivors()) {
 			return;
 		}
 		this.child.kill("SIGTERM");
-		if (await exitedWithin(grace)) {
-			return;
+		const deadline = Date.now() + grace;
+		while (survivors() && Date.now() < deadline) {
+			await new Promise<void>((resolve) => { window.setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))); });
 		}
-		this.child.kill("SIGKILL");
+		if (survivors()) {
+			this.child.kill("SIGKILL");
+		}
 	}
 }

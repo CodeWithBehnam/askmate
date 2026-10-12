@@ -168,18 +168,31 @@ export function isToolHeaderSafe(tool: McpTool): boolean {
 	return extractParamHeaders(tool.inputSchema, {}).ok;
 }
 
-/** Reads every JSON-RPC message out of an HTTP reply body, whether the server answered with JSON or with a (buffered) SSE stream. */
-export function parseReplyBody(contentType: string, text: string): InboundMessage[] {
-	const toMessages = (values: unknown[]): InboundMessage[] =>
-		values.map(parseInbound).filter((message): message is InboundMessage => message !== null);
+const toMessages = (values: unknown[]): InboundMessage[] =>
+	values.map(parseInbound).filter((message): message is InboundMessage => message !== null);
 
-	if (/text\/event-stream/i.test(contentType)) {
-		const fed = feedSse(INITIAL_SSE_STATE, text);
-		const events = [...fed.events, ...flushSse(fed.state)];
-		return toMessages(events.map((event) => parseJson(event.data)));
-	}
+function parseSseBody(text: string): InboundMessage[] {
+	const fed = feedSse(INITIAL_SSE_STATE, text);
+	const events = [...fed.events, ...flushSse(fed.state)];
+	return toMessages(events.map((event) => parseJson(event.data)));
+}
+
+function parseJsonBody(text: string): InboundMessage[] {
 	const parsed = parseJson(text);
 	return toMessages(Array.isArray(parsed) ? parsed : [parsed]);
+}
+
+/**
+ * Reads every JSON-RPC message out of an HTTP reply body, whether the server answered with JSON or with a (buffered) SSE stream.
+ * The Content-Type picks which reading is tried first. Gateways and proxies get it wrong (SSE frames labelled JSON, JSON labelled
+ * SSE, no label at all), so a body that yields no message that way is read the other way before giving up. The two cannot be
+ * confused: a JSON document never starts with a field name, and an SSE stream is not valid JSON.
+ */
+export function parseReplyBody(contentType: string, text: string): InboundMessage[] {
+	const labelledStream = /text\/event-stream/i.test(contentType);
+	const [first, second] = labelledStream ? [parseSseBody, parseJsonBody] : [parseJsonBody, parseSseBody];
+	const messages = first(text);
+	return messages.length > 0 ? messages : second(text);
 }
 
 export function findReply(messages: readonly InboundMessage[], id: RequestId): RpcReply | null {

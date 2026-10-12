@@ -31,6 +31,11 @@ import {
 export interface McpClientConfig {
 	readonly identity: ClientIdentity;
 	readonly connectTimeoutMs: number;
+	/**
+	 * How long a stdio server of unknown era gets to answer server/discover before AskMate also tries initialize. A legacy server
+	 * that ignores unknown methods never answers, and without this it would cost the whole connect timeout. Never longer than it.
+	 */
+	readonly discoverTimeoutMs: number;
 	readonly listTimeoutMs: number;
 	readonly callTimeoutMs: number;
 	readonly maxPages: number;
@@ -44,6 +49,7 @@ export interface McpClientConfig {
 
 export const DEFAULT_CLIENT_CONFIG: Omit<McpClientConfig, "identity"> = {
 	connectTimeoutMs: 30_000,
+	discoverTimeoutMs: 3000,
 	listTimeoutMs: 20_000,
 	callTimeoutMs: 60_000,
 	maxPages: 20,
@@ -344,17 +350,19 @@ async function negotiate(
 		}
 	}
 	let version = hint?.era === "modern" ? hint.version : MODERN_VERSION;
+	// Only a stdio server of unknown era gets the short window: a known one is just slow, and HTTP silence is a failure anyway.
+	const probeMs = transport.kind === "stdio" && hint === undefined ? Math.min(config.discoverTimeoutMs, config.connectTimeoutMs) : config.connectTimeoutMs;
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const id = ids.next();
 		const message = buildRequest("modern", id, "server/discover", {}, version, config.identity);
 		const headers = buildHttpHeaders({ era: "modern", version, method: "server/discover" });
 		let reply: TransportReply;
 		try {
-			reply = await transport.post(message, { headers, timeoutMs: config.connectTimeoutMs, signal });
+			reply = await transport.post(message, { headers, timeoutMs: probeMs, signal });
 		} catch (error) {
 			// Silence from a stdio server is how a legacy server answers an unknown pre-initialize method. Silence over HTTP is just a failure.
 			if (error instanceof McpClientError && error.kind === "timeout" && transport.kind === "stdio") {
-				return await negotiateLegacy(transport, config, ids, signal);
+				return await negotiateAfterSilence(transport, config, ids, signal, version, probeMs < config.connectTimeoutMs);
 			}
 			throw error;
 		}
@@ -374,6 +382,30 @@ async function negotiate(
 		}
 	}
 	throw new McpClientError("protocol", "AskMate and the server could not agree on a protocol version.");
+}
+
+/**
+ * A stdio server that did not answer server/discover in time is either a legacy server that ignores methods it does not know, or a
+ * modern one that is still starting (a package runner may be downloading it). Trying initialize settles the first case. If the
+ * server answers that with an error instead, it is up and talking, so it is the second case and discover is asked again, once,
+ * with the whole connect budget.
+ */
+async function negotiateAfterSilence(
+	transport: McpTransport,
+	config: McpClientConfig,
+	ids: Ids,
+	signal: AbortSignal | undefined,
+	version: string,
+	wasShortWindow: boolean
+): Promise<ServerSession> {
+	try {
+		return await negotiateLegacy(transport, config, ids, signal);
+	} catch (error) {
+		if (wasShortWindow && error instanceof McpClientError && error.kind === "server_error") {
+			return negotiate(transport, config, ids, signal, { era: "modern", version });
+		}
+		throw error;
+	}
 }
 
 async function negotiateLegacy(transport: McpTransport, config: McpClientConfig, ids: Ids, signal: AbortSignal | undefined): Promise<ServerSession> {

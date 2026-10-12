@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { StdioTransport, feedLines } from "../../src/mcp/stdioTransport";
+import { type ChildLike, StdioTransport, feedLines } from "../../src/mcp/stdioTransport";
 import { fakeChild } from "./helpers";
 
 describe("StdioTransport", () => {
@@ -45,6 +45,61 @@ describe("StdioTransport", () => {
 		const stubborn = new StdioTransport(second.child, { graceMs: 5 });
 		await stubborn.close();
 		expect(second.kills).toEqual(["stdin-end", "SIGTERM", "SIGKILL"]);
+	});
+});
+
+describe("StdioTransport process tree", () => {
+	/** A launcher-style child: the direct child can be gone while something it started is still running. */
+	function treeChild(options: { survivors: boolean; diesOnSigterm?: boolean }) {
+		const fake = fakeChild();
+		let alive = options.survivors;
+		const child: ChildLike = {
+			...fake.child,
+			kill: (signal) => {
+				const sent = fake.child.kill(signal);
+				if (signal === "SIGKILL" || (signal === "SIGTERM" && options.diesOnSigterm === true)) {
+					alive = false;
+				}
+				return sent;
+			},
+			hasSurvivors: () => alive
+		};
+		return { fake, child };
+	}
+
+	test("a program the direct child left running is told to stop, then killed when it ignores that", async () => {
+		const { fake, child } = treeChild({ survivors: true });
+		const transport = new StdioTransport(child, { graceMs: 5 });
+		const closing = transport.close();
+		fake.exit(0);
+		await closing;
+		expect(fake.kills).toEqual(["stdin-end", "SIGTERM", "SIGKILL"]);
+	});
+
+	test("a program that stops when told to is not killed", async () => {
+		const { fake, child } = treeChild({ survivors: true, diesOnSigterm: true });
+		const transport = new StdioTransport(child, { graceMs: 50 });
+		const closing = transport.close();
+		fake.exit(0);
+		await closing;
+		expect(fake.kills).toEqual(["stdin-end", "SIGTERM"]);
+	});
+
+	test("nothing is signalled after a clean exit with nothing left behind", async () => {
+		const { fake, child } = treeChild({ survivors: false });
+		const transport = new StdioTransport(child, { graceMs: 5 });
+		const closing = transport.close();
+		fake.exit(0);
+		await closing;
+		expect(fake.kills).toEqual(["stdin-end"]);
+	});
+
+	test("a child that exited on its own long before closing is not signalled again", async () => {
+		const { fake, child } = treeChild({ survivors: true });
+		const transport = new StdioTransport(child, { graceMs: 5 });
+		fake.exit(1);
+		await transport.close();
+		expect(fake.kills).toEqual([]);
 	});
 });
 

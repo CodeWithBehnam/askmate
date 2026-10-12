@@ -65,6 +65,21 @@ describe("wire", () => {
 		expect(parseReplyBody("application/json", "<html>")).toEqual([]);
 	});
 
+	test("trusts the body over a wrong Content-Type: SSE labelled JSON and JSON labelled SSE both parse", () => {
+		const frames = 'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n\n';
+		const body = '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}';
+		for (const label of ["application/json", "application/json; charset=utf-8", "text/plain", ""]) {
+			expect(parseReplyBody(label, frames).map((message) => message.kind)).toEqual(["notification", "result"]);
+		}
+		for (const label of ["text/event-stream", "text/event-stream; charset=utf-8", "TEXT/EVENT-STREAM"]) {
+			expect(parseReplyBody(label, body)).toEqual([{ kind: "result", id: 1, result: { ok: true } }]);
+			expect(parseReplyBody(label, `[${body}]`)).toEqual([{ kind: "result", id: 1, result: { ok: true } }]);
+		}
+		// Text that is neither stays empty whichever way it is labelled.
+		expect(parseReplyBody("text/event-stream", "<html>Bad gateway</html>")).toEqual([]);
+		expect(parseReplyBody("application/json", ": keep-alive\n\n")).toEqual([]);
+	});
+
 	test("an HTTP 400 proves a legacy server only when the body is not a modern error", () => {
 		const ours = ["2026-07-28", "2025-11-25"];
 		const legacy = judgeHttpProbe({ status: 400, headers: {}, text: "Bad Request" }, 1, ours);

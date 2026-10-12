@@ -489,6 +489,70 @@ describe("environment and headers", () => {
 	});
 });
 
+describe("secrets in tool results", () => {
+	const BEARER = "tok-0123456789abcdef";
+	const HEADER = "hdr-key-9876543210";
+	const echoing = (isError: boolean) => fakeServer({
+		callResult: () => ({
+			content: [{ type: "text", text: `debug: sent Authorization Bearer ${BEARER}, key ${HEADER}, and a note about nothing else` }],
+			...(isError ? { isError: true } : {})
+		})
+	});
+
+	test.each([[false], [true]])("a remote server that echoes its token and header secret (isError %p) never sends them to the model", async (isError) => {
+		const context = setup({
+			servers: [httpServer("docs", { approval: "ask-once-per-chat", bearerSecretId: "askmate-mcp-docs-token", headers: { "X-Key": secret("askmate-mcp-docs-x-key") } })],
+			server: echoing(isError)
+		});
+		context.harness.secrets.set("askmate-mcp-docs-token", BEARER);
+		context.harness.secrets.set("askmate-mcp-docs-x-key", HEADER);
+		const snapshot = await connect(context);
+		const outcome = await call(context, snapshot);
+		expect(outcome.status).toBe(isError ? "tool_error" : "ok");
+		expect(outcome.text).not.toContain(BEARER);
+		expect(outcome.text).not.toContain(HEADER);
+		expect(outcome.text).toContain("[redacted]");
+		expect(outcome.text).toContain("a note about nothing else");
+		expect(outcome.text).toContain('trust="untrusted"');
+	});
+
+	test("a local server that echoes an environment secret never sends it to the model", async () => {
+		const harness = createHarness({
+			servers: [stdioServer("local", { approval: "ask-once-per-chat", env: { API_TOKEN: secret("askmate-mcp-local-api-token"), MODE: plain("fast-mode") } })],
+			stdio: [echoing(false)]
+		});
+		harness.secrets.set("askmate-mcp-local-api-token", BEARER);
+		const service = new McpService(harness.host);
+		await service.trust("local");
+		const snapshot = await service.prepareRun();
+		const outcome = await service.callTool({ snapshot, callId: "1", modelName: snapshot.tools[0]?.modelName ?? "", args: {}, chatId: "c" }, new AbortController().signal);
+		expect(outcome.text).not.toContain(BEARER);
+		expect(outcome.text).toContain("[redacted]");
+	});
+
+	test("a secret hidden behind zero-width characters or split by the length cap is still masked", async () => {
+		const padded = "x".repeat(600);
+		const server = fakeServer({
+			callResult: () => ({ content: [{ type: "text", text: `${padded}${BEARER.slice(0, 7)}\u200b${BEARER.slice(7)}` }] })
+		});
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat", bearerSecretId: "askmate-mcp-docs-token" })], server });
+		context.harness.secrets.set("askmate-mcp-docs-token", BEARER);
+		context.harness.settings = { ...context.harness.settings, maxOutputChars: 610 };
+		const snapshot = await connect(context);
+		const outcome = await call(context, snapshot);
+		expect(outcome.text).not.toContain(BEARER.slice(0, 7));
+		expect(outcome.text).toContain("[redacted]");
+	});
+
+	test("ordinary text that merely mentions a password or token keyword is left as the server wrote it", async () => {
+		const server = fakeServer({ callResult: () => ({ content: [{ type: "text", text: "The doc says password: hunter2 and Bearer abc, keep them safe." }] }) });
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat", bearerSecretId: "askmate-mcp-docs-token" })], server });
+		context.harness.secrets.set("askmate-mcp-docs-token", BEARER);
+		const snapshot = await connect(context);
+		expect((await call(context, snapshot)).text).toContain("password: hunter2 and Bearer abc");
+	});
+});
+
 describe("tool snapshots", () => {
 	test("tools get provider-safe names, sanitised text and warnings, and the snapshot is frozen", async () => {
 		const context = setup({
@@ -585,7 +649,7 @@ describe("calling tools", () => {
 		expect(outcome.text).toContain("ran search");
 		expect(context.server.calls).toEqual([{ name: "search", args }]);
 		const card = context.harness.cards[0];
-		expect(card).toMatchObject({ serverLabel: "Server docs", toolName: "search", reason: "mode", mode: "always-ask", canAllowForChat: true, changedSinceApproval: false });
+		expect(card).toMatchObject({ serverLabel: "Server docs", toolName: "search", reason: "mode", mode: "always-ask", canAllowForChat: false, changedSinceApproval: false });
 		expect(JSON.parse(card?.argumentsText ?? "{}")).toEqual(args);
 		expect(card?.argumentsText).toContain("a".repeat(3000));
 		expect(card?.description).toBe("Finds notes.[U+200B]");
@@ -656,7 +720,7 @@ describe("calling tools", () => {
 	});
 
 	test("Stop pressed earlier in a multi-call turn also stops a call covered by Allow for this chat", async () => {
-		const context = setup();
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat" })] });
 		const snapshot = await connect(context);
 		context.harness.answers.call = "allow-chat";
 		expect((await call(context, snapshot, { chatId: "chat-1" })).status).toBe("ok");
@@ -706,7 +770,7 @@ describe("calling tools", () => {
 	});
 
 	test("Allow for this chat covers that chat only, and only that tool", async () => {
-		const context = setup({ server: fakeServer({ tools: [{ name: "one" }, { name: "two" }] }) });
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat" })], server: fakeServer({ tools: [{ name: "one" }, { name: "two" }] }) });
 		const snapshot = await connect(context);
 		context.harness.answers.call = "allow-chat";
 		await call(context, snapshot, { chatId: "chat-1" });
@@ -722,12 +786,41 @@ describe("calling tools", () => {
 	});
 
 	test("without a conversation there is nothing to scope a chat grant to", async () => {
-		const context = setup();
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat" })] });
 		const snapshot = await connect(context);
 		context.harness.answers.call = "allow-chat";
 		await call(context, snapshot, { chatId: null });
 		await call(context, snapshot, { chatId: null });
 		expect(context.harness.cards.map((card) => card.canAllowForChat)).toEqual([false, false]);
+	});
+
+	test("Ask before every call never offers Allow for this chat, and a stray allow-chat answer is only a one-off", async () => {
+		const context = setup();
+		const snapshot = await connect(context);
+		context.harness.answers.call = "allow-chat";
+		expect((await call(context, snapshot, { chatId: "chat-1" })).status).toBe("ok");
+		expect((await call(context, snapshot, { chatId: "chat-1" })).status).toBe("ok");
+		expect(context.harness.cards.map((card) => [card.mode, card.canAllowForChat, card.reason])).toEqual([
+			["always-ask", false, "mode"],
+			["always-ask", false, "mode"]
+		]);
+		expect(context.server.calls).toHaveLength(2);
+	});
+
+	test("a chat grant made under Ask once per tool is not reused after the server is switched to Ask before every call", async () => {
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat" })] });
+		const snapshot = await connect(context);
+		context.harness.answers.call = "allow-chat";
+		await call(context, snapshot, { chatId: "chat-1" });
+		await call(context, snapshot, { chatId: "chat-1" });
+		expect(context.harness.cards).toHaveLength(1);
+		expect(context.harness.cards[0]).toMatchObject({ mode: "ask-once-per-chat", canAllowForChat: true, reason: "first-use" });
+		context.harness.setServers([httpServer("docs", { approval: "always-ask" })]);
+		context.harness.answers.call = "allow-once";
+		await call(context, snapshot, { chatId: "chat-1" });
+		await call(context, snapshot, { chatId: "chat-1" });
+		expect(context.harness.cards).toHaveLength(3);
+		expect(context.harness.cards.slice(1).map((card) => card.reason)).toEqual(["mode", "mode"]);
 	});
 
 	test("ask-once-per-chat asks the first time and Allow once does not count as a grant", async () => {
@@ -956,6 +1049,27 @@ describe("calling tools", () => {
 });
 
 describe("stdio servers", () => {
+	test("a legacy server that ignores server/discover connects after the short discover window and is remembered as legacy", async () => {
+		const server = fakeServer({ era: "legacy" });
+		const harness = createHarness({ servers: [stdioServer("local")], stdio: [server], processOptions: { ignore: ["server/discover"] } });
+		const tuning = { ...harness.host.tuning, client: { connectTimeoutMs: 5000, listTimeoutMs: 5000, callTimeoutMs: 5000, discoverTimeoutMs: 20 } };
+		const service = new McpService({ ...harness.host, tuning });
+		await service.trust("local");
+		const started = Date.now();
+		const snapshot = await service.prepareRun();
+		expect(Date.now() - started).toBeLessThan(2000);
+		expect(snapshot.tools).toHaveLength(1);
+		expect(service.status()[0]?.state).toMatchObject({ kind: "ready", era: "legacy" });
+		// The fake does not record a request it ignores, so the cancellation of the quiet discover is the first thing it logs.
+		expect(server.methods.slice(0, 2)).toEqual(["notifications/cancelled", "initialize"]);
+		// The era is remembered, so the next start does not wait for the quiet discover again.
+		await service.revokeTrust("local");
+		await service.trust("local");
+		server.methods.length = 0;
+		await service.prepareRun();
+		expect(server.methods[0]).toBe("initialize");
+	});
+
 	test("a call over stdio runs, and a process that dies marks the server failed so the next run starts a fresh one", async () => {
 		const server = fakeServer();
 		const harness = createHarness({ servers: [stdioServer("local")], stdio: [server] });
@@ -1121,7 +1235,7 @@ describe("settings changes and shutdown", () => {
 	});
 
 	test("chat grants are dropped on shutdown", async () => {
-		const context = setup();
+		const context = setup({ servers: [httpServer("docs", { approval: "ask-once-per-chat" })] });
 		const snapshot = await connect(context);
 		context.harness.answers.call = "allow-chat";
 		await call(context, snapshot);

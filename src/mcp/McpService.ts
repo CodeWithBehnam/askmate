@@ -30,6 +30,7 @@ import {
 	findDescriptionWarnings,
 	findSchemaWarnings,
 	fingerprintTool,
+	offersChatGrant,
 	renderHostNotice,
 	renderToolResult,
 	revealInvisible,
@@ -787,7 +788,7 @@ export class McpService {
 			const result = await live.client.callTool(tool.toolName, args, signal, { timeoutMs: live.server.callTimeoutMs });
 			return {
 				status: result.isError ? "tool_error" : "ok",
-				text: renderToolResult(tool.serverLabel, tool.toolName, result, { maxChars: outputLimit(settings.maxOutputChars) }),
+				text: renderToolResult(tool.serverLabel, tool.toolName, result, { maxChars: outputLimit(settings.maxOutputChars) }, this.secretValues(live.server)),
 				serverLabel: tool.serverLabel,
 				toolName: tool.toolName,
 				toolTitle: entry?.title ?? tool.title,
@@ -843,6 +844,8 @@ export class McpService {
 		const pinChanged = pinned !== null && pinned !== tool.fingerprint;
 		const grant = call.chatId === null ? undefined : this.chatGrants.get(call.chatId)?.get(key);
 		const entry = this.runtimes.get(tool.serverId)?.entries.get(tool.toolName);
+		// "Ask before every call" never reuses a grant, so it does not offer one. Without a conversation there is nothing to scope it to.
+		const chatGrantAllowed = call.chatId !== null && offersChatGrant(server.approval);
 		const decision = pinChanged
 			? { kind: "ask" as const, reason: "changed" as const }
 			: decideApproval({ mode: server.approval, tool: entry?.tool ?? {}, fingerprint: tool.fingerprint, grant, trustsAnnotations: server.trustsAnnotations });
@@ -865,7 +868,7 @@ export class McpService {
 			reason: decision.reason,
 			changedSinceApproval: pinChanged || decision.reason === "changed",
 			mode: server.approval,
-			canAllowForChat: call.chatId !== null,
+			canAllowForChat: chatGrantAllowed,
 			claimsReadOnly: tool.claimsReadOnly
 		};
 		let choice: ApprovalChoice;
@@ -886,7 +889,7 @@ export class McpService {
 			return { kind: "denied" };
 		}
 		this.host.deviceTrust.set(pinKey(tool.serverId, tool.toolName), tool.fingerprint);
-		if (choice === "allow-chat" && call.chatId !== null) {
+		if (choice === "allow-chat" && call.chatId !== null && chatGrantAllowed) {
 			const grants = this.chatGrants.get(call.chatId) ?? new Map<string, Grant>();
 			grants.set(key, { fingerprint: tool.fingerprint, scope: "chat" });
 			this.chatGrants.set(call.chatId, grants);

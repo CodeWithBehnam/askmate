@@ -152,6 +152,48 @@ describe("stdio end to end", () => {
 		expect(isAlive(processId ?? 0)).toBe(false);
 	}, 15_000);
 
+	test("a legacy server that stays silent on server/discover is reached after the short window, not the whole connect timeout", async () => {
+		const { transport, log } = launch({ MODE: "silent-legacy" });
+		const started = Date.now();
+		const client = await McpClient.connect(transport, { ...clientConfig, connectTimeoutMs: 8000, discoverTimeoutMs: 250 });
+		expect(Date.now() - started).toBeLessThan(4000);
+		expect(client.session.era).toBe("legacy");
+		expect(client.session.serverName).toBe("FixtureLegacy");
+		expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(["echo", "env", "sleep", "repeat"]);
+		expect(await readLog(log)).toContain("discover-ignored");
+		await client.close();
+	}, 15_000);
+
+	// A package runner (npx, uvx) or a wrapper script starts the real server as a child. Signalling only the wrapper leaves it running.
+	test.skipIf(process.platform === "win32")("closing a server that was started through a wrapper also stops the program the wrapper started", async () => {
+		counter += 1;
+		const log = join(scratch, `wrapped-${counter}.log`);
+		const env = { FIXTURE_LOG: log, MODE: "modern", STUBBORN: "1" };
+		// The program ignores stdin closing and SIGTERM, and the shell goes on after it ends, like a wrapper that does not exec.
+		const plan = planSpawn({ command: "/bin/sh", args: ["-c", '"$0" "$1"; true', process.execPath, fixture], env }, process.platform);
+		const transport = new StdioTransport(spawnChild({ plan, env: buildChildEnv(process.env, null, env) }), { graceMs: 200 });
+		transports.push(transport);
+		const client = await McpClient.connect(transport, clientConfig);
+		const lines = await waitForLog(log, "pid ");
+		const grandchild = Number((lines.find((line) => line.startsWith("pid ")) ?? "").slice(4));
+		expect(grandchild).toBeGreaterThan(0);
+		try {
+			expect(isAlive(grandchild)).toBe(true);
+			const started = Date.now();
+			await client.close();
+			expect(Date.now() - started).toBeLessThan(5000);
+			const deadline = Date.now() + 2000;
+			while (isAlive(grandchild) && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(isAlive(grandchild)).toBe(false);
+		} finally {
+			if (isAlive(grandchild)) {
+				process.kill(grandchild, "SIGKILL");
+			}
+		}
+	}, 20_000);
+
 	test("a command that does not exist fails with a clear transport error", async () => {
 		const plan = planSpawn({ command: "askmate-no-such-command", args: [], env: {} }, process.platform);
 		const transport = new StdioTransport(spawnChild({ plan, env: {} }), { graceMs: 50 });

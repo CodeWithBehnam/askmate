@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveLoginPath } from "../../src/mcp/launch";
+import { type TreeOps, planTreeSignal, resolveLoginPath, signalTree, spawnChild } from "../../src/mcp/launch";
+import { planSpawn } from "../../src/mcp/spawnPlan";
 
 describe("login PATH", () => {
 	test("a known shell is asked once for its PATH with a fixed script, and the result is merged with well-known folders", async () => {
@@ -38,6 +39,81 @@ describe("login PATH", () => {
 
 	test("Windows has no login shell and no fallback folders", async () => {
 		expect(await resolveLoginPath("win32", { SHELL: "/bin/zsh" }, () => Promise.reject(new Error("must not run")))).toBeNull();
+	});
+});
+
+describe("signalling the whole process tree", () => {
+	function recorder(platform: NodeJS.Platform, options: { groupFails?: boolean; taskkillFails?: boolean } = {}) {
+		const calls: string[] = [];
+		const ops: TreeOps = {
+			platform,
+			signalGroup: (pid, signal) => {
+				calls.push(`group ${pid} ${String(signal)}`);
+				if (options.groupFails) {
+					throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+				}
+			},
+			runTaskkill: (pid, onFailure) => {
+				calls.push(`taskkill ${pid}`);
+				if (options.taskkillFails) {
+					onFailure();
+				}
+			}
+		};
+		const child = { pid: 4242 as number | undefined, kill: (signal?: NodeJS.Signals | number) => { calls.push(`direct ${String(signal)}`); return true; } };
+		return { calls, ops, child };
+	}
+
+	test("POSIX signals the child's process group, Windows ends the tree with taskkill, and a child that never started is signalled directly", () => {
+		expect(planTreeSignal("darwin", 10)).toEqual({ kind: "group", pid: 10 });
+		expect(planTreeSignal("linux", 10)).toEqual({ kind: "group", pid: 10 });
+		expect(planTreeSignal("win32", 10)).toEqual({ kind: "taskkill", pid: 10 });
+		expect(planTreeSignal("darwin", undefined)).toEqual({ kind: "direct" });
+	});
+
+	test("the group is signalled by its negative id and nothing else is touched", () => {
+		const { calls, ops, child } = recorder("linux");
+		expect(signalTree(child, "SIGTERM", ops)).toBe(true);
+		expect(signalTree(child, "SIGKILL", ops)).toBe(true);
+		expect(calls).toEqual(["group 4242 SIGTERM", "group 4242 SIGKILL"]);
+	});
+
+	test("a group that is gone falls back to the direct child, which reports whether anything was left", () => {
+		const { calls, ops, child } = recorder("darwin", { groupFails: true });
+		expect(signalTree(child, "SIGKILL", ops)).toBe(true);
+		expect(calls).toEqual(["group 4242 SIGKILL", "direct SIGKILL"]);
+	});
+
+	test("Windows uses taskkill for the tree and only signals the direct child when taskkill fails", () => {
+		const ok = recorder("win32");
+		signalTree(ok.child, "SIGTERM", ok.ops);
+		expect(ok.calls).toEqual(["taskkill 4242"]);
+		const failing = recorder("win32", { taskkillFails: true });
+		signalTree(failing.child, "SIGKILL", failing.ops);
+		expect(failing.calls).toEqual(["taskkill 4242", "direct SIGKILL"]);
+	});
+
+	test("a child without a pid is signalled directly on every platform", () => {
+		for (const platform of ["darwin", "win32"] as const) {
+			const { calls, ops, child } = recorder(platform);
+			child.pid = undefined;
+			signalTree(child, "SIGTERM", ops);
+			expect(calls).toEqual(["direct SIGTERM"]);
+		}
+	});
+
+	test.skipIf(process.platform === "win32")("a real child leads its own group, and SIGKILL reaches a program it left running", async () => {
+		const plan = planSpawn({ command: "/bin/sh", args: ["-c", "sleep 60 & exit 0"], env: {} }, process.platform);
+		const child = spawnChild({ plan, env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+		await new Promise<void>((resolve) => { child.on("exit", () => resolve()); });
+		const deadline = Date.now() + 2000;
+		// The shell has gone but the sleep it started has not, and the group is still addressable through the child.
+		expect(child.hasSurvivors?.()).toBe(true);
+		child.kill("SIGKILL");
+		while (child.hasSurvivors?.() === true && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		expect(child.hasSurvivors?.()).toBe(false);
 	});
 });
 

@@ -1,4 +1,5 @@
 import { type JsonObject, type JsonValue, type McpTool, type McpToolResult, isJsonObject } from "./protocol";
+import { maskSecretValues } from "./redact";
 import { sha256Hex } from "./sha256";
 
 /** Pure safety policy: naming, change detection, approval decisions and how tool output is presented to the model. */
@@ -143,11 +144,11 @@ export interface ApprovalInput {
  *
  * 1. A grant for a different fingerprint: ask ("changed"), whatever the mode.
  * 2. Mode "trusted-read-only" on a server whose annotations are trusted, and the tool claims readOnlyHint without destructiveHint: allow.
- * 3. A chat grant for this fingerprint: allow. The user chose "Allow for this chat" deliberately, so it applies in every mode.
- * 4. Mode "always-ask": ask ("mode"). A persistent grant never bypasses it.
- * 5. A grant for this fingerprint: allow (modes "ask-once-per-chat" and "trusted-read-only").
- * 6. Mode "trusted-read-only" with trusted annotations, but the tool does not claim to be read only: ask ("possible-side-effect").
- * 7. Otherwise: ask ("first-use").
+ * 3. Mode "always-ask": ask ("mode"). No grant of any scope is reused, so "Ask before every call" means every call.
+ * 4. A grant for this fingerprint: allow. A chat grant is the user's "Allow for this chat" choice, which is only offered in the
+ *    modes that reuse it ("ask-once-per-chat" and "trusted-read-only").
+ * 5. Mode "trusted-read-only" with trusted annotations, but the tool does not claim to be read only: ask ("possible-side-effect").
+ * 6. Otherwise: ask ("first-use").
  */
 export function decideApproval(input: ApprovalInput): ApprovalDecision {
 	const { mode, tool, fingerprint, grant, trustsAnnotations } = input;
@@ -158,9 +159,6 @@ export function decideApproval(input: ApprovalInput): ApprovalDecision {
 	if (mode === "trusted-read-only" && trustsAnnotations && claimsReadOnly) {
 		return { kind: "allow" };
 	}
-	if (grant?.scope === "chat") {
-		return { kind: "allow" };
-	}
 	if (mode === "always-ask") {
 		return { kind: "ask", reason: "mode" };
 	}
@@ -168,6 +166,11 @@ export function decideApproval(input: ApprovalInput): ApprovalDecision {
 		return { kind: "allow" };
 	}
 	return mode === "trusted-read-only" && trustsAnnotations ? { kind: "ask", reason: "possible-side-effect" } : { kind: "ask", reason: "first-use" };
+}
+
+/** Whether the approval card may offer "Allow for this chat". Only the modes that reuse a chat grant offer it. */
+export function offersChatGrant(mode: ApprovalMode): boolean {
+	return mode !== "always-ask";
 }
 
 /**
@@ -329,8 +332,19 @@ function open(serverLabel: string, toolName: string, status: string, trust: stri
 	return `<tool_result server="${attribute(serverLabel)}" tool="${attribute(toolName)}" status="${status}" trust="${trust}">`;
 }
 
-/** Flattens a result to bounded text and fences it as untrusted data. Binary content is described, never forwarded. */
-export function renderToolResult(serverLabel: string, toolName: string, result: McpToolResult, limits: OutputLimits = DEFAULT_OUTPUT_LIMITS): string {
+/**
+ * Flattens a result to bounded text and fences it as untrusted data. Binary content is described, never forwarded.
+ * `secrets` are the values this server was given (token, header and environment secrets). A server that echoes one back, in a
+ * debug line or an error, must not hand it to the model, so they are masked after invisible characters are removed (a secret
+ * cannot hide behind zero-width characters) and before the length cap (a cut cannot leave half of one).
+ */
+export function renderToolResult(
+	serverLabel: string,
+	toolName: string,
+	result: McpToolResult,
+	limits: OutputLimits = DEFAULT_OUTPUT_LIMITS,
+	secrets: readonly string[] = []
+): string {
 	const parts = result.content.map((block) => {
 		switch (block.type) {
 			case "text":
@@ -347,7 +361,7 @@ export function renderToolResult(serverLabel: string, toolName: string, result: 
 		}
 	});
 	const structured = parts.length === 0 && result.structuredContent !== undefined ? [canonical(result.structuredContent)] : [];
-	const joined = stripInvisible([...parts, ...structured].join("\n")).trim() || "(The tool returned no content.)";
+	const joined = maskSecretValues(stripInvisible([...parts, ...structured].join("\n")), secrets).trim() || "(The tool returned no content.)";
 	const bounded = joined.length > limits.maxChars
 		? `${cutText(joined, limits.maxChars)}\n[Output cut after ${limits.maxChars} characters.]`
 		: joined;

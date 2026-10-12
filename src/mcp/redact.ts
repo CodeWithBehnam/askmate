@@ -11,14 +11,22 @@ const HEADER_AND_TOKEN_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 
 /**
+ * Replaces every occurrence of the given secret values and nothing else. Used where the text is a server's own content (a tool
+ * result), which must keep its wording apart from the values this server was given.
+ */
+export function maskSecretValues(text: string, secrets: readonly string[]): string {
+	return secrets
+		.map((secret) => secret.trim())
+		.filter((secret) => secret.length >= MIN_EXACT_SECRET_LENGTH)
+		.reduce((current, secret) => current.split(secret).join("[redacted]"), text);
+}
+
+/**
  * Masks bearer tokens, header values and the exact secrets this server uses before text reaches a notice, a log or a status chip.
  * Wraps the provider redactor so MCP and provider errors follow the same rules.
  */
 export function redactMcpText(text: string, secrets: readonly string[] = []): string {
-	const exact = secrets
-		.map((secret) => secret.trim())
-		.filter((secret) => secret.length >= MIN_EXACT_SECRET_LENGTH)
-		.reduce((current, secret) => current.split(secret).join("[redacted]"), text);
+	const exact = maskSecretValues(text, secrets);
 	const known = redactSecrets(exact, [...secrets]);
 	return HEADER_AND_TOKEN_PATTERNS.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), known);
 }

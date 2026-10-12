@@ -162,14 +162,17 @@ describe("approval decision table", () => {
 	const destructive: McpTool = { ...sampleTool, annotations: { readOnlyHint: true, destructiveHint: true } };
 	const plain: McpTool = { name: "x", inputSchema: {} };
 
-	test("a chat grant lets a repeat call through in every mode, a stored grant only outside always-ask", () => {
+	test("a chat or stored grant lets a repeat call through, except in always-ask where every call asks", () => {
 		const chat = { fingerprint: "f", scope: "chat" as const };
 		const always = { fingerprint: "f", scope: "always" as const };
-		for (const mode of ["always-ask", "ask-once-per-chat", "trusted-read-only"] as const) {
+		for (const mode of ["ask-once-per-chat", "trusted-read-only"] as const) {
 			expect(decideApproval({ mode, tool: plain, fingerprint: "f", grant: chat, trustsAnnotations: false })).toEqual({ kind: "allow" });
+			expect(decideApproval({ mode, tool: plain, fingerprint: "f", grant: always, trustsAnnotations: false })).toEqual({ kind: "allow" });
 		}
-		expect(decideApproval({ mode: "always-ask", tool: plain, fingerprint: "f", grant: always, trustsAnnotations: false })).toEqual({ kind: "ask", reason: "mode" });
-		expect(decideApproval({ mode: "ask-once-per-chat", tool: plain, fingerprint: "f", grant: always, trustsAnnotations: false })).toEqual({ kind: "allow" });
+		for (const grant of [chat, always]) {
+			expect(decideApproval({ mode: "always-ask", tool: plain, fingerprint: "f", grant, trustsAnnotations: false })).toEqual({ kind: "ask", reason: "mode" });
+			expect(decideApproval({ mode: "always-ask", tool: readOnly, fingerprint: "f", grant, trustsAnnotations: true })).toEqual({ kind: "ask", reason: "mode" });
+		}
 	});
 
 	test("a changed fingerprint beats every other rule, including trusted read-only hints", () => {

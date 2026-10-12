@@ -123,6 +123,26 @@ describe("HttpTransport hardening", () => {
 		expect(await sse.post({ jsonrpc: "2.0", id: 9, method: "x" }, options)).toEqual({ kind: "rpc", reply: { kind: "result", id: 9, result: { ok: 1 } } });
 	});
 
+	test("a reply whose Content-Type does not match its body is still read", async () => {
+		const sseLabelledJson = new HttpTransport(url, () => Promise.resolve({
+			status: 200,
+			headers: { "content-type": "application/json" },
+			text: 'data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\ndata: {"jsonrpc":"2.0","id":4,"result":{"ok":1}}\n\n'
+		}));
+		const seen: string[] = [];
+		sseLabelledJson.onNotification((method) => seen.push(method));
+		expect(await sseLabelledJson.post({ jsonrpc: "2.0", id: 4, method: "x" }, options)).toEqual({ kind: "rpc", reply: { kind: "result", id: 4, result: { ok: 1 } } });
+		expect(seen).toEqual(["notifications/tools/list_changed"]);
+		const jsonLabelledSse = new HttpTransport(url, () => Promise.resolve({
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+			text: JSON.stringify({ jsonrpc: "2.0", id: 5, result: { ok: 2 } })
+		}));
+		expect(await jsonLabelledSse.post({ jsonrpc: "2.0", id: 5, method: "x" }, options)).toEqual({ kind: "rpc", reply: { kind: "result", id: 5, result: { ok: 2 } } });
+		const unlabelled = new HttpTransport(url, () => Promise.resolve({ status: 200, headers: {}, text: 'data: {"jsonrpc":"2.0","id":6,"result":{}}\n\n' }));
+		expect(await unlabelled.post({ jsonrpc: "2.0", id: 6, method: "x" }, options)).toEqual({ kind: "rpc", reply: { kind: "result", id: 6, result: {} } });
+	});
+
 	test("notifications found in a reply body reach subscribers until they unsubscribe", async () => {
 		const transport = new HttpTransport(url, () => Promise.resolve({
 			status: 200,

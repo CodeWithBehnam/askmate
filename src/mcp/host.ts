@@ -96,7 +96,10 @@ export interface ToolApprovalCard {
 	/** The tool definition differs from the one approved on this device before. */
 	readonly changedSinceApproval: boolean;
 	readonly mode: ApprovalMode;
-	/** False when there is no conversation to scope a grant to. Hide "Allow for this chat" then. */
+	/**
+	 * False when there is no conversation to scope a grant to, or when the server's mode ("Ask before every call") never reuses a
+	 * grant. Hide "Allow for this chat" then: choosing it would promise something that does not happen.
+	 */
 	readonly canAllowForChat: boolean;
 	/** The server's readOnlyHint, shown as an unverified claim. */
 	readonly claimsReadOnly: boolean;

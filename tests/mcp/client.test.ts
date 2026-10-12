@@ -31,6 +31,64 @@ describe("McpClient negotiation", () => {
 		await expect(McpClient.connect(silentHttp, config)).rejects.toMatchObject({ kind: "timeout" });
 	});
 
+	describe("a stdio server that is quiet on server/discover", () => {
+		const slow = { ...config, connectTimeoutMs: 30_000, discoverTimeoutMs: 3000 };
+		const legacyReply = (id: number | string) => ok(id, { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "Quiet", version: "1" } });
+
+		test("is given a short window before AskMate falls back to initialize, which then gets the whole connect budget", async () => {
+			const transport = scripted("stdio", (message, call) => (call === 1 ? new McpClientError("timeout", "silent") : legacyReply(message.id)));
+			const client = await McpClient.connect(transport, slow);
+			expect(client.session).toMatchObject({ era: "legacy", serverName: "Quiet" });
+			expect(transport.sent.map((message) => message.method)).toEqual(["server/discover", "initialize"]);
+			expect(transport.timeouts[0]).toBe(3000);
+			expect(transport.timeouts[1]).toBe(30_000);
+		});
+
+		test("keeps the whole connect budget when the era is already known, and over HTTP", async () => {
+			const known = scripted("stdio", (message) => discover(message.id));
+			await McpClient.connect(known, slow, undefined, { era: "modern", version: "2026-07-28" });
+			expect(known.timeouts).toEqual([30_000]);
+			const http = scripted("http", (message) => discover(message.id));
+			await McpClient.connect(http, slow);
+			expect(http.timeouts).toEqual([30_000]);
+		});
+
+		test("a window longer than the connect budget never extends it", async () => {
+			const transport = scripted("stdio", (message) => discover(message.id));
+			await McpClient.connect(transport, { ...config, connectTimeoutMs: 1000, discoverTimeoutMs: 5000 });
+			expect(transport.timeouts).toEqual([1000]);
+		});
+
+		test("a modern server that was only slow to start is asked again once it answers initialize with an error", async () => {
+			const transport = scripted("stdio", (message, call) => {
+				if (call === 1) {
+					return new McpClientError("timeout", "still starting");
+				}
+				return message.method === "initialize" ? fail(message.id, -32601) : discover(message.id);
+			});
+			const client = await McpClient.connect(transport, slow);
+			expect(client.session).toMatchObject({ era: "modern", version: "2026-07-28" });
+			expect(transport.sent.map((message) => message.method)).toEqual(["server/discover", "initialize", "server/discover"]);
+			expect(transport.timeouts).toEqual([3000, 30_000, 30_000]);
+		});
+
+		test("gives up with the server's own error when neither way works, and does not loop", async () => {
+			const transport = scripted("stdio", (message, call) => (call % 2 === 1 ? new McpClientError("timeout", "silent") : fail(message.id, -32000, "no")));
+			await expect(McpClient.connect(transport, slow)).rejects.toMatchObject({ kind: "server_error" });
+			expect(transport.sent.map((message) => message.method)).toEqual(["server/discover", "initialize", "server/discover", "initialize"]);
+		});
+
+		test("Stop during the short window ends the connection instead of falling back", async () => {
+			const stopped = new AbortController();
+			const transport = scripted("stdio", () => {
+				stopped.abort();
+				return new McpClientError("aborted", "Stopped.");
+			});
+			await expect(McpClient.connect(transport, slow, stopped.signal)).rejects.toMatchObject({ kind: "aborted" });
+			expect(transport.sent).toHaveLength(1);
+		});
+	});
+
 	test("HTTP: a plain 400 falls back to initialize, a 401 asks for a token, a retired SSE server gets a clear message", async () => {
 		const legacy = scripted("http", (message) => message.method === "server/discover"
 			? { kind: "http", http: { status: 400, headers: {}, text: "Bad Request" } }
