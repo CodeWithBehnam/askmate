@@ -1,6 +1,6 @@
 # MCP tools
 
-The Model Context Protocol (MCP) lets AskMate call tools that live outside Obsidian: search a database, read a ticket, fetch a page. AskMate is an MCP client for tools. Every call needs your approval by default, and tools never write to your vault.
+The Model Context Protocol (MCP) lets AskMate call tools that live outside Obsidian: search a database, read a ticket, fetch a page. AskMate is an MCP client for tools. Every call needs your approval by default, and AskMate never writes tool output into your vault.
 
 MCP is off until you turn it on. Nothing starts or connects by default.
 
@@ -19,14 +19,15 @@ AskMate speaks both protocol eras. It first asks a server what it supports (the 
 
 ## Add a server
 
-Open settings, then skills and tools, and turn on MCP. Add a server as one of:
+Open settings, go to `Skills and tools`, and turn on `Allow tools`. AskMate asks you to confirm. Then use the plus button beside `Tool servers` and choose one of:
 
-- **Remote URL:** a Streamable HTTP address, plus a bearer token or headers if the server needs them. The address must use `https://`. Plain `http://` is accepted only for `localhost`, `127.0.0.1` and `[::1]`, so a server on another machine in your network needs HTTPS. The address cannot hold a username, password or `#fragment`; use a bearer token instead.
-- **Local command (desktop only):** the command, its arguments and any environment variables.
+- **Remote server:** a Streamable HTTP address, plus a bearer token or headers if the server needs them. The address must use `https://`. Plain `http://` is accepted only for `localhost`, `127.0.0.1` and `[::1]`, so a server on another machine in your network needs HTTPS. The address cannot hold a username, password or `#fragment`; use a bearer token instead.
+- **Local program** (desktop only): the command, its arguments (one per line) and any environment variables.
+- **Import from JSON:** see below.
 
-<!-- TODO(lead): confirm the labels of the server editor (WP-12). -->
+A new server starts switched off. Open it to see its `Server`, `Connection`, `Permissions` and `Tools` sections. AskMate keeps up to 50 servers.
 
-Tokens, secret headers and secret environment values are saved with Obsidian SecretStorage under names such as `askmate-mcp-<server>-token`, never in `data.json`.
+Tokens, secret headers and secret environment values are saved with Obsidian SecretStorage under names such as `askmate-mcp-<server>-token`, never in `data.json`. A value whose name looks like a credential (a token, key or password) is stored as a secret even if you do not tick `Store this variable as a secret`.
 
 You can also paste the `mcpServers` JSON that Claude Desktop, Cursor, VS Code, Claude Code or Cline use:
 
@@ -46,55 +47,52 @@ You can also paste the `mcpServers` JSON that Claude Desktop, Cursor, VS Code, C
 }
 ```
 
-Import shows every command that would be added and stores secret-looking values in SecretStorage. Imported servers are never trusted automatically. Fields AskMate does not use (`cwd`, `envFile`, `autoApprove`, `alwaysAllow`, `timeout`) are reported and ignored.
+Import shows every command that would be added and stores secret-looking values in SecretStorage. Imported servers arrive switched off and are never trusted automatically. Fields AskMate does not use (`cwd`, `envFile`, `autoApprove`, `alwaysAllow`, `timeout`) are reported and ignored.
 
 ## Trust a server
 
-Before AskMate starts a local server or contacts a remote one, you review the exact definition in a dialog: the command line and arguments, which environment variables are plain and which come from SecretStorage, or the host, the header names and the bearer token's secret name. Trust is stored on this device only. If the command, arguments, environment names, address or header names change, the server returns to Needs trust. A definition synced from another computer arrives untrusted.
+Press `Trust and test` on the server's page. Before AskMate starts a local server or contacts a remote one, you review the exact definition in a dialog: the command line and arguments, which environment variables are plain and which come from SecretStorage, or the address, the host that receives your requests, the header names and the bearer token's secret name. The dialog also warns about risky commands, such as a shell command string. Trust is stored on this device only. If the command, arguments, environment variables, address, headers or token reference change, the server returns to `Needs trust`. A definition synced from another computer arrives untrusted. `Revoke trust` forgets it and stops the server.
 
 ## Approve each call
 
-When the model wants a tool, AskMate shows a card with the server, the tool and the full, untruncated JSON arguments. You choose:
+When the model wants a tool, AskMate shows a card in the reply with the server, the tool and the full, untruncated JSON arguments. You choose:
 
 - **Allow once.**
 - **Allow for this chat.** Lasts for the conversation, in memory only.
-- **Deny.** Dismissing the card also denies.
+- **Deny.** Stopping the run also denies.
 
-Each server has an approval mode:
+Each server has an `Approval` setting:
 
-| Mode | Behaviour |
+| Setting | Behaviour |
 | --- | --- |
-| Always ask (default) | Asks before every call. Choosing Allow for this chat on the card covers that tool for the rest of the chat. |
-| Ask once per chat | Asks the first time each tool is used and labels the card as a first use. Allow for this chat covers the rest of the chat. |
-| Trusted read-only | Lets tools through that the server itself marks read-only, but only for a server you marked as trusted for that. The mark is the server's claim and AskMate does not verify it. |
+| Ask before every call (default) | Asks before every call. Choosing Allow for this chat on a card covers that tool for the rest of the chat. |
+| Ask once for each tool in a chat | Asks the first time each tool is used and says so on the card. Allow for this chat covers the rest of the chat. In this version it behaves like the first setting and differs only in the wording on the card. |
+| Ask unless the tool only reads | Lets tools through that the server itself marks read-only, but only when `Believe the server's read-only labels` is on for that server. The mark is the server's claim and AskMate does not verify it. Every other tool still asks. |
 
-<!-- TODO(lead): in src/mcp/McpService.ts only chat grants are created, so Always ask and Ask once per chat currently behave almost the same. Decide whether to describe them differently or merge them in the UI. -->
-
-Each tool definition (name, description, input schema, annotations) is fingerprinted with SHA-256. If a server changes a tool you approved, the tool gets a Changed badge and needs a fresh approval. A `tools/list_changed` notice is ignored until the current run ends. You can switch off individual tools, and they never reach the model.
+Each tool definition (name, description, input schema, annotations) is fingerprinted with SHA-256. If a server changes a tool you approved, the tool gets a `Changed` badge and needs a fresh approval. A run keeps the tool list it started with, and a call to a tool that changed mid-run is not made. On a server's page you can switch off individual tools, and they never reach the model.
 
 ## How tools are used
 
-- Tools are offered in sidebar Chat mode when a server is ready and the model supports tool calls. They are off in batch and command-palette runs and in Apply and New note output modes unless you opt in for that run.
-- A run stops after a set number of rounds (default 5, up to 12) and at most 12 calls. A result is cut at a character limit (default 20,000) before the model sees it. A call that takes too long is stopped, and AskMate tells the model not to retry it.
+- Tools are offered on questions you ask in the sidebar in `Chat` output mode, when at least one trusted server is ready or waiting to start and the model supports tool calls. They are not used for diagrams, images, `Note` or `Apply` output, batch runs, or workflows started from the command palette or the editor menu. When the model cannot take tools, AskMate says so and answers without them.
+- A run stops after a set number of tool rounds and at most 12 calls. `Tool rounds per answer` sets the rounds (default 5), but a run never goes beyond 7 rounds in this version. A result is cut before the model sees it: `Longest tool result` sets the limit (default 20,000 characters), but the model never receives more than 12,000 characters of one result in this version. A call that takes too long is stopped, and AskMate tells the model not to retry it.
 - A tool result is plain text to the model, wrapped as untrusted data, never placed in its instructions. Images are dropped.
-- If a tool result leads to a note change, the change goes through the Apply diff, whatever your approval mode.
+- If you Apply a reply that was written from tool results, AskMate always shows the diff, whatever your approval setting. Such a reply cannot be queued for later review.
 - Stop cancels the run. A call that was stopped is not sent.
-
-<!-- TODO(lead): confirm the round and result limits users can set, and which caps the tool loop applies (src/providers/tools/loop.ts uses 8 turns, 12 calls and 12,000 characters per result by default). -->
+- A saved conversation keeps only the server, the tool name, the outcome and a short summary of each call, never its arguments or result.
 
 ## What a server can see and do
 
-A remote server receives the tool name and the arguments of calls you approve, and nothing else from AskMate. A local server is a child process that runs with your user's permissions: it can read and write files outside the vault and use the network. Obsidian cannot sandbox it. Only add commands you would run in a terminal.
+A remote server receives the tool name and the arguments of calls you approve, and nothing else from AskMate. A local server is a child process that runs with your user's permissions: it can read and write any file your account can, including your vault, and use the network. Obsidian cannot sandbox it. Only add commands you would run in a terminal.
 
-AskMate runs a local server without a shell, with an argument list and a short environment (a few standard variables plus the ones you set). On Windows, `npx`, `uvx` and similar run through `cmd.exe`, and arguments containing `& | < > ^ % !` or quotes are refused. Point the command at `node.exe` and the script instead. A server starts the first time a run needs it and stops when you switch it off or close Obsidian: AskMate closes its input, then asks it to end, then ends it.
+AskMate runs a local server without a shell, with an argument list and a short environment: a fixed list of standard variables (such as `PATH`, `HOME`, temporary folders and proxy settings) plus the ones you set. On Windows, `npx`, `uvx` and similar run through `cmd.exe`, and arguments containing `& | < > ^ % !` or quotes are refused. Point the command at `node.exe` and the script instead. A server starts the first time a run needs it and stops when you switch it off or close Obsidian: AskMate closes its input, then asks it to end, then ends it.
 
-When Obsidian was started from the Dock or Start menu, its `PATH` is shorter than your terminal's. AskMate reads your login shell's `PATH` once with a fixed command, and also looks in the usual install folders.
+When Obsidian was started from the Dock or Start menu, its `PATH` is shorter than your terminal's. On macOS and Linux AskMate reads your login shell's `PATH` once with a fixed command, and also looks in the usual install folders.
 
-Tool descriptions are cleaned of control, zero-width and bidirectional characters and cut to 1,024 characters before the model sees them, and AskMate warns on text that looks like a hidden instruction. The approval card shows the original description with hidden characters made visible. These checks are heuristics. They do not replace your approval.
+Tool descriptions and the descriptions inside input schemas are cleaned of control, zero-width and bidirectional characters and cut to 1,024 characters before the model sees them, and AskMate warns on text that looks like a hidden instruction. The approval card shows the original description with hidden characters made visible. These checks are heuristics. They do not replace your approval.
 
 ## Check status
 
-`/mcp` in the sidebar lists servers and their status: off, needs trust, idle (trusted and not started yet), connecting, ready (with the number of tools), needs authentication or error. A failed server is left alone for a short time so a missing command does not slow every question. See [troubleshooting](troubleshooting.md).
+`/mcp` in the sidebar lists servers and their status: off, needs your trust, ready (starts when first used), connecting, ready with the number of tools, needs sign-in (a missing or rejected token) or an error. A server's page shows the same states as a chip: `Off`, `Needs trust`, `Not started`, `Connecting`, `Ready`, `Needs a token` and `Error`. A failed server is left alone for 15 seconds so a missing command does not slow every question. See [troubleshooting](troubleshooting.md).
 
 ## Network and privacy
 

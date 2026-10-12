@@ -10,7 +10,7 @@ Skills are instructions only. A skill cannot call tools, fetch pages, write file
 
 ## Your own skills
 
-Put skills in a visible vault folder, `AskMate/Skills` by default (change it in settings under skills and tools; a dot-folder is not accepted). Either layout works:
+Put skills in a visible vault folder, `AskMate/Skills` by default (change it with `Skills folder` on the `Skills and tools` settings page; a folder that starts with a dot is not accepted). Either layout works:
 
 ```text
 AskMate/Skills/meeting-minutes/SKILL.md
@@ -34,15 +34,15 @@ Produce minutes that someone who missed the meeting can act on.
 Sections in order: Summary, Decisions, Action items, Open questions.
 ```
 
-`name` and `description` are required. The name uses lower-case letters, digits and single hyphens, up to 64 characters. The description says what the skill does and when to use it, up to 1,024 characters. Optional fields: `title`, `when_to_use`, `triggers`, `disable-model-invocation` (never suggest or apply it on its own), `user-invocable`, `argument-hint`, `output-kind`, `icon`, `accent` and `requires-mcp` (the MCP servers it expects). Fields AskMate does not know are ignored, and so are `scripts`, `references`, `assets` and `allowed-tools`, which the review screen lists as ignored.
+`description` is required: it says what the skill does and when to use it, up to 1,024 characters. `name` is optional. It is taken from the folder or file name when you leave it out, and a name that is not lower-case letters, digits and single hyphens (up to 64 characters) is changed to that form with a warning. Optional fields: `title`, `when_to_use`, `triggers`, `disable-model-invocation` (never suggest or apply it on its own), `user-invocable` (set it to false and only AskMate can choose it), `argument-hint`, `output-kind`, `icon`, `accent` and `requires-mcp` (the MCP servers it expects). Fields AskMate does not know are ignored, and so are `allowed-tools` and any `scripts`, `references` or `assets` files beside the skill, which the review screen lists as ignored.
 
-Limits: a vault skill body is at most 10,000 characters, a file at most 64 KB, a scan reads up to 200 files two folders deep, and the folder is rescanned shortly after you change a file.
+Limits: a vault skill body is at most 10,000 characters, a file at most 64 KB, a scan reads up to 200 skill files, and the folder is rescanned shortly after you change a file. A `README.md` in the skills folder is not read as a skill.
 
-`Install examples` in settings adds starter skills you can edit: meeting minutes, Anki flashcards, weekly review, Cornell notes and translate keeping format. <!-- TODO(lead): confirm the settings label for installing examples and creating a skill from a template (WP-12). -->
+Two buttons on the `Skills and tools` page create files for you. `New skill from template` asks for a name and writes a skill you can edit; AskMate approves that first version because it wrote it. `Install examples` adds five starter skills you can edit: Meeting minutes, Anki flashcards, Weekly review, Cornell notes and Translate and keep format. Examples need your review like any other vault skill, and existing files are never overwritten.
 
 ## Trust
 
-A vault skill does nothing until you review it. The review screen shows the raw text, how many invisible characters and hidden comments were removed, advisory warnings, and, after a change, a diff. Approving it records the SHA-256 of the cleaned text. Any byte change returns the skill to Needs review. A skill you create with AskMate's own editor is trusted when you save it.
+A vault skill does nothing until you review it. Each skill in the list shows a status: `Built-in`, `Ready`, `Needs review`, `Disabled` or `Invalid`. `Review` opens the raw text with hidden characters made visible, how many invisible characters and hidden comments are removed before the model sees it, advisory warnings and, when you approved an earlier version in the same session, a diff. Approving it records the SHA-256 of the file text in `data.json`. A byte order mark and the line-ending style are not counted; any other change, including whitespace and comments, returns the skill to `Needs review`. `Withdraw approval` takes it back, and a switch on each row turns a skill off.
 
 Skill text goes into the instructions part of the request, so read it as you would read any prompt before you approve it.
 
@@ -51,15 +51,21 @@ Skill text goes into the instructions part of the request, so read it as you wou
 | Way | How |
 | --- | --- |
 | By name | `/skill <name> [question]`, or `@skill:name` in the question. |
-| By chip | AskMate suggests at most one skill as a chip under the composer. Press it to use it. |
-| By workflow | A workflow can name up to three skills that always apply. |
+| By chip | AskMate suggests at most one skill as a chip under the composer, such as `Meeting minutes?`. Press it to use it for the next question. |
+| By picker | The wand button among the composer controls lists your skills. A tick keeps a skill on for the whole conversation. |
+| By workflow | A workflow can carry up to three skills that always apply to it. The built-in Mermaid diagram workflow carries `mermaid-diagrams`. The custom workflow editor has no skill field in this version; a custom workflow gets skills only through a `skillIds` list in its preset JSON, such as `built-in:mermaid-diagrams` or `vault:meeting-minutes`. |
 | For a chat | `/skill <name>` with no question keeps the skill for the rest of the conversation. |
-| Automatically | A local matcher scores the request against each skill's name, triggers and description. No extra model call is made. |
+| Automatically | A local matcher scores the start of the request against each skill's name, triggers and description. No extra model call is made. It ignores questions such as "what does this mean", skips anything you negate ("without a diagram") and needs a clear winner. |
 
-The skill matching setting has four choices: off, suggest only (chips, never automatic), built-in skills automatic (the default) and all trusted skills automatic. <!-- TODO(lead): the stored values are off, suggest, builtin-auto and all-auto. Use the labels from the merged settings tab. -->
+`When to use a skill` on the `Skills and tools` page has four choices:
 
-Limits per request: three skills, one of them automatic, and 16,000 characters of skill text in total. Skills are sorted by id so the same request reads the same way each time.
+- `Off, only skills I choose`: no matching and no chips.
+- `Suggest one skill`: a matching skill appears as a chip and never starts on its own.
+- `Use built-in skills automatically` (the default): a matching built-in skill starts on its own, and a matching approved vault skill appears as a chip.
+- `Use built-in and approved vault skills automatically`.
+
+`Use skills` switches the whole feature off. Limits per request: three skills, one of them automatic, and 16,000 characters of skill text in total. A skill you or a workflow named switches automatic matching off for that request. Skills are sorted by id so the same request reads the same way each time.
 
 ## What a skill cannot do
 
-Your question and your custom instructions outrank a skill. A skill cannot override AskMate's rules for evidence, output and stopping, or the rule that note text is data and not instructions. A skill that does not fit the request is ignored. The sidebar names the skill used on a reply, and `/inspect` shows the final prompt.
+Your question and your custom instructions outrank a skill. A skill cannot override AskMate's rules for evidence, output and stopping, or the rule that note text is data and not instructions. A skill that does not fit the request is ignored. The sidebar names the skill used on a reply (`Skill: name`), `Run again without skill` is offered when an automatic skill shaped it, and `/inspect` shows the final prompt.

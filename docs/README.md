@@ -14,4 +14,6 @@ The [README](../README.md) covers install and the first minute. These pages hold
 | [Privacy and data](privacy.md) | What is sent, what is stored, and the MCP and child process disclosure. |
 | [Troubleshooting](troubleshooting.md) | Messages, causes and fixes. |
 
-<!-- TODO(lead): settings page names in these docs follow the plan (Connection, Sidebar and output, Privacy and memory, Skills and tools, Instructions, Advanced). Confirm each name against the merged settings tab. -->
+## Settings pages
+
+AskMate settings have six pages: `Connection`, `Sidebar and output`, `Privacy and memory`, `Skills and tools`, `Instructions` and `Advanced`. A new user needs only the first. These pages name each setting as it appears there.
