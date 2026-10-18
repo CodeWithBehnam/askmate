@@ -1205,6 +1205,20 @@ describe("skills page", () => {
 		expect(feedbackOf(row.setting)).toContain("hidden folder");
 	});
 
+	test("the home summary counts the skills the page lists, built-in ones included", async () => {
+		const harness = skillHarness({ "AskMate/Skills/fresh/SKILL.md": SKILL("fresh") });
+		const listed = (): number => skillRows(harness).filter((row) => row.setting.controlEl.querySelector(".askmate-skill-row-chip") !== null).length;
+		const summary = (): string => (pageNamed(harness.tab, "Skills and tools") as { displayValue?: () => string }).displayValue?.() ?? "";
+
+		// Before the first scan the catalogue is empty, so the page and the summary agree on none.
+		expect(listed()).toBe(0);
+		expect(summary()).toBe("0 skills · Tools off");
+
+		await harness.service.scan();
+		expect(listed()).toBe(2);
+		expect(summary()).toBe("2 skills, 1 need review · Tools off");
+	});
+
 	test("with no skills the page says so instead of leaving the list empty", () => {
 		const harness = makeHarness();
 		const rows = skillRows(harness);

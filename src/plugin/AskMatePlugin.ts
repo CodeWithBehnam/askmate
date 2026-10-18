@@ -518,6 +518,11 @@ export class AskMatePlugin extends Plugin {
 		this.lastMcpSignature = JSON.stringify(this.settings.mcp);
 		this.settingTab = new AskMateSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
+		// The tab stores its definitions when it is added, before the first scan, so the Skills page would list nothing while
+		// its home summary (read live) counts the built-in skill. Redrawing when the catalogue changes keeps the two together.
+		this.register(this.skillService.onChange(() => {
+			this.refreshSettingTab();
+		}));
 	}
 
 	onunload(): void {

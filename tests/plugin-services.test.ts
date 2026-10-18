@@ -316,6 +316,15 @@ describe("skills in the plugin", () => {
 		expect(plugin.skillService.statusOf(skill ?? plugin.skillService.list()[0])).toBe("ready");
 	});
 
+	test("the settings tab redraws when the catalogue changes, so its Skills page does not keep the empty first list", async () => {
+		const { plugin } = await loadPlugin({});
+		const tab = Reflect.get(plugin, "settingTab") as { updateCount: number };
+		const before = tab.updateCount;
+		await plugin.skillService.scan();
+		expect(plugin.skillService.list().length).toBeGreaterThan(0);
+		expect(tab.updateCount).toBeGreaterThan(before);
+	});
+
 	test("the scan reads the skills folder itself and never lists the vault", async () => {
 		const { plugin, fake } = await loadPlugin({});
 		fake.vault.add("AskMate/Skills/note-tidy/SKILL.md", SKILL);

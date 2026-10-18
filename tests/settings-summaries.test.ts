@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { DEFAULT_SETTINGS, getFreshInstallDefaults } from "../src/settings/defaults";
 import { formatTokenCount, validateAzureOpenAIBaseUrl } from "../src/settings/normalize";
 import type { AskMateSettings, CustomWorkflow, ProviderSettings, TextProviderId } from "../src/shared/types";
 import {
@@ -247,14 +247,11 @@ describe("summarizeRequestDefaults", () => {
 });
 
 describe("summarizeContextSources", () => {
-	// Evidence-linked answers are on by default, so each test starts from an explicit all-off baseline.
 	const noExtraSources: Partial<AskMateSettings> = {
-		threadedChatEnabled: false,
 		additionalContextPaths: [],
 		folderContextEnabled: false,
 		includeExcalidrawSummaries: false,
 		includeImageManifests: false,
-		evidenceLinkedAnswersEnabled: false,
 		noteHistoryIncludeInContext: false,
 		includeStyleGuideContext: false,
 		includeGlossaryContext: false
@@ -262,6 +259,18 @@ describe("summarizeContextSources", () => {
 
 	test("says the note alone is sent when no optional source is on", () => {
 		expect(summarizeContextSources(makeSettings(noExtraSources))).toBe("Note only");
+	});
+
+	test("says the note alone is sent on a fresh install, where follow-ups and evidence-linked answers are on", () => {
+		const settings = makeSettings(getFreshInstallDefaults());
+		expect(settings.threadedChatEnabled).toBe(true);
+		expect(settings.evidenceLinkedAnswersEnabled).toBe(true);
+		expect(summarizeContextSources(settings)).toBe("Note only");
+	});
+
+	test("does not count follow-up history or evidence-linked answers as extra sources", () => {
+		const settings = makeSettings({ ...noExtraSources, threadedChatEnabled: true, evidenceLinkedAnswersEnabled: true });
+		expect(summarizeContextSources(settings)).toBe("Note only");
 	});
 
 	test("uses the singular for one extra source", () => {
@@ -290,7 +299,8 @@ describe("summarizeContextSources", () => {
 		const settings = makeSettings(noExtraSources);
 		settings.requestPrivacyDefaults.includeNoteContext = false;
 		expect(summarizeContextSources(settings)).toBe("No note context");
-		settings.threadedChatEnabled = true;
+		settings.folderContextEnabled = true;
+		settings.folderContextPath = "Projects";
 		expect(summarizeContextSources(settings)).toBe("No note context · 1 extra source");
 	});
 
@@ -301,13 +311,11 @@ describe("summarizeContextSources", () => {
 
 	test("counts every optional source when all are on", () => {
 		const settings = makeSettings({
-			threadedChatEnabled: true,
 			additionalContextPaths: ["Notes/A.md"],
 			folderContextEnabled: true,
 			folderContextPath: "Projects",
 			includeExcalidrawSummaries: true,
 			includeImageManifests: true,
-			evidenceLinkedAnswersEnabled: true,
 			noteHistoryEnabled: true,
 			noteHistoryIncludeInContext: true,
 			includeStyleGuideContext: true,
@@ -316,7 +324,7 @@ describe("summarizeContextSources", () => {
 			glossaryContextPath: "Glossary.md"
 		});
 		settings.requestPrivacyDefaults.includeImageReferences = true;
-		expect(summarizeContextSources(settings)).toBe("Note + 9 extra sources");
+		expect(summarizeContextSources(settings)).toBe("Note + 7 extra sources");
 	});
 });
 

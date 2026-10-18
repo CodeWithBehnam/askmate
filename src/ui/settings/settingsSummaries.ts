@@ -66,14 +66,14 @@ export function summarizeRequestDefaults(settings: AskMateSettings): string {
 }
 
 // Counts a source only when ContextService would actually attach it, so the summary never promises context that is not sent.
+// Follow-up history and evidence-linked answers are left out: both are on by default on a fresh install, and neither adds
+// material the user picked (earlier turns come from the conversation, citations only label the context already sent).
 export function summarizeContextSources(settings: AskMateSettings): string {
 	const enabledSources = [
-		settings.threadedChatEnabled,
 		settings.additionalContextPaths.length > 0,
 		settings.folderContextEnabled && settings.folderContextPath.trim() !== "",
 		settings.includeExcalidrawSummaries,
 		settings.includeImageManifests && settings.requestPrivacyDefaults.includeImageReferences,
-		settings.evidenceLinkedAnswersEnabled,
 		settings.noteHistoryEnabled && settings.noteHistoryIncludeInContext,
 		settings.includeStyleGuideContext && settings.styleGuideContextPath.trim() !== "",
 		settings.includeGlossaryContext && settings.glossaryContextPath.trim() !== ""
