@@ -3539,6 +3539,13 @@ body.theme-dark {
 		border-style: dashed;
 	}
 
+	/* Obsidian paints a checked box with a fill and a masked tick, both of which forced colours removes, so a ticked box
+	   looked empty. The native box draws its state in system colours. */
+	.askmate-sidebar input[type="checkbox"] {
+		-webkit-appearance: checkbox;
+		appearance: auto;
+	}
+
 	.askmate-chart-axis-line,
 	.askmate-chart-grid-line,
 	.askmate-chart-line,

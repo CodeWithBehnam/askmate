@@ -372,6 +372,12 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-request-preview", "display")).toBe("none");
 		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-composer", "max-height")).toBe("35%");
 	});
+
+	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
+		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
+		expect(forced).toHaveLength(1);
+		expect(declaration(forced[0] as Rule, "appearance")).toBe("auto");
+	});
 });
 
 describe("what follows a reply in the message grid", () => {
