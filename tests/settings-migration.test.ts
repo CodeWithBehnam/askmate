@@ -226,6 +226,8 @@ describe("base URL policy", () => {
 		expect(validateProviderBaseUrl("http://192.168.1.20:8080/v1/", "", "Local")).toBe("http://192.168.1.20:8080/v1");
 		expect(validateProviderBaseUrl("https://api.openai.com/v1", "", "OpenAI")).toBe("https://api.openai.com/v1");
 		expect(() => validateProviderBaseUrl("ftp://x", "", "OpenAI")).toThrow("must start with http:// or https://");
+		// D-11: a port out of range is a spelling or port problem, not a scheme problem.
+		expect(() => validateProviderBaseUrl("http://localhost:99999/v1", "", "Local")).toThrow("is not a valid web address. Check the spelling and the port");
 	});
 });
 

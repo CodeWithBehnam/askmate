@@ -106,7 +106,7 @@ function categoryFromStatus(status: number): SetupErrorCategory | null {
 }
 
 const TEXT_PATTERNS: ReadonlyArray<[RegExp, SetupErrorCategory]> = [
-	[/base url must|must start with http|not a valid url|invalid url/i, "invalid-address"],
+	[/base url must|base url is not a valid|must start with http|not a valid url|invalid url/i, "invalid-address"],
 	[/ERR_CONNECTION_REFUSED|ECONNREFUSED|ENOTFOUND|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK|ERR_CONNECTION|EAI_AGAIN|ECONNRESET|failed to fetch|fetch failed|network ?error|getaddrinfo|net::ERR|socket hang up/i, "network"],
 	[/authentication failed|invalid api key|incorrect api key|unauthori[sz]ed|invalid x-api-key|api key not valid/i, "auth"],
 	[/access is forbidden|\bforbidden\b|permission denied|not allowed to use/i, "forbidden"],
@@ -197,7 +197,7 @@ export function mapProviderErrorToSetupCopy(error: unknown, context: ErrorCopyCo
 		case "server":
 			return build(category, `${name} is having trouble right now. Try again in a minute.`, SETUP_ACTIONS.retry);
 		case "invalid-address":
-			return build(category, `The address for ${name} is not valid. It must start with https://, or http:// for a server on this computer or network.`, SETUP_ACTIONS["check-address"]);
+			return build(category, `The address for ${name} is not valid. Check the spelling and the port, for example http://localhost:11434/v1. It must start with https://, or http:// for a server on this computer or network.`, SETUP_ACTIONS["check-address"]);
 		case "network":
 			return local
 				? build("local-unreachable", `AskMate could not reach the local server at ${where}. Start it, then choose Test again.`, SETUP_ACTIONS["start-server"])

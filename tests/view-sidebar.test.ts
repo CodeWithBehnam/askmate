@@ -422,6 +422,28 @@ describe("the Connect card", () => {
 		expect(harness.root.querySelector(".askmate-setup-card")?.classList.contains("is-connect")).toBe(true);
 	});
 
+	test("D-11: a starter's bubble shows the words on the chip, not the workflow's name", async () => {
+		const harness = await start();
+		const note = harness.fake.vault.add("Plan.md", "# Plan\nAlpha beta gamma");
+		const noteView = openFakeMarkdownView(harness.fake.workspace, note, "# Plan\nAlpha beta gamma");
+		harness.fake.workspace.activeView = noteView;
+		harness.fake.workspace.activeFile = note;
+		harness.context.rememberActiveMarkdownContext();
+		await (harness.view as unknown as { updateContextLabel(): Promise<void> }).updateContextLabel();
+		ask(harness, "/welcome");
+		await send(harness);
+		const summarise = Array.from(harness.root.querySelectorAll<HTMLButtonElement>(".askmate-starter-chip")).find((button) => button.textContent === "Summarise this note");
+		summarise?.click();
+		await settle(12);
+		expect(bubbles(harness, "user").map((bubble) => bubble.textContent ?? "").join(" ")).toContain("Summarise this note");
+	});
+
+	test("D-11: the request context button's name starts with its own label", async () => {
+		const harness = await start();
+		await settle();
+		expect(harness.root.querySelector(".askmate-context-button")?.getAttribute("aria-label")).toMatch(/^Show request context\. /);
+	});
+
 	test("Connect saves the pasted key through the plugin, tests the connection and then offers starters", async () => {
 		const harness = await start({ configured: false });
 		const saved: Array<[string, string]> = [];

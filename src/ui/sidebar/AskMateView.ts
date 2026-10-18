@@ -1629,7 +1629,7 @@ export class AskMateView extends ItemView {
 			.slice(-(this.plugin.settings.threadedChatMaxTurns * 2));
 	}
 
-	private async runWorkflow(workflow: Workflow): Promise<void> {
+	private async runWorkflow(workflow: Workflow, displayText?: string): Promise<void> {
 		if (!this.ensureIdleForNewRequest()) {
 			return;
 		}
@@ -1642,7 +1642,7 @@ export class AskMateView extends ItemView {
 			return;
 		}
 
-		await this.runRequest({ question: this.plugin.getWorkflowPrompt(workflow), title: workflow.name, options: { workflow } });
+		await this.runRequest({ question: this.plugin.getWorkflowPrompt(workflow), title: workflow.name, options: { workflow }, ...(displayText ? { displayText } : {}) });
 	}
 
 	/** Draws a Mermaid diagram of the note (or of what the person describes). */
@@ -3521,12 +3521,13 @@ export class AskMateView extends ItemView {
 			const context = await this.plugin.getNoteContext();
 			const source = context.file?.path ?? "unsaved note";
 			const label = `${context.source}: ${source}`;
-			this.contextEl.setAttribute("aria-label", `Show selected note. ${label}`);
+			// The name starts with the button's own label (WCAG 2.5.3), then says which note it is about.
+			this.contextEl.setAttribute("aria-label", `Show request context. ${label}`);
 			this.contextEl.setAttribute("title", label);
 			hasNote = true;
 		} catch {
 			const label = "No note is open. AskMate can still answer, but not about a note.";
-			this.contextEl.setAttribute("aria-label", label);
+			this.contextEl.setAttribute("aria-label", `Show request context. ${label}`);
 			this.contextEl.setAttribute("title", label);
 		}
 		// The starter chips are disabled with a reason until a note is open, so they follow it.
@@ -4618,7 +4619,8 @@ export class AskMateView extends ItemView {
 		switch (action.kind) {
 			case "workflow": {
 				const workflow = this.plugin.getAllWorkflows().find((candidate) => candidate.id === action.workflowId);
-				this.runUiTask(workflow ? this.runWorkflow(workflow) : this.runPrompt(action.fallbackPrompt));
+				// The bubble shows the words on the chip that was pressed, not the workflow's own name.
+				this.runUiTask(workflow ? this.runWorkflow(workflow, chip.label) : this.runPrompt(action.fallbackPrompt));
 				return;
 			}
 			case "diagram":

@@ -766,7 +766,10 @@ export function validateProviderBaseUrl(value: unknown, fallback: string, provid
 		url = null;
 	}
 
-	if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
+	if (!url) {
+		throw new Error(`${providerName} base URL is not a valid web address. Check the spelling and the port (1 to 65535), for example http://localhost:11434/v1.`);
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		throw new Error(`${providerName} base URL must start with http:// or https://.`);
 	}
 
