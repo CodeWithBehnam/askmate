@@ -997,6 +997,8 @@ export class ExtraButtonComponent extends BaseComponent {
 
 	onClick(callback: () => unknown): this {
 		this.clickHandler = callback;
+		// Like Obsidian's, the handler also answers a click on the element, so a key press that clicks it reaches the handler.
+		this.extraSettingsEl.addEventListener("click", () => this.click());
 		return this;
 	}
 

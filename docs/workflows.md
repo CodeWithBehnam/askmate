@@ -8,7 +8,7 @@ Study summary, Action plan, Explain simply, Question drill, Buyer protection ana
 
 The Mermaid diagram workflow uses the same pipeline as `/diagram`. See [diagrams](diagrams.md).
 
-To favourite, hide or reorder sidebar workflows, open `Workflow sidebar` on the `Advanced` settings page, under `Workflows in the sidebar`. Drag a row by its handle, or focus it and press Alt+Up or Alt+Down. Favourites always appear first and feed the editor menu. Hidden built-in workflows stay available from the command palette.
+To favourite, hide or reorder sidebar workflows, open `Workflow sidebar` on the `Advanced` settings page, under `Workflows in the sidebar`. Use the Move up and Move down buttons on a row to change the order. Favourites always appear first, so a workflow moves within its own group, and they feed the editor menu. Hidden built-in workflows stay available from the command palette.
 
 ## Custom workflows
 

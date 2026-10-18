@@ -17,6 +17,7 @@ import { fireDomEvent, getFakeDocument, installDomGlobals } from "./support/fake
 import {
 	ButtonComponent,
 	DropdownComponent,
+	ExtraButtonComponent,
 	Menu,
 	Modal,
 	Notice,
@@ -283,6 +284,9 @@ interface PluginMembers {
 	testProviderConnectionDetailed?: () => Promise<ConnectionTestView>;
 	openSettingsTab?: () => void;
 	revokeMcpTrust?: (serverId: string) => Promise<void>;
+	getSidebarWorkflowOrderForSettings?: () => Array<{ id: string; name: string; isCustom: boolean }>;
+	getWorkflowDisplayPreference?: (id: string) => { id: string; favorite: boolean; hidden: boolean; order: number } | null;
+	reorderWorkflowDisplay?: (fromIndex: number, toIndex: number) => Promise<void>;
 }
 
 interface Harness {
@@ -1848,6 +1852,178 @@ describe("server page", () => {
 		expect(select).not.toBeNull();
 		const switchEl = container.querySelector("[aria-label=\"Believe the server's read-only labels\"]") as HTMLElement;
 		expect(switchEl).not.toBeNull();
+	});
+});
+
+describe("workflow sidebar order (D-09)", () => {
+	// Two favourites, then three others, so the boundary between them is covered as well as the two ends.
+	const ORDER = [
+		{ id: "alpha", name: "Alpha", favorite: true },
+		{ id: "bravo", name: "Bravo", favorite: true },
+		{ id: "charlie", name: "Charlie", favorite: false },
+		{ id: "delta", name: "Delta", favorite: false },
+		{ id: "echo", name: "Echo", favorite: false }
+	];
+
+	function orderHarness(): Harness & { reorders: Array<[number, number]>; order: typeof ORDER } {
+		const reorders: Array<[number, number]> = [];
+		const order = [...ORDER];
+		const harness = makeHarness(() => ({
+			getSidebarWorkflowOrderForSettings: () => order.map(({ id, name }) => ({ id, name, isCustom: false })),
+			getWorkflowDisplayPreference: (id: string) => ({ id, favorite: order.find((item) => item.id === id)?.favorite ?? false, hidden: false, order: 0 }),
+			reorderWorkflowDisplay: async (from: number, to: number): Promise<void> => {
+				reorders.push([from, to]);
+				const [moved] = order.splice(from, 1);
+				if (moved) {
+					order.splice(to, 0, moved);
+				}
+			}
+		}));
+		return { ...harness, reorders, order };
+	}
+
+	function sidebarPage(tab: AskMateSettingTab): PageItem {
+		const find = (items: readonly Item[]): PageItem | undefined => {
+			for (const item of items) {
+				if ("type" in item && item.type === "page" && item.name === "Workflow sidebar") {
+					return item;
+				}
+				if ("type" in item && (item.type === "group" || item.type === "page")) {
+					const found = find((item.items ?? []) as Item[]);
+					if (found) {
+						return found;
+					}
+				}
+			}
+			return undefined;
+		};
+		const page = find(tab.getSettingDefinitions());
+		if (!page) {
+			throw new Error("No Workflow sidebar page.");
+		}
+		return page;
+	}
+
+	const drawOrder = (tab: AskMateSettingTab, container: HTMLElement = getFakeDocument().createElement("div")): Rendered[] =>
+		draw(sidebarPage(tab).items ?? [], container).filter((row) => ORDER.some((item) => item.name === row.def.name));
+
+	function moveButton(rows: readonly Rendered[], workflow: string, direction: "up" | "down"): ExtraButtonComponent {
+		const row = rowNamed(rows, workflow);
+		const found = row.setting.components.find((component): component is ExtraButtonComponent =>
+			component instanceof ExtraButtonComponent && component.extraSettingsEl.getAttribute("aria-label") === `Move ${workflow} ${direction}`);
+		if (!found) {
+			throw new Error(`No Move ${workflow} ${direction} button.`);
+		}
+		return found;
+	}
+
+	test("no list in the settings uses Obsidian's drag handles, and the order has its own heading", () => {
+		const { tab } = orderHarness();
+		const everyList = lists(tab.getSettingDefinitions());
+		expect(everyList.some((list) => "onReorder" in list && list.onReorder !== undefined)).toBe(false);
+		expect(lists(sidebarPage(tab).items ?? [])).toEqual([]);
+		const group = (sidebarPage(tab).items ?? []).find((item) => "type" in item && item.type === "group");
+		expect((group as { heading?: string } | undefined)?.heading).toBe("Sidebar order");
+	});
+
+	test("the note no longer tells people to drag", () => {
+		const { tab } = orderHarness();
+		const text = draw(sidebarPage(tab).items ?? [], getFakeDocument().createElement("div"))[0]?.setting.settingEl.textContent ?? "";
+		expect(text).not.toMatch(/drag|handle|Alt\+/i);
+		expect(text).toContain("Move up");
+	});
+
+	test("every row has Move up and Move down buttons named after its workflow, as real buttons in the tab order", () => {
+		const { tab } = orderHarness();
+		const rows = drawOrder(tab);
+		expect(rows.map((row) => row.def.name)).toEqual(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
+		for (const { name } of ORDER) {
+			for (const direction of ["up", "down"] as const) {
+				const el = moveButton(rows, name, direction).extraSettingsEl;
+				expect(el.getAttribute("aria-label")).toBe(`Move ${name} ${direction}`);
+				expect(el.getAttribute("role")).toBe("button");
+				expect(el.getAttribute("tabindex")).toBe("0");
+			}
+		}
+	});
+
+	test("the first row cannot move up, the last cannot move down, and nothing can move across the favourites boundary", () => {
+		const { tab } = orderHarness();
+		const rows = drawOrder(tab);
+		const disabled = (workflow: string, direction: "up" | "down"): boolean => {
+			const button = moveButton(rows, workflow, direction);
+			expect(button.extraSettingsEl.getAttribute("aria-disabled")).toBe(String(button.disabled));
+			return button.disabled;
+		};
+		expect(ORDER.flatMap(({ name }) => (["up", "down"] as const).map((direction) => [`${name} ${direction}`, disabled(name, direction)] as const))).toEqual([
+			["Alpha up", true], ["Alpha down", false],
+			["Bravo up", false], ["Bravo down", true],
+			["Charlie up", true], ["Charlie down", false],
+			["Delta up", false], ["Delta down", false],
+			["Echo up", false], ["Echo down", true]
+		]);
+	});
+
+	test("Move up and Move down ask the plugin to swap with the neighbour, and disabled buttons do nothing", () => {
+		const harness = orderHarness();
+		const rows = drawOrder(harness.tab);
+		moveButton(rows, "Delta", "up").click();
+		moveButton(rows, "Delta", "down").click();
+		moveButton(rows, "Alpha", "up").click();
+		moveButton(rows, "Echo", "down").click();
+		moveButton(rows, "Bravo", "down").click();
+		expect(harness.reorders).toEqual([[3, 2], [3, 4]]);
+		expect(harness.counts.updates).toBe(2);
+	});
+
+	test("after a move the page is redrawn and keyboard focus returns to the same button of the moved row", () => {
+		const harness = orderHarness();
+		const container = getFakeDocument().createElement("div");
+		getFakeDocument().body.appendChild(container);
+		try {
+			moveButton(drawOrder(harness.tab, container), "Delta", "up").click();
+			expect(harness.tab.focusAfterRebuild).toBe("workflow-move-up:delta");
+
+			const redrawn = getFakeDocument().createElement("div");
+			getFakeDocument().body.appendChild(redrawn);
+			const rows = drawOrder(harness.tab, redrawn);
+			expect(rows.map((row) => row.def.name)).toEqual(["Alpha", "Bravo", "Delta", "Charlie", "Echo"]);
+			expect(getFakeDocument().activeElement).toBe(moveButton(rows, "Delta", "up").extraSettingsEl);
+			expect(harness.tab.focusAfterRebuild).toBeNull();
+			redrawn.remove();
+		} finally {
+			container.remove();
+		}
+	});
+
+	test("Enter and Space activate a move button, other keys do not, and a disabled button ignores both", () => {
+		const harness = orderHarness();
+		const rows = drawOrder(harness.tab);
+		const down = moveButton(rows, "Delta", "down").extraSettingsEl;
+		const space = fireDomEvent(down, "keydown", { key: " " });
+		expect(space.defaultPrevented).toBe(true);
+		fireDomEvent(down, "keydown", { key: "Enter" });
+		fireDomEvent(down, "keydown", { key: "Tab" });
+		expect(harness.reorders).toEqual([[3, 4], [3, 4]]);
+
+		const disabledUp = moveButton(rows, "Alpha", "up").extraSettingsEl;
+		fireDomEvent(disabledUp, "keydown", { key: "Enter" });
+		fireDomEvent(disabledUp, "keydown", { key: " " });
+		expect(harness.reorders).toHaveLength(2);
+	});
+
+	test("every extra button is a tab stop that Enter and Space press, not only the move buttons", () => {
+		const { tab } = orderHarness();
+		const clicks: string[] = [];
+		const button = new ExtraButtonComponent(getFakeDocument().createElement("div"));
+		button.onClick(() => clicks.push("clicked"));
+		tab.describeExtraButton(button, "Refresh models");
+		expect(button.extraSettingsEl.getAttribute("tabindex")).toBe("0");
+		fireDomEvent(button.extraSettingsEl, "keydown", { key: "Enter" });
+		fireDomEvent(button.extraSettingsEl, "keydown", { key: " " });
+		tab.setExtraButtonDisabled(button, true);
+		fireDomEvent(button.extraSettingsEl, "keydown", { key: "Enter" });
+		expect(clicks).toEqual(["clicked", "clicked"]);
 	});
 });
 

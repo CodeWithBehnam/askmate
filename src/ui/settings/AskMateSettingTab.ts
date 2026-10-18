@@ -297,12 +297,25 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		el.setAttribute("aria-label", label);
 	}
 
-	// Extra buttons are plain divs named only by their tooltip; the role and disabled state make them read as buttons.
+	// Extra buttons are plain divs named only by their tooltip; the role, tab stop and disabled state make them behave as buttons.
+	// A div has no built-in activation, so Enter and Space are turned into the click the button's own handler listens for.
 	describeExtraButton(button: ExtraButtonComponent, label: string): void {
+		const el = button.extraSettingsEl;
 		button.setTooltip(label);
-		button.extraSettingsEl.setAttribute("role", "button");
-		button.extraSettingsEl.setAttribute("aria-label", label);
-		button.extraSettingsEl.setAttribute("aria-disabled", "false");
+		el.setAttribute("role", "button");
+		el.setAttribute("aria-label", label);
+		el.setAttribute("aria-disabled", "false");
+		el.setAttribute("tabindex", "0");
+		el.addEventListener("keydown", (event) => {
+			if (event.target !== el || (event.key !== "Enter" && event.key !== " ")) {
+				return;
+			}
+			// Space would otherwise scroll the page.
+			event.preventDefault();
+			if (el.getAttribute("aria-disabled") !== "true") {
+				el.click();
+			}
+		});
 	}
 
 	setExtraButtonDisabled(button: ExtraButtonComponent, disabled: boolean): void {
@@ -1429,21 +1442,21 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 	private getWorkflowSidebarDefinitions(): SettingDefinitionItem[] {
 		const workflows = this.plugin.getSidebarWorkflowOrderForSettings();
 		const labels = uniqueLabels(workflows.map((workflow) => workflow.name));
+		const favourites = workflows.map((workflow) => Boolean(this.plugin.getWorkflowDisplayPreference(workflow.id)?.favorite));
+		// Favourites always sort first, so a move across that boundary would be undone; that button is off instead of doing nothing.
+		const canMove = (from: number, to: number): boolean => favourites[to] !== undefined && favourites[from] === favourites[to];
 		return [
-			this.noteDefinition("Drag a row by its handle, or focus a row and press Alt+Up or Alt+Down, to change the order. Favourites always appear first. Hidden built-in workflows stay available from the command palette."),
+			this.noteDefinition("Use Move up and Move down on a row to change the order. Favourites always appear first, so a workflow moves within its own group. Hidden built-in workflows stay available from the command palette."),
+			// Obsidian's reorderable list puts a div with an aria-label and no role on every row (axe aria-prohibited-attr), so plain rows carry real buttons.
 			{
-				type: "list",
+				type: "group",
 				heading: "Sidebar order",
-				onReorder: (fromIndex, toIndex) => {
-					// Favourites re-sort to the top and row descriptions change, so the list is rebuilt from the new order.
-					this.applyWorkflowDisplayChange(this.plugin.reorderWorkflowDisplay(fromIndex, toIndex));
-				},
-				items: workflows.map((workflow, index) => this.workflowSidebarRow(workflow, labels[index] ?? workflow.name))
+				items: workflows.map((workflow, index) => this.workflowSidebarRow(workflow, labels[index] ?? workflow.name, index, canMove(index, index - 1), canMove(index, index + 1)))
 			}
 		];
 	}
 
-	private workflowSidebarRow(workflow: Workflow, label: string): SettingDefinition {
+	private workflowSidebarRow(workflow: Workflow, label: string, index: number, canMoveUp: boolean, canMoveDown: boolean): SettingDefinition {
 		const preference = this.plugin.getWorkflowDisplayPreference(workflow.id);
 		const customWorkflow = workflow.isCustom
 			? this.plugin.settings.customWorkflows.find((item) => item.id === workflow.id)
@@ -1452,6 +1465,10 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		const isHidden = Boolean(preference?.hidden) || Boolean(customWorkflow?.hidden);
 		const favouriteKey = `workflow-favourite:${workflow.id}`;
 		const visibilityKey = `workflow-visibility:${workflow.id}`;
+		const moves = [
+			{ key: `workflow-move-up:${workflow.id}`, icon: "arrow-up", label: `Move ${workflow.name} up`, offset: -1, enabled: canMoveUp },
+			{ key: `workflow-move-down:${workflow.id}`, icon: "arrow-down", label: `Move ${workflow.name} down`, offset: 1, enabled: canMoveDown }
+		];
 		return {
 			name: label,
 			desc: [workflow.isCustom ? "Custom" : "Built-in", isFavorite ? "Favourite" : null, isHidden ? "Hidden" : null]
@@ -1459,6 +1476,21 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 				.join(" · "),
 			render: (setting) => {
 				setting.settingEl.toggleClass("askmate-workflow-row-hidden", isHidden);
+				for (const move of moves) {
+					setting.addExtraButton((button) => {
+						this.describeExtraButton(button.setIcon(move.icon), move.label);
+						this.setExtraButtonDisabled(button, !move.enabled);
+						button.onClick(() => {
+							if (!move.enabled) {
+								return;
+							}
+							// The list is rebuilt from the new order, so focus is asked back for the same button on the moved row.
+							this.focusAfterRebuild = move.key;
+							this.applyWorkflowDisplayChange(this.plugin.reorderWorkflowDisplay(index, index + move.offset));
+						});
+						this.restoreFocus(move.key, button.extraSettingsEl);
+					});
+				}
 				setting.addExtraButton((button) => {
 					this.describeExtraButton(button.setIcon("star"), isFavorite ? `Remove ${workflow.name} from favourites` : `Add ${workflow.name} to favourites`);
 					button.extraSettingsEl.setAttribute("aria-pressed", String(isFavorite));
@@ -1497,7 +1529,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 
 	/**
 	 * Takes a change that has already mutated settings synchronously and is now saving. The list is rebuilt at once,
-	 * because Obsidian moves focus to the new row position straight after a keyboard reorder.
+	 * because favourites re-sort to the top and row descriptions change with the new order.
 	 */
 	private applyWorkflowDisplayChange(saving: Promise<unknown>): void {
 		this.update();
