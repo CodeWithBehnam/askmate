@@ -2503,6 +2503,18 @@ describe("setting up a local server", () => {
 		expect(harness.root.querySelector(".askmate-setup-card")?.classList.contains("is-connected")).toBe(true);
 	});
 
+	test("QA-09: on a first connection, a model the person saved is kept, and the button offers the server's model", async () => {
+		const harness = await startLocal("http://localhost:11434/v1", "mistral-nemo");
+		harness.settings.firstRunCompletedAt = null;
+		missingModel(harness, "gemma3");
+		ask(harness, "/setup");
+		await send(harness);
+		await pressConnect(harness);
+		await settle(12);
+		expect(harness.settings.providers[LOCAL].model).toBe("mistral-nemo");
+		expect(errorButton(harness)?.textContent).toBe("Use gemma3");
+	});
+
 	test("a model the server does not have is answered with the one it does: one button uses it and checks again", async () => {
 		const harness = await startLocal("http://localhost:11434/v1", "llama3.1");
 		// A returning user saved this model, so AskMate does not swap it without asking.

@@ -4190,7 +4190,7 @@ export class AskMateView extends ItemView {
 		host.empty();
 		this.setupHandle = null;
 		host.hidden = !model.visible;
-		// Until a provider is connected nothing can be sent, so the composer gives its room to the card and its Connect button.
+		// While the card is open and not yet connected, the composer gives its room to the card and its Connect button.
 		this.rootEl?.classList.toggle("askmate-setup-open", model.visible && model.phase !== "connected");
 		if (!model.visible) {
 			// With the card gone, the tips can take its place.
@@ -4346,11 +4346,13 @@ export class AskMateView extends ItemView {
 		this.plugin.refreshOpenAskMateViews();
 		this.plugin.refreshSettingTab();
 		await this.runConnectionTest();
-		// On a first connection the model field is optional: left empty, nobody chose the default model, so a server that
-		// lacks it gets its own closest model instead of an error. Someone who saved a model keeps the choice and the button.
+		// On a first connection the model field is optional: left empty with the catalogue's default model still saved, nobody
+		// chose a model, so a server that lacks it gets its own closest model instead of an error. A model saved by the person
+		// (on the settings page, say) only shows as the field's placeholder, so it is kept and the button offers the switch.
 		const test = this.lastLocalTest();
 		const firstRun = !this.plugin.settings.firstRunCompletedAt;
-		const suggested = firstRun && !catalog.needsKey && !draft.model.trim() && test?.status === "failed" ? test.suggestedModel : undefined;
+		const untouchedDefault = settings.providers[providerId].model.trim() === catalog.defaultModel;
+		const suggested = firstRun && untouchedDefault && !catalog.needsKey && !draft.model.trim() && test?.status === "failed" ? test.suggestedModel : undefined;
 		if (suggested) {
 			await this.useSuggestedModel(suggested);
 		}

@@ -843,7 +843,7 @@ body.theme-dark {
 	flex-shrink: 0;
 }
 
-/* Nothing can be sent before a provider is connected, so the request preview makes way for the Connect card. */
+/* While the Connect card is open and not yet connected, the request preview and most of the composer make way for it. */
 .askmate-sidebar.askmate-setup-open .askmate-request-preview {
 	display: none;
 }
