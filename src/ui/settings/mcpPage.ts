@@ -541,6 +541,19 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 		});
 	};
 
+	// A real button: the list's own add affordance is a div with an aria-label and no role, which screen readers do not
+	// treat as a control (axe aria-prohibited-attr).
+	const addServerRow: SettingDefinition = {
+		name: "Add a tool server",
+		desc: "A local program, a remote server, or servers imported from another app's JSON.",
+		aliases: ["add server", "import json", "mcp server"],
+		render: (setting) => {
+			setting.addButton((button) => {
+				button.setButtonText("Add server").onClick(() => showAddMenu(button.buttonEl));
+			});
+		}
+	};
+
 	const serverPages = servers.map((server, index) => {
 		const label = labels[index] ?? server.label;
 		// Each page keeps the function that ends its status subscription, so leaving or redrawing the page lets go of it.
@@ -568,12 +581,11 @@ export function buildToolsItems(host: SettingsPageHost): SettingDefinitionItem[]
 	});
 
 	return [
-		{ type: "group", heading: "Tools", items: [aboutRow, enableRow, ...limitRows] },
+		{ type: "group", heading: "Tools", items: [aboutRow, enableRow, ...limitRows, addServerRow] },
 		{
 			type: "list",
 			heading: "Tool servers",
-			emptyState: "No servers yet. Use the plus button to add one or import JSON from another app.",
-			addItem: { name: "Add server", action: showAddMenu },
+			emptyState: "No servers yet. Use Add server above to add one or import JSON from another app.",
 			onDelete: (index) => {
 				void deleteServerAt(index);
 			},

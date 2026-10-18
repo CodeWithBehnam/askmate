@@ -1357,16 +1357,16 @@ describe("tools page", () => {
 		expect(harness.calls).toContain("reconcile");
 	});
 
-	test("the plus button offers a local program, a remote server and import", () => {
+	test("QA-06: the Add server button offers a local program, a remote server and import, and the list has no role-less add control", () => {
 		const harness = mcpHarness();
-		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
-		list.addItem?.action(getFakeDocument().createElement("button"));
+		buttonIn(rowNamed(toolsRows(harness), "Add a tool server").setting, "Add server").click();
 		expect(Menu.lastMenu?.items.map((item) => item.title)).toEqual(["Local program", "Remote server", "Import from JSON"]);
+		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
+		expect(list.addItem).toBeUndefined();
 	});
 
 	async function startAdding(harness: Harness, menuIndex: number): Promise<Modal> {
-		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
-		list.addItem?.action(getFakeDocument().createElement("button"));
+		buttonIn(rowNamed(toolsRows(harness), "Add a tool server").setting, "Add server").click();
 		Menu.lastMenu?.items[menuIndex]?.click();
 		await tick();
 		return Modal.opened.at(-1) as Modal;
@@ -1433,8 +1433,7 @@ describe("tools page", () => {
 
 	test("importing JSON adds the servers off, stores their secrets in the keychain and keeps tokens out of settings", async () => {
 		const harness = mcpHarness();
-		const list = lists(pageNamed(harness.tab, "Skills and tools").items ?? []).find((candidate) => candidate.heading === "Tool servers") as ListItem;
-		list.addItem?.action(getFakeDocument().createElement("button"));
+		buttonIn(rowNamed(toolsRows(harness), "Add a tool server").setting, "Add server").click();
 		Menu.lastMenu?.items[2]?.click();
 		await tick();
 		const dialog = Modal.opened.at(-1) as Modal;
