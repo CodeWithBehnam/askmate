@@ -2001,34 +2001,22 @@ describe("workflow sidebar order (D-09)", () => {
 		}
 	});
 
-	test("Enter and Space activate a move button, other keys do not, and a disabled button ignores both", () => {
+	test("pressing a move button moves its row once, and a disabled button does nothing", () => {
 		const harness = orderHarness();
 		const rows = drawOrder(harness.tab);
-		const down = moveButton(rows, "Delta", "down").extraSettingsEl;
-		const space = fireDomEvent(down, "keydown", { key: " " });
-		expect(space.defaultPrevented).toBe(true);
-		fireDomEvent(down, "keydown", { key: "Enter" });
-		fireDomEvent(down, "keydown", { key: "Tab" });
-		expect(harness.reorders).toEqual([[3, 4], [3, 4]]);
-
-		const disabledUp = moveButton(rows, "Alpha", "up").extraSettingsEl;
-		fireDomEvent(disabledUp, "keydown", { key: "Enter" });
-		fireDomEvent(disabledUp, "keydown", { key: " " });
-		expect(harness.reorders).toHaveLength(2);
+		moveButton(rows, "Delta", "down").extraSettingsEl.click();
+		expect(harness.reorders).toEqual([[3, 4]]);
+		moveButton(rows, "Alpha", "up").extraSettingsEl.click();
+		expect(harness.reorders).toHaveLength(1);
 	});
 
-	test("every extra button is a tab stop that Enter and Space press, not only the move buttons", () => {
+	test("every extra button is a tab stop with a role and a name; Obsidian itself runs it on Enter and Space", () => {
 		const { tab } = orderHarness();
-		const clicks: string[] = [];
 		const button = new ExtraButtonComponent(getFakeDocument().createElement("div"));
-		button.onClick(() => clicks.push("clicked"));
 		tab.describeExtraButton(button, "Refresh models");
 		expect(button.extraSettingsEl.getAttribute("tabindex")).toBe("0");
-		fireDomEvent(button.extraSettingsEl, "keydown", { key: "Enter" });
-		fireDomEvent(button.extraSettingsEl, "keydown", { key: " " });
-		tab.setExtraButtonDisabled(button, true);
-		fireDomEvent(button.extraSettingsEl, "keydown", { key: "Enter" });
-		expect(clicks).toEqual(["clicked", "clicked"]);
+		expect(button.extraSettingsEl.getAttribute("role")).toBe("button");
+		expect(button.extraSettingsEl.getAttribute("aria-label")).toBe("Refresh models");
 	});
 });
 

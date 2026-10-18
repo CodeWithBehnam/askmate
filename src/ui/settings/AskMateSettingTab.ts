@@ -300,25 +300,15 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		el.setAttribute("aria-label", label);
 	}
 
-	// Extra buttons are plain divs named only by their tooltip; the role, tab stop and disabled state make them behave as buttons.
-	// A div has no built-in activation, so Enter and Space are turned into the click the button's own handler listens for.
+	// Extra buttons are plain divs named only by their tooltip; the role, tab stop and disabled state make them read as buttons.
 	describeExtraButton(button: ExtraButtonComponent, label: string): void {
 		const el = button.extraSettingsEl;
 		button.setTooltip(label);
 		el.setAttribute("role", "button");
 		el.setAttribute("aria-label", label);
 		el.setAttribute("aria-disabled", "false");
+		// Obsidian already runs an extra button on Enter and Space once it can take focus, so it only needs a tab stop.
 		el.setAttribute("tabindex", "0");
-		el.addEventListener("keydown", (event) => {
-			if (event.target !== el || (event.key !== "Enter" && event.key !== " ")) {
-				return;
-			}
-			// Space would otherwise scroll the page.
-			event.preventDefault();
-			if (el.getAttribute("aria-disabled") !== "true") {
-				el.click();
-			}
-		});
 	}
 
 	setExtraButtonDisabled(button: ExtraButtonComponent, disabled: boolean): void {
@@ -1541,6 +1531,13 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		}
 		this.focusAfterRebuild = null;
 		el.focus();
+		// A row drawn by update() may not be in the page yet, and Obsidian then puts focus on the row's first control (a move
+		// up button after a move down). Focusing again once the redraw is done keeps the keyboard on the control it used.
+		(el.ownerDocument.defaultView ?? window).setTimeout(() => {
+			if (el.isConnected) {
+				el.focus();
+			}
+		}, 0);
 	}
 
 	/**
