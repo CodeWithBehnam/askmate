@@ -460,6 +460,18 @@ describe("the settings tab", () => {
 		}
 	});
 
+	test("QA-06: Custom workflows offers a real Add workflow button, and its list has no role-less add control", () => {
+		const { tab } = makeHarness();
+		const flatten = (items: readonly Item[]): Item[] => items.flatMap((item) => ("type" in item && (item.type === "group" || item.type === "page")) ? [item, ...flatten((item.items ?? []) as Item[])] : [item]);
+		const all = flatten(pageNamed(tab, "Advanced").items ?? []);
+		const add = all.find((item) => !("type" in item) && (item as { name?: string }).name === "Add a workflow");
+		expect(add).toBeDefined();
+		const rows = draw([add as Item], getFakeDocument().createElement("div"));
+		expect(buttonIn(rowNamed(rows, "Add a workflow").setting, "Add workflow")).toBeDefined();
+		const list = lists(all).find((candidate) => candidate.heading === "Your workflows");
+		expect(list?.addItem).toBeUndefined();
+	});
+
 	test("the Advanced page opens with the reassurance line", () => {
 		const { tab } = makeHarness();
 		const rows = draw(pageNamed(tab, "Advanced").items ?? [], getFakeDocument().createElement("div"));

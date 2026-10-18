@@ -1511,16 +1511,23 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		const labels = uniqueLabels(workflows.map((workflow) => workflow.name));
 		return [
 			this.noteDefinition("Select a workflow to edit it. Delete a workflow from its page, or focus its row and press Delete."),
+			// A real button: the list's own add affordance is a div with an aria-label and no role (axe aria-prohibited-attr).
+			{
+				name: "Add a workflow",
+				desc: "Starts a new custom workflow that you can then name and edit.",
+				aliases: ["add workflow", "new workflow"],
+				render: (setting) => {
+					setting.addButton((button) => {
+						button.setButtonText("Add workflow").onClick(() => {
+							void this.runSettingAction(() => this.plugin.addCustomWorkflow()).then(() => this.update());
+						});
+					});
+				}
+			},
 			{
 				type: "list",
 				heading: "Your workflows",
-				emptyState: "No custom workflows yet.",
-				addItem: {
-					name: "Add workflow",
-					action: () => {
-						void this.runSettingAction(() => this.plugin.addCustomWorkflow()).then(() => this.update());
-					}
-				},
+				emptyState: "No custom workflows yet. Use Add workflow above.",
 				onDelete: (index) => {
 					void this.deleteCustomWorkflowAt(index);
 				},
