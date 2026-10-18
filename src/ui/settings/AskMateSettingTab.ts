@@ -702,7 +702,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 					this.toggleDefinition(
 						"autoImageIntentEnabled",
 						"Treat \"draw me a...\" as an image request",
-						"Images are made with OpenAI, so this needs an OpenAI key; when off, only the /image command and Image button make images."
+						"Images are made with OpenAI's paid image API, so this needs an OpenAI key and each image costs money; when off, only the /image command and Image button make images."
 					),
 					this.folderPathDefinition(
 						"Result folder",

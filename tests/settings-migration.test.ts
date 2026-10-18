@@ -708,6 +708,12 @@ describe("translation target language", () => {
 describe("fresh install defaults", () => {
 	const fresh = (): AskMateSettings => normalizeAskMateSettings(null, "load", { locale: "fr" });
 
+	test("D-04: \"draw me a...\" does not become a paid image request until it is turned on", () => {
+		expect(fresh().autoImageIntentEnabled).toBe(false);
+		// An existing install keeps what it had.
+		expect(normalizeAskMateSettings({ autoImageIntentEnabled: true }, "load").autoImageIntentEnabled).toBe(true);
+	});
+
 	test("follow-up questions remember the conversation with a 4 turn cap", () => {
 		expect(fresh().threadedChatEnabled).toBe(true);
 		expect(fresh().threadedChatMaxTurns).toBe(4);

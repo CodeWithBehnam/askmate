@@ -123,6 +123,8 @@ export function getFreshInstallDefaults(options: { locale?: string | null } = {}
 		threadedChatEnabled: true,
 		usageGuardrailsEnabled: true,
 		usageBudgetEnforcement: "warn",
-		translationTargetLanguage: defaultTranslationLanguage(options.locale)
+		translationTargetLanguage: defaultTranslationLanguage(options.locale),
+		// Off until chosen: it turns ordinary wording into paid image requests to OpenAI, whichever chat provider is in use.
+		autoImageIntentEnabled: false
 	};
 }
