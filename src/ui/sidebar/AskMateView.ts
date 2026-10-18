@@ -751,11 +751,11 @@ export class AskMateView extends ItemView {
 
 	private getComposerPlaceholder(): string {
 		if (this.isConsoleLayout()) {
-			return "Ask, or type / for commands and @ for context";
+			return "Ask, or type / to see commands and @ to add a note";
 		}
 		const shortcut = this.plugin.settings.sendShortcut;
 		const suffix = shortcut === "ctrl-enter" ? "Ctrl/Cmd+Enter to send." : "Enter to send, Shift+Enter for newline.";
-		return `Ask about the note, or type / for commands and @ for context. ${suffix}`;
+		return `Ask about the note. Type / to see commands, or @ to add another note. ${suffix}`;
 	}
 
 	private shouldSubmitFromKeydown(event: KeyboardEvent): boolean {
@@ -1111,15 +1111,16 @@ export class AskMateView extends ItemView {
 			const attachmentLabel = formatAttachmentSummary(request.context.attachments ?? []);
 			const contextLabel = request.metadata.privacy.includeNoteContext
 				? request.metadata.contextTruncated
-					? `${request.metadata.promptContextCharacters.toLocaleString()} of ${request.metadata.contextCharacters.toLocaleString()} context chars`
-					: `${request.metadata.promptContextCharacters.toLocaleString()} context chars`
-				: "note-derived context off";
+					? `${request.metadata.promptContextCharacters.toLocaleString()} of ${request.metadata.contextCharacters.toLocaleString()} characters from your notes`
+					: `${request.metadata.promptContextCharacters.toLocaleString()} characters from your notes`
+				: "no note text sent";
 			const alerts = [...inspection.blockers, ...inspection.warnings];
 			summary.setText([
 				`${request.context.source}: ${source}`,
 				`${inspection.providerName}: ${inspection.model}`,
-				formatOutputMode(request.metadata.outputMode),
-				`about ${inspection.estimatedInputTokens.toLocaleString()} input tokens`,
+				`Answer goes to: ${formatOutputMode(request.metadata.outputMode)}`,
+				// Plain words for a B1 reader: a token is the unit providers count and charge by.
+				`about ${inspection.estimatedInputTokens.toLocaleString()} tokens to send (word pieces the provider counts)`,
 				contextLabel,
 				attachmentLabel,
 				alerts.join(" ")

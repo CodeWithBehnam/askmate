@@ -770,7 +770,7 @@ describe("the tips card", () => {
 	for (const layout of ["compact", "expanded"] as const) {
 		test(`in the ${layout} layout offers the slash commands and the workflow button, which both work there`, async () => {
 			const harness = await start({ layout, saved: { showOnboardingTips: true } });
-			expect(tip(harness)).toContain("type / or press the sparkles button to run a workflow");
+			expect(tip(harness)).toContain("type / or press the Quick workflows button (the sparkles icon) to run a workflow");
 			expect(tip(harness)).toContain("/diagram");
 			// What it names exists in this layout.
 			expect(harness.root.querySelector(".askmate-workflow-toggle[aria-label=\"Show quick workflows\"]")).not.toBeNull();
@@ -1793,6 +1793,11 @@ describe("skills in the sidebar", () => {
 		const summary = harness.root.querySelector(".askmate-request-preview-summary")?.textContent ?? "";
 		expect(summary).toContain("1 attachment, 2 earlier turns");
 		expect(summary).not.toContain("2 attachments");
+		// D-06: plain words a B1 reader can follow, instead of "input tokens" and "context chars".
+		expect(summary).toContain("Answer goes to: Chat");
+		expect(summary).toContain("about 30 tokens to send (word pieces the provider counts)");
+		expect(summary).toContain("120 characters from your notes");
+		expect(summary).not.toContain("context chars");
 	});
 
 	test("a skill that needs review is refused with a sentence that says what to do, and nothing is sent", async () => {

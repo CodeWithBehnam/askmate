@@ -8,5 +8,5 @@ export function onboardingTipText(layout: ComposerLayout): string {
 	const where = "use the buttons under the box to choose where an answer goes";
 	return layout === "console"
 		? `Ask about the note you have open, type / to run a workflow or /diagram to draw one, and ${where}.`
-		: `Ask about the note you have open, type / or press the sparkles button to run a workflow, type /diagram to draw one, and ${where}.`;
+		: `Ask about the note you have open, type / or press the Quick workflows button (the sparkles icon) to run a workflow, type /diagram to draw one, and ${where}.`;
 }
