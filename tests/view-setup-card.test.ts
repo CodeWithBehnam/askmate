@@ -305,6 +305,16 @@ describe("the card DOM", () => {
 		expect(parent.querySelector(".askmate-setup-privacy")?.textContent).toBe(SETUP_PRIVACY_LINE);
 	});
 
+	test("QA-18: the card is named by its own title, not an aria-label that Obsidian would leave on screen as a tooltip", () => {
+		const parent = createFakeEl();
+		const { handlers } = callbacks();
+		renderSetupCard(parent, deriveSetupCardModel(input()), handlers, emptyDraft);
+		const card = parent.querySelector(".askmate-setup-card");
+		const titleId = card?.getAttribute("aria-labelledby") ?? "";
+		expect(card?.hasAttribute("aria-label")).toBe(false);
+		expect(parent.querySelector(`[id="${titleId}"]`)?.textContent).toBe("Connect an AI provider");
+	});
+
 	test("Connect reports the pasted key and the provider; Enter in the field does the same", () => {
 		const parent = createFakeEl();
 		const { handlers, log, drafts } = callbacks();

@@ -39,6 +39,8 @@ function addField(parent: HTMLElement, label: string, type: "password" | "text")
 	return input;
 }
 
+let setupCardCounter = 0;
+
 /**
  * Draws the Connect card. It owns no state beyond the inputs: every decision is in the model, and every effect goes out
  * through a callback, so the same card serves first run, /setup and /welcome in any layout.
@@ -46,9 +48,12 @@ function addField(parent: HTMLElement, label: string, type: "password" | "text")
 export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, callbacks: SetupCardCallbacks, draft: SetupCardDraft): SetupCardHandle {
 	const card = parent.createDiv({ cls: `askmate-setup-card is-${model.phase}` });
 	card.setAttribute("role", "region");
-	card.setAttribute("aria-label", "Connect AskMate to an AI provider");
 
 	const title = card.createDiv({ cls: "askmate-setup-title", text: model.title });
+	// Named by its own title, not an aria-label: Obsidian shows an aria-label as a tooltip, and the card is redrawn under
+	// the pointer during a connection, which left the tooltip on screen. The title also follows the phase.
+	title.id = `askmate-setup-title-${++setupCardCounter}`;
+	card.setAttribute("aria-labelledby", title.id);
 	title.setAttribute("role", "heading");
 	title.setAttribute("aria-level", "2");
 	// Not in the tab order, but a place the keyboard can be put when the control that had it is gone.

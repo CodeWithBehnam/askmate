@@ -1556,7 +1556,10 @@ describe("conversation handling", () => {
 		const harness = await start();
 		const transcript = harness.root.querySelector(".askmate-messages");
 		expect(transcript?.getAttribute("role")).toBe("region");
-		expect(transcript?.getAttribute("aria-label")).toBe("AskMate conversation");
+		// QA-18: named through a hidden label, because Obsidian turns an aria-label into a tooltip.
+		const labelId = transcript?.getAttribute("aria-labelledby") ?? "";
+		expect(harness.root.querySelector(`[id="${labelId}"]`)?.textContent).toBe("AskMate conversation");
+		expect(transcript?.hasAttribute("aria-label")).toBe(false);
 		expect(transcript?.getAttribute("tabindex")).toBe("0");
 		expect(transcript?.hasAttribute("aria-live")).toBe(false);
 		const status = harness.root.querySelector("[role=\"status\"]");

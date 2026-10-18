@@ -406,7 +406,10 @@ export class AskMateView extends ItemView {
 		// A quiet, labelled region: streamed text is not a live region, because a screen reader would read it word by word.
 		this.messagesEl = container.createDiv({ cls: "askmate-messages" });
 		this.messagesEl.setAttribute("role", "region");
-		this.messagesEl.setAttribute("aria-label", "AskMate conversation");
+		// Named by a hidden label rather than aria-label, which Obsidian would show as a tooltip over the whole transcript.
+		const transcriptLabel = container.createSpan({ cls: "askmate-visually-hidden", text: "AskMate conversation" });
+		transcriptLabel.id = `${this.consoleIdPrefix}-transcript-label`;
+		this.messagesEl.setAttribute("aria-labelledby", transcriptLabel.id);
 		this.messagesEl.tabIndex = 0;
 		this.statusEl = container.createDiv({ cls: "askmate-visually-hidden" });
 		this.statusEl.setAttribute("role", "status");
