@@ -50,6 +50,7 @@ export function renderUsageStatistics(containerEl: HTMLElement, options: UsageSt
 	new ButtonComponent(actions)
 		.setButtonText("Reset statistics")
 		.setDestructive()
+		.setClass("askmate-danger")
 		.setDisabled(records.length === 0)
 		.onClick(() => onReset());
 

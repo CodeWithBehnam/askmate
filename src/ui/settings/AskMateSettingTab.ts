@@ -785,7 +785,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 						render: (setting) => {
 							this.prepareFieldFeedback(setting);
 							setting.addButton((button) => {
-								button.setButtonText("Delete conversations").setDestructive().onClick(() => {
+								button.setButtonText("Delete conversations").setDestructive().setClass("askmate-danger").onClick(() => {
 									void this.keepFocusWhileBusy(button.buttonEl, (busy) => { button.setDisabled(busy); }, () => this.runSettingAction(() => this.deleteSavedConversations(setting)));
 								});
 							});
@@ -797,7 +797,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 						render: (setting) => {
 							this.prepareFieldFeedback(setting);
 							setting.addButton((button) => {
-								button.setButtonText("Delete all stored text").setDestructive().onClick(() => {
+								button.setButtonText("Delete all stored text").setDestructive().setClass("askmate-danger").onClick(() => {
 									void this.keepFocusWhileBusy(button.buttonEl, (busy) => { button.setDisabled(busy); }, () => this.runSettingAction(() => this.deleteAllStoredText(setting)));
 								});
 							});
@@ -923,7 +923,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 						desc: "Put the sidebar, answer, privacy, context, template and usage options back to their recommended values.",
 						render: (setting) => {
 							setting.addButton((button) => {
-								button.setButtonText("Reset options").setDestructive().onClick(() => {
+								button.setButtonText("Reset options").setDestructive().setClass("askmate-danger").onClick(() => {
 									void this.keepFocusWhileBusy(button.buttonEl, (busy) => { button.setDisabled(busy); }, () => this.runSettingAction(() => this.resetToRecommended()));
 								});
 							});
@@ -1796,7 +1796,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 					.setDesc("Remove this workflow, its sidebar button and its command; this cannot be undone.")
 					.addButton((button) => {
 						this.labelControl(button.buttonEl, "Delete this workflow");
-						button.setButtonText("Delete").setDestructive().onClick(() => {
+						button.setButtonText("Delete").setDestructive().setClass("askmate-danger").onClick(() => {
 							void this.runSettingAction(async () => {
 								const currentName = this.plugin.settings.customWorkflows.find((item) => item.id === workflow.id)?.name ?? workflow.name;
 								if (!(await askMateConfirm(this.app, `Delete the custom workflow "${currentName}"? Its sidebar button and command go with it.`, {

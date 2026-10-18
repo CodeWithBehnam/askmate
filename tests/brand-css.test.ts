@@ -394,6 +394,13 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		expect(declaration(forced[0] as Rule, "forced-color-adjust")).toBe("none");
 	});
 
+	test("QA-07: destructive buttons in AskMate's dialogs and settings use the tested danger pair", () => {
+		for (const selector of [".askmate-modal-buttons button.mod-warning", "button.askmate-danger"]) {
+			expect(declarationOf(selector, "background")).toBe("var(--askmate-danger)");
+			expect(declarationOf(selector, "color")).toBe("var(--askmate-on-danger)");
+		}
+	});
+
 	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
 		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
 		expect(forced).toHaveLength(1);

@@ -2580,6 +2580,16 @@ button.mod-cta.askmate-cta:hover:not(:disabled) {
 	color: var(--askmate-on-brand);
 }
 
+/* Destructive buttons in AskMate's dialogs and settings: Obsidian's red behind white text measures about 3.6:1 to 4.2:1;
+   the danger pair is tested for 4.5:1 in both themes. */
+.askmate-modal-buttons button.mod-warning,
+.askmate-modal-buttons button.mod-warning:hover:not(:disabled),
+button.askmate-danger,
+button.askmate-danger:hover:not(:disabled) {
+	background: var(--askmate-danger);
+	color: var(--askmate-on-danger);
+}
+
 /* ---------- Setup card ---------- */
 .askmate-setup-card {
 	background: linear-gradient(160deg, color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface)), var(--askmate-surface) 70%);
