@@ -3028,10 +3028,11 @@ export class AskMateView extends ItemView {
 	}
 
 	private createAvatarEl(parent: HTMLElement, role: ChatRole): HTMLElement {
+		// Decorative: the role is written beside it. An aria-label on a plain div is not allowed (axe aria-prohibited-attr).
 		const avatar = parent.createDiv({
 			cls: `askmate-avatar askmate-avatar-${role}`,
 			attr: {
-				"aria-label": this.getRoleLabel(role),
+				"aria-hidden": "true",
 				title: this.getRoleLabel(role)
 			}
 		});

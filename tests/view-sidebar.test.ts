@@ -750,6 +750,18 @@ describe("a question and its answer", () => {
 		expect(bubbles(harness, "assistant")[0]?.textContent).toContain("An answer.");
 	});
 
+	test("QA-05: avatars are decorative, so they carry no aria-label on a plain div", async () => {
+		const harness = await start();
+		ask(harness, "What is this?");
+		await send(harness);
+		const avatars = Array.from(harness.root.querySelectorAll<HTMLElement>(".askmate-avatar"));
+		expect(avatars.length).toBeGreaterThanOrEqual(2);
+		for (const avatar of avatars) {
+			expect(avatar.getAttribute("aria-label")).toBeNull();
+			expect(avatar.getAttribute("aria-hidden")).toBe("true");
+		}
+	});
+
 	test("a failure while building the request leaves the typed text in the box", async () => {
 		const harness = await start();
 		Object.assign(harness.plugin, { buildRequest: () => Promise.reject(new Error("Open a Markdown note or select text to add context.")) });
