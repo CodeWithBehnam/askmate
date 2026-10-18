@@ -384,6 +384,14 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		}
 	});
 
+	test("QA-16: header icon buttons meet the 24px target size, and the reasoning picker's text stays hidden in forced colours", () => {
+		expect(declarationOf(".askmate-context-button", "width")).toBe("24px");
+		expect(declarationOf(".askmate-context-button", "height")).toBe("24px");
+		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes(".askmate-reasoning-select"));
+		expect(forced).toHaveLength(1);
+		expect(declaration(forced[0] as Rule, "forced-color-adjust")).toBe("none");
+	});
+
 	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
 		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
 		expect(forced).toHaveLength(1);

@@ -1217,11 +1217,12 @@ body.theme-dark {
 	background: color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary));
 	border-color: color-mix(in srgb, var(--askmate-brand) 18%, var(--background-modifier-border));
 	color: var(--text-muted);
-	flex-basis: 22px;
-	height: 22px;
-	min-height: 22px;
-	min-width: 22px;
-	width: 22px;
+	/* 24px: the WCAG 2.2 minimum target size (2.5.8). */
+	flex-basis: 24px;
+	height: 24px;
+	min-height: 24px;
+	min-width: 24px;
+	width: 24px;
 }
 
 .askmate-context-button:hover,
@@ -3548,6 +3549,13 @@ button.mod-cta.askmate-cta:hover:not(:disabled) {
 	.askmate-tool-card.is-denied,
 	.askmate-skill-chip.is-suggested {
 		border-style: dashed;
+	}
+
+	/* The reasoning picker shows only its icon; its select is see-through. Forced colours would paint the select's text
+	   ("Medium") over the icon, so the select keeps its transparent text there too. */
+	.askmate-reasoning-select {
+		color: transparent;
+		forced-color-adjust: none;
 	}
 
 	/* Obsidian paints a checked box with a fill and a masked tick, both of which forced colours removes, so a ticked box
