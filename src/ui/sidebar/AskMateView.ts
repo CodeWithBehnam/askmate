@@ -3864,6 +3864,7 @@ export class AskMateView extends ItemView {
 		applyChatSelection(this.plugin.settings, providerId, model);
 		await this.plugin.saveSettings();
 		this.plugin.refreshOpenAskMateViews();
+		this.plugin.refreshSettingTab();
 		const ref = this.plugin.getChatProviderModelRef();
 		this.addMessage("system", `Model: ${ref.providerName} / ${ref.model || "(none selected)"}`);
 		if (providerNeedsApiKey(providerId, this.plugin.settings)) {
@@ -4332,6 +4333,7 @@ export class AskMateView extends ItemView {
 			await this.plugin.saveSettings();
 		}
 		this.plugin.refreshOpenAskMateViews();
+		this.plugin.refreshSettingTab();
 		await this.runConnectionTest();
 	}
 

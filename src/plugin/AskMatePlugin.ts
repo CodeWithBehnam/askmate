@@ -670,6 +670,7 @@ export class AskMatePlugin extends Plugin {
 			syncObjectInPlace(this.settings, merged);
 			this.threads.reload(this.settings.threadStore);
 			this.refreshOpenAskMateViews();
+			this.refreshSettingTab();
 			this.applySettingsChanges();
 		}
 		// The merge keeps what only this device had. Writing the union back means the other device receives it too.
@@ -2978,6 +2979,15 @@ export class AskMatePlugin extends Plugin {
 				leaf.view.focusComposer(text);
 			}
 		}
+	}
+
+	/**
+	 * Obsidian keeps the settings tab's definitions until update(), and the Connection rows are built for one chat provider.
+	 * A provider chosen elsewhere (the sidebar card, the model switcher, a synced data.json) must rebuild them, or the page
+	 * shows and edits the old provider. Not part of refreshOpenAskMateViews, which the tab calls during its own edits.
+	 */
+	refreshSettingTab(): void {
+		this.settingTab?.update();
 	}
 
 	refreshOpenAskMateViews(): void {

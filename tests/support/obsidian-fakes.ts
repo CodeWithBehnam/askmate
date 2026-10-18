@@ -1160,7 +1160,14 @@ export abstract class PluginSettingTab {
 
 	constructor(public app: unknown, public plugin: unknown) {}
 
+	/** How many times the definitions were rebuilt, as Obsidian 1.13 does on update(). */
+	updateCount = 0;
+
 	abstract display(): void;
+
+	update(): void {
+		this.updateCount += 1;
+	}
 
 	hide(): void {
 		this.containerEl.empty();

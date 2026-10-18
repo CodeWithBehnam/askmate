@@ -281,6 +281,16 @@ describe("settings that change on another device", () => {
 		expect(written).toEqual(["mine", "theirs"]);
 	});
 
+	test("QA-02: a synced change rebuilds the settings tab, so its Connection page follows the new chat provider", async () => {
+		const { plugin } = await loadPlugin({});
+		const tab = (plugin as unknown as { settingTab: { updateCount: number } }).settingTab;
+		const before = tab.updateCount;
+		plugin.storedData = { ...(plugin.storedData as object), selectedTextProvider: "openai-compatible", providerRoles: { chatProviderId: "openai-compatible" } };
+		await plugin.onExternalSettingsChange();
+		expect(plugin.getSelectedTextProviderId()).toBe("openai-compatible");
+		expect(tab.updateCount).toBe(before + 1);
+	});
+
 	test("a change that holds nothing new is adopted without another write", async () => {
 		const { plugin } = await loadPlugin({});
 		await plugin.saveSettings();

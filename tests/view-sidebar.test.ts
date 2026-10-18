@@ -191,6 +191,7 @@ async function createHarness(options: { configured?: boolean; layout?: "compact"
 		getErrorMessage: (error: unknown) => (error instanceof Error ? error.message : "Unknown error"),
 		saveSettings: () => Promise.resolve(),
 		refreshOpenAskMateViews: () => undefined,
+		refreshSettingTab: () => undefined,
 		getSelectedProviderModelRef: () => ({ providerId: "openai", providerName: "OpenAI", model: models.name, capability: "text" }),
 		getChatProviderModelRef: () => ({ providerId: "openai", providerName: "OpenAI", model: models.name, capability: "text" }),
 		getChatProviderId: () => "openai",
@@ -2397,6 +2398,21 @@ describe("setting up a local server", () => {
 		expect(harness.settings.providers[LOCAL].baseUrl).toBe("http://localhost:1234/v1");
 		expect(harness.settings.providers[LOCAL].model).toBe("qwen2.5");
 		expect(tested).toEqual(["http://localhost:1234/v1"]);
+	});
+
+	test("QA-02: Connect rebuilds the settings tab, so its Connection page shows the provider just chosen", async () => {
+		const harness = await startLocal("http://localhost:1234/v1", "qwen2.5");
+		let rebuilds = 0;
+		Object.assign(harness.plugin, {
+			refreshSettingTab: () => {
+				rebuilds += 1;
+			},
+			testProviderConnectionDetailed: () => Promise.resolve({ ok: true, message: "ok", modelFound: true, suggestedModel: null, copy: null })
+		});
+		ask(harness, "/setup");
+		await send(harness);
+		await pressConnect(harness);
+		expect(rebuilds).toBe(1);
 	});
 
 	test("a failed /test opens the card on the saved address, and Try again does not move the server to another port", async () => {
