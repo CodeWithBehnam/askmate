@@ -731,7 +731,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			option.maxCharacters === null ? "Whole note" : `Up to ${option.maxCharacters.toLocaleString("en-GB")} characters`
 		]));
 		return [
-			this.noteDefinition("Your question and the context you choose go to your AI provider. Saved conversations and note history are stored in this plugin's data file in your vault."),
+			this.noteDefinition("Your question and the context you choose go to your AI provider and nowhere else. AskMate has no telemetry. A cloud provider charges you for what you send; with Local or self-hosted, nothing leaves your computer or your own server. Saved conversations and note history are stored in this plugin's data file in your vault."),
 			{
 				type: "group",
 				heading: "Sent with each question",
