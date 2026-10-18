@@ -398,7 +398,8 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			return existing;
 		}
 		feedbackCounter += 1;
-		const feedbackEl = setting.infoEl.createDiv({ cls: "askmate-settings-feedback", attr: { role: "status", id: `askmate-settings-feedback-${feedbackCounter}` } });
+		const feedbackEl = setting.infoEl.createDiv({ cls: "askmate-settings-feedback", attr: { role: "status" } });
+		feedbackEl.id = `askmate-settings-feedback-${feedbackCounter}`;
 		// The row's fields name the message as their description, so a screen reader reads it with the field, not only once.
 		for (const field of Array.from(setting.controlEl.querySelectorAll<HTMLElement>("input, textarea, select"))) {
 			field.setAttribute("aria-describedby", feedbackEl.id);
