@@ -2,6 +2,40 @@
 
 All notable changes to AskMate are listed here, newest first. The release workflow publishes the section for each tag as the GitHub release notes, so write each entry for people who use the plugin.
 
+## [1.13.0] - 2026-10-18
+
+This release comes out of a launch test with ten kinds of first-time user, including keyboard and screen reader users, low vision with zoom and high contrast, slow machines, privacy-first setups and people who write in Japanese and Persian. Every one of them could already get an answer about their note; now it is easier, clearer and more private.
+
+### Changed
+
+- **Local first.** A new install opens the Connect card on Local, so nothing goes to a cloud service unless you choose one. Leave the model empty and AskMate uses a model your server has. Until a provider is connected, the model chip says so instead of naming a default.
+- **"Draw me a..." is off for new installs.** It turned ordinary wording into paid OpenAI image requests whatever chat provider you use. `/image` and the Image button still make pictures, and you can turn the wording back on in Sidebar and output. Existing settings are kept, but Reset to recommended settings now turns it off.
+- **The note is sent once.** Each request used to send the open note twice, in full and again as evidence excerpts, so paid providers saw about double. Sources already in the note are now cited by location and a short starting phrase, and the request preview counts the shorter prompt.
+- **Plain words.** The request preview says where the answer goes, how many tokens (word pieces the provider counts) and how many characters from your notes are sent, and calls earlier messages "earlier turns" instead of "1 attachment". Workflow cards use whole words, and the question box says what `/` and `@` do.
+- **Workflow order uses buttons.** Settings, Advanced, Workflow sidebar has Move up and Move down on each row instead of drag handles, and they work from the keyboard.
+- **Clearer privacy.** The Connect card and the Privacy and memory page say what goes to your provider, that pictures go to OpenAI and tool arguments to the servers you trust, that AskMate has no telemetry, and that cloud providers charge for what you send. Keys are described the same way everywhere: Obsidian's secret storage on this device, your system keychain.
+
+### Fixed
+
+- The sidebar no longer squeezes the Connect card or hides the question box under the request preview in small, short or zoomed windows. Send, Stop and the output mode stay in view, and choosing a provider brings Connect into view.
+- Settings, Connection now shows the provider you connected from the sidebar instead of OpenAI.
+- The status pill says Ready only when a provider works. After a failed test it says Connection failed, and after a restart too when the key, model or address was the problem. The card never shows Connected beside an error.
+- The first-run notice stays until you use it or open the sidebar, instead of vanishing after 15 seconds.
+- A question you typed and sent just before Obsidian reloads or closes comes back in the question box with a note saying why, while Remember conversations is on, and a half-filled Connect card keeps its provider, address and model. Both stay on this device only, and the API key is never kept this way.
+- Skills with names in scripts such as Japanese or Persian get their own folders instead of colliding as `my-skill`.
+- Right-to-left questions, answers and instructions are laid out right to left.
+- Number settings accept Persian, Arabic and full-width digits and thousands separators.
+- An address with a wrong port or spelling now says so, with an example.
+- A starter's message shows the words on the chip you pressed.
+
+### Accessibility
+
+- Ticked checkboxes stay visible in high contrast (forced colours), and the reasoning picker no longer shows clipped text there.
+- Settings switches, avatars, Add server, Add workflow and the usage table no longer fail axe-core checks; primary and destructive buttons in dialogs and settings meet 4.5:1 contrast.
+- Escape stops a running request in every layout, and the sidebar says when Escape moves the keyboard into your note.
+- Dialogs keep Tab inside and give the keyboard back to the control that opened them. Settings fields name their error messages, and after a change focus stays on the control you used.
+- Header icon buttons and checkbox labels meet the 24 pixel target size, and the setup card's tooltip no longer stays on screen.
+
 ## [1.12.1] - 2026-10-12
 
 ### Security
