@@ -446,7 +446,7 @@ export function buildConnectionItems(host: SettingsPageHost): SettingDefinitionI
 				});
 				setting.addButton((button) => {
 					host.labelControl(button.buttonEl, `Save ${providerLabel} API key`);
-					button.setButtonText("Save key").setCta().onClick(() => {
+					button.setButtonText("Save key").setCta().setClass("askmate-cta").onClick(() => {
 						void host.keepFocusWhileBusy(button.buttonEl, (busy) => { button.setDisabled(busy); }, () => host.runSettingAction(saveKey));
 					});
 				});

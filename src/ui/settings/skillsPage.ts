@@ -178,7 +178,7 @@ export function buildSkillItems(host: SettingsPageHost): SettingDefinitionItem[]
 				if (skill.valid && skill.source === "vault" && status() === "needs-review") {
 					setting.addButton((button) => {
 						host.labelControl(button.buttonEl, `Review ${row.title}`);
-						button.setButtonText("Review").setCta().onClick(() => {
+						button.setButtonText("Review").setCta().setClass("askmate-cta").onClick(() => {
 							void host.runSettingAction(() => review(skill));
 						});
 						if (host.focusAfterRebuild === `skill:${skill.id}`) {

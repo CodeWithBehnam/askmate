@@ -2561,13 +2561,19 @@ body.theme-dark {
 	display: none;
 }
 
-/* ---------- Primary buttons inside the sidebar use the brand colour ---------- */
-.askmate-sidebar button.mod-cta {
+/* ---------- AskMate's primary buttons use the brand colour ----------
+   In the sidebar, in AskMate's dialogs and on its settings pages. Obsidian's default accent behind white text measures
+   about 3.4:1 to 4.3:1, below the 4.5:1 the brand pair is tested for. */
+.askmate-sidebar button.mod-cta,
+.askmate-modal-buttons button.mod-cta,
+button.mod-cta.askmate-cta {
 	background: var(--askmate-brand);
 	color: var(--askmate-on-brand);
 }
 
-.askmate-sidebar button.mod-cta:hover:not(:disabled) {
+.askmate-sidebar button.mod-cta:hover:not(:disabled),
+.askmate-modal-buttons button.mod-cta:hover:not(:disabled),
+button.mod-cta.askmate-cta:hover:not(:disabled) {
 	background: var(--askmate-brand-hover);
 	color: var(--askmate-on-brand);
 }

@@ -1986,6 +1986,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		const runButton = new ButtonComponent(outputSetting.controlEl)
 			.setButtonText("Run batch")
 			.setCta()
+			.setClass("askmate-cta")
 			.onClick(() => {
 				this.focusAfterRebuild = "batch-run";
 				void this.runBatch();
@@ -2086,7 +2087,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			card.createDiv({ cls: "askmate-review-excerpt", text: truncateLabel(item.proposedText, 360) });
 			const actions = card.createDiv({ cls: "askmate-review-item-actions" });
 			// Every card repeats the same three buttons, so each name says which note it acts on.
-			const apply = actions.createEl("button", { cls: "mod-cta", text: "Apply", attr: { "aria-label": `Apply change to ${item.sourcePath}` } });
+			const apply = actions.createEl("button", { cls: "mod-cta askmate-cta", text: "Apply", attr: { "aria-label": `Apply change to ${item.sourcePath}` } });
 			apply.type = "button";
 			firstApply ??= apply;
 			apply.addEventListener("click", () => {

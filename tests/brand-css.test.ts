@@ -377,6 +377,13 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		expect(declarationOf(".checkbox-container > input.askmate-switch-input", "display")).toBe("none");
 	});
 
+	test("QA-07: primary buttons in AskMate's dialogs and settings pages use the tested brand pair, not the theme accent", () => {
+		for (const selector of [".askmate-modal-buttons button.mod-cta", "button.mod-cta.askmate-cta"]) {
+			expect(declarationOf(selector, "background")).toBe("var(--askmate-brand)");
+			expect(declarationOf(selector, "color")).toBe("var(--askmate-on-brand)");
+		}
+	});
+
 	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
 		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
 		expect(forced).toHaveLength(1);

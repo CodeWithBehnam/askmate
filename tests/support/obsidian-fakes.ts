@@ -950,6 +950,12 @@ export class ButtonComponent extends BaseComponent {
 
 	setCta(): this {
 		this.cta = true;
+		this.buttonEl.classList.add("mod-cta");
+		return this;
+	}
+
+	setClass(cls: string): this {
+		this.buttonEl.classList.add(cls);
 		return this;
 	}
 

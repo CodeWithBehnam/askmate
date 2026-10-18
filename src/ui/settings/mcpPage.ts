@@ -698,7 +698,7 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 		host.prepareFieldFeedback(setting);
 		setting.addButton((button) => {
 			host.labelControl(button.buttonEl, `Trust and test ${first.label}`);
-			button.setButtonText("Trust and test").setCta().onClick(() => {
+			button.setButtonText("Trust and test").setCta().setClass("askmate-cta").onClick(() => {
 				void host.keepFocusWhileBusy(button.buttonEl, (busy) => {
 					button.setButtonText(busy ? "Testing..." : "Trust and test").setDisabled(busy);
 				}, async () => {
