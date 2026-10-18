@@ -332,8 +332,34 @@ describe("starter templates", () => {
 		expect(skill.diagnostics).toEqual([]);
 	});
 
+	test("a name with no Latin letters gets its own stable folder instead of a shared fallback (QA-15)", async () => {
+		const pattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+		const japanese = createSkillScaffold("会議議事録", "");
+		const persian = createSkillScaffold("صورتجلسه", "");
+		const symbols = createSkillScaffold("!!!", "");
+		for (const scaffold of [japanese, persian, symbols]) {
+			expect(scaffold.id).toMatch(pattern);
+			expect(scaffold.id.length).toBeLessThanOrEqual(64);
+			expect(scaffold.id).not.toBe("my-skill");
+			expect(scaffold.path).toBe(`${scaffold.id}/SKILL.md`);
+		}
+		expect(new Set([japanese.id, persian.id, symbols.id]).size).toBe(3);
+		expect(createSkillScaffold("会議議事録", "other").id).toBe(japanese.id);
+		expect(createSkillScaffold("  会議議事録  ", "").id).toBe(japanese.id);
+		expect(japanese.content).toContain("会議議事録");
+		const skill = parseSkillFile({ path: japanese.path, raw: japanese.content, hash: await hashSkillText(japanese.content), source: "vault", fallbackName: japanese.id, parseYaml });
+		expect(skill.valid).toBe(true);
+		expect(skill.name).toBe(japanese.id);
+		expect(skill.manifest.title).toBe("会議議事録");
+		expect(skill.diagnostics).toEqual([]);
+	});
+
+	test("a mixed name keeps its transliterated slug", () => {
+		expect(createSkillScaffold("Amélie O'Connor", "").id).toBe("amelie-o-connor");
+	});
+
 	test("a scaffold copes with an empty or unusable name and description", async () => {
-		const scaffold = createSkillScaffold("!!!", "   ");
+		const scaffold = createSkillScaffold("   ", "   ");
 		expect(scaffold.id).toBe("my-skill");
 		const skill = parseSkillFile({ path: scaffold.path, raw: scaffold.content, hash: await hashSkillText(scaffold.content), source: "vault", fallbackName: scaffold.id, parseYaml });
 		expect(skill.valid).toBe(true);

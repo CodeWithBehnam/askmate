@@ -172,9 +172,27 @@ function templateFrom(definition: SkillDefinition): SkillTemplate {
 /** Examples the user can install. They arrive unreviewed like any other vault skill. */
 export const EXAMPLE_SKILL_TEMPLATES: readonly SkillTemplate[] = EXAMPLES.map(templateFrom);
 
+/** FNV-1a over UTF-16 code units, in base 36. Stable across runs, so the same name always gets the same folder. */
+function shortHash(text: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < text.length; index++) {
+		hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+	}
+	return (hash >>> 0).toString(36);
+}
+
+/**
+ * The folder name for a new skill. A name with no Latin letters or digits slugifies to nothing, and a fixed fallback
+ * would make every such name collide, so those names get a short hash of themselves instead.
+ */
+function scaffoldSlug(name: string): string {
+	const trimmed = name.trim();
+	return slugifySkillName(trimmed).slice(0, MAX_SKILL_NAME) || (trimmed ? `skill-${shortHash(trimmed)}` : "my-skill");
+}
+
 /** Builds the text of a new skill from a name and description. The name is normalised to the format's rules. */
 export function createSkillScaffold(name: string, description: string): SkillTemplate {
-	const slug = slugifySkillName(name).slice(0, MAX_SKILL_NAME) || "my-skill";
+	const slug = scaffoldSlug(name);
 	const text = description.trim() || "Describe what the skill does and when to use it.";
 	return templateFrom({
 		name: slug,
