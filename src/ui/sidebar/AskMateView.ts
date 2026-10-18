@@ -213,6 +213,43 @@ const DECLINED_AT_WARNING = /cancelled by usage guardrails/i;
 /** Pictures drawn for diagram cards are kept by source; this many are enough for a long conversation. */
 const MAX_CACHED_DIAGRAMS = 24;
 
+/**
+ * Vault-scoped local storage keys (never synced). A reload or crash ends the page before a run can tidy up, so what the
+ * person typed is kept here until it is answered or used: a sent question, and the Connect card's choices without the key.
+ */
+const PENDING_QUESTION_KEY = "askmate-pending-question";
+const SETUP_DRAFT_KEY = "askmate-setup-draft";
+/** A question older than this is not brought back: the person has moved on. */
+const PENDING_QUESTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+interface PendingQuestion {
+	question: string;
+	at: number;
+}
+
+interface StoredSetupDraft {
+	provider: TextProviderId;
+	baseUrl: string;
+	model: string;
+}
+
+function readPendingQuestion(value: unknown, now: number): string | null {
+	if (typeof value !== "object" || value === null) {
+		return null;
+	}
+	const { question, at } = value as Partial<PendingQuestion>;
+	return typeof question === "string" && question.trim() !== "" && typeof at === "number" && now - at < PENDING_QUESTION_MAX_AGE_MS ? question : null;
+}
+
+function readStoredSetupDraft(value: unknown): StoredSetupDraft | null {
+	if (typeof value !== "object" || value === null) {
+		return null;
+	}
+	const { provider, baseUrl, model } = value as Partial<StoredSetupDraft>;
+	const known = TEXT_PROVIDER_IDS.find((id) => id === provider);
+	return known && typeof baseUrl === "string" && typeof model === "string" ? { provider: known, baseUrl, model } : null;
+}
+
 function emptySetupDraft(): SetupCardDraft {
 	return { apiKey: "", baseUrl: "", model: "" };
 }
@@ -441,7 +478,9 @@ export class AskMateView extends ItemView {
 		this.renderComposer(container);
 		this.refreshConsoleStatus();
 		this.restoreActiveThread();
+		this.restoreSetupDraft();
 		this.refreshSetupCard();
+		this.restorePendingQuestion();
 		this.refreshSkillChips();
 
 		const refreshContext = (): void => {
@@ -1799,6 +1838,9 @@ export class AskMateView extends ItemView {
 			this.setRunPhase(run, "generating");
 			// The question has been built and accepted: now it leaves the composer, and a note or apply mode is spent.
 			spec.onSent?.();
+			if (isUserPrompt && !spec.reuse) {
+				this.app.saveLocalStorage(PENDING_QUESTION_KEY, { question, at: Date.now() } satisfies PendingQuestion);
+			}
 			// A mode typed in the command (/note followed by a question) is for that question alone and leaves the setting as it is.
 			if ((options.outputMode ?? this.plugin.settings.outputMode) === this.plugin.settings.outputMode) {
 				void this.spendOutputMode(request.metadata.outputMode).catch((error: unknown) => this.notify(this.plugin.getErrorMessage(error)));
@@ -2052,6 +2094,9 @@ export class AskMateView extends ItemView {
 			this.announcer?.announce({ kind: "failed", message: presented.message });
 		} finally {
 			this.pendingTurns.delete(userTurn);
+			if (!this.isClosed) {
+				this.app.saveLocalStorage(PENDING_QUESTION_KEY, null);
+			}
 			if (!answered) {
 				// An unanswered question would otherwise be resent as a dangling user turn.
 				this.messages = this.messages.filter((message) => message !== userTurn);
@@ -4229,6 +4274,7 @@ export class AskMateView extends ItemView {
 				this.setup.provider = id;
 				this.setup.flowOpen = true;
 				this.setup.localError = null;
+				this.saveSetupDraft(id, this.setup.draft);
 				this.refreshSetupCard();
 				this.setupHandle?.focusKey();
 			},
@@ -4241,6 +4287,7 @@ export class AskMateView extends ItemView {
 			onDismiss: () => this.closeSetupFlow(),
 			onDraft: (draft) => {
 				this.setup.draft = draft;
+				this.saveSetupDraft(selected, draft);
 			}
 		}, this.setup.draft);
 		if (hadFocus) {
@@ -4464,7 +4511,39 @@ export class AskMateView extends ItemView {
 		this.openModelPicker();
 	}
 
+	/** Keeps the Connect card's choices across a reload or crash. The key is never stored. */
+	private saveSetupDraft(provider: TextProviderId, draft: SetupCardDraft): void {
+		this.app.saveLocalStorage(SETUP_DRAFT_KEY, { provider, baseUrl: draft.baseUrl, model: draft.model } satisfies StoredSetupDraft);
+	}
+
+	/** A Connect card left half done before a reload opens where it was, while no provider is connected yet. */
+	private restoreSetupDraft(): void {
+		const stored = readStoredSetupDraft(this.app.loadLocalStorage(SETUP_DRAFT_KEY));
+		if (!stored || isReadyToSend(this.plugin.getSetupState())) {
+			return;
+		}
+		const provider = stored.provider;
+		this.setup.provider = provider;
+		this.setup.flowOpen = true;
+		this.setup.draftProvider = provider;
+		this.setup.draft = { apiKey: "", baseUrl: stored.baseUrl, model: stored.model };
+	}
+
+	/** A question sent just before a reload or crash, and never answered, goes back into the box with a word about why. */
+	private restorePendingQuestion(): void {
+		const question = readPendingQuestion(this.app.loadLocalStorage(PENDING_QUESTION_KEY), Date.now());
+		this.app.saveLocalStorage(PENDING_QUESTION_KEY, null);
+		if (!question || this.questionEl.value.trim() !== "") {
+			return;
+		}
+		this.questionEl.value = question;
+		const line = "Your last question was not answered before AskMate closed. It is back in the box, so you can send it again.";
+		this.addMessage("system", line);
+		this.announcer?.say(line);
+	}
+
 	private async markFirstRunComplete(): Promise<void> {
+		this.app.saveLocalStorage(SETUP_DRAFT_KEY, null);
 		if (!this.plugin.settings.firstRunCompletedAt) {
 			this.plugin.settings.firstRunCompletedAt = new Date().toISOString();
 			await this.plugin.saveSettings();

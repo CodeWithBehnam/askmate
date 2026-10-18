@@ -340,6 +340,22 @@ describe("the Connect card", () => {
 		expect(harness.root.querySelector(".askmate-request-preview")?.previousElementSibling?.classList.contains("askmate-composer-footer")).toBe(true);
 	});
 
+	test("QA-10: the card's provider, address and model are kept for a reload, and the key never is", async () => {
+		const harness = await start({ configured: false });
+		chip(harness, "Local")?.click();
+		await settle();
+		const fields = Array.from(harness.root.querySelectorAll<HTMLInputElement>(".askmate-setup-key-row input"));
+		const model = fields[1];
+		if (!model) {
+			throw new Error("expected the model field");
+		}
+		model.value = "qwen2.5:7b";
+		fireDomEvent(model, "input");
+		const stored = harness.fake.app.loadLocalStorage("askmate-setup-draft") as Record<string, unknown> | null;
+		expect(stored).toEqual({ provider: "openai-compatible", baseUrl: expect.any(String), model: "qwen2.5:7b" });
+		expect(JSON.stringify(stored)).not.toContain("apiKey");
+	});
+
 	test("does not appear for someone who is already set up", async () => {
 		const harness = await start();
 		expect(harness.root.querySelector(".askmate-setup-card")).toBeNull();
@@ -820,6 +836,32 @@ describe("a question and its answer", () => {
 		fireDomEvent(box(harness), "keydown", { key: "Escape" });
 		await settle();
 		expect(signals[0]?.aborted).toBe(true);
+	});
+
+	test("QA-10: a question still waiting when AskMate closes comes back in the box next time, with a word about why", async () => {
+		const harness = await start();
+		harness.run.handler = () => new Promise(() => undefined);
+		ask(harness, "Will this survive a reload?");
+		await send(harness);
+		await lifecycle(harness.view).closeForTest();
+		open = null;
+		const stored = harness.fake.app.loadLocalStorage("askmate-pending-question") as { question?: string } | null;
+		expect(stored?.question).toBe("Will this survive a reload?");
+
+		const next = await start();
+		next.fake.app.saveLocalStorage("askmate-pending-question", { question: "Will this survive a reload?", at: Date.now() });
+		(next.view as unknown as { restorePendingQuestion(): void }).restorePendingQuestion();
+		expect(box(next).value).toBe("Will this survive a reload?");
+		expect(next.root.textContent).toContain("Your last question was not answered before AskMate closed.");
+		expect(next.fake.app.loadLocalStorage("askmate-pending-question")).toBeNull();
+	});
+
+	test("QA-10: an answered question is forgotten, so nothing comes back after a normal answer", async () => {
+		const harness = await start();
+		ask(harness, "Answer me");
+		await send(harness);
+		await settle();
+		expect(harness.fake.app.loadLocalStorage("askmate-pending-question")).toBeNull();
 	});
 
 	test("a question whose answer has not arrived is not saved on its own", async () => {
