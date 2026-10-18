@@ -866,10 +866,15 @@ export class AskMatePlugin extends Plugin {
 		this.lastSetupTest = { status: "testing", providerId, model: ref.model };
 		this.refreshOpenAskMateViews();
 		const result = await testProviderConnectionDetailedWithProvider(this.getProviderRuntime(), providerId);
-		const copy = result.ok ? null : mapProviderErrorToSetupCopy(new Error(result.message), { providerId, baseUrl: this.getProviderSettings(providerId).baseUrl, model: ref.model });
-		this.lastSetupTest = result.ok || !copy
-			? { status: "ok", providerId, model: ref.model }
-			: { status: "failed", providerId, model: ref.model, copy };
+		const context = { providerId, baseUrl: this.getProviderSettings(providerId).baseUrl, model: ref.model };
+		const copy = result.ok ? null : mapProviderErrorToSetupCopy(new Error(result.message), context);
+		// A server that answers but does not have the model cannot answer a question either, so every surface says it failed.
+		const stageCopy = result.ok && result.modelFound === false
+			? mapProviderErrorToSetupCopy(new Error(`The model "${ref.model}" was not found.`), context)
+			: copy;
+		this.lastSetupTest = stageCopy
+			? { status: "failed", providerId, model: ref.model, copy: stageCopy }
+			: { status: "ok", providerId, model: ref.model };
 		this.refreshOpenAskMateViews();
 		return { ...result, copy };
 	}

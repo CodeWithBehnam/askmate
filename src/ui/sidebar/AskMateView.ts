@@ -3072,11 +3072,14 @@ export class AskMateView extends ItemView {
 		if (!this.readinessEl) {
 			return;
 		}
-		const isReady = await this.plugin.isSelectedProviderConfigured();
+		const configured = await this.plugin.isSelectedProviderConfigured();
 		if (this.isClosed || !this.readinessEl) {
 			return;
 		}
-		const label = isReady ? "AskMate · Ready" : "AskMate · Setup needed";
+		// Filled-in settings are not enough: after a failed connection test the chip must not say Ready.
+		const failed = configured && this.readSetupStage().kind === "test-failed";
+		const isReady = configured && !failed;
+		const label = isReady ? "AskMate · Ready" : failed ? "AskMate · Connection failed" : "AskMate · Setup needed";
 		this.readinessEl.setText(label);
 		this.readinessEl.classList.toggle("is-api-key-set", isReady);
 		this.readinessEl.classList.toggle("is-ready", isReady);
@@ -4336,6 +4339,14 @@ export class AskMateView extends ItemView {
 		this.plugin.refreshOpenAskMateViews();
 		this.plugin.refreshSettingTab();
 		await this.runConnectionTest();
+		// On a first connection the model field is optional: left empty, nobody chose the default model, so a server that
+		// lacks it gets its own closest model instead of an error. Someone who saved a model keeps the choice and the button.
+		const test = this.lastLocalTest();
+		const firstRun = !this.plugin.settings.firstRunCompletedAt;
+		const suggested = firstRun && !catalog.needsKey && !draft.model.trim() && test?.status === "failed" ? test.suggestedModel : undefined;
+		if (suggested) {
+			await this.useSuggestedModel(suggested);
+		}
 	}
 
 	/** Tests the selected provider and says the result in plain words, on the card, to assistive technology, and in the line it returns. */
@@ -4389,6 +4400,11 @@ export class AskMateView extends ItemView {
 		this.refreshConsoleStatus();
 		void this.refreshReadiness();
 		return { ok, line };
+	}
+
+	/** The test this view ran last. A method, so a caller that cleared it before awaiting a test reads the new value. */
+	private lastLocalTest(): SetupFlowState["test"] {
+		return this.setup.test;
 	}
 
 	/** Switches to the model the server itself listed, then checks the connection again. */

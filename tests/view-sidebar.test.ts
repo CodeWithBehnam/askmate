@@ -365,6 +365,20 @@ describe("the Connect card", () => {
 		expect(chip?.getAttribute("role")).toBe("button");
 	});
 
+	test("QA-09: after a failed connection test the readiness chip says so instead of Ready, and opens the card", async () => {
+		const harness = await start();
+		Object.assign(harness.plugin, {
+			testProviderConnectionDetailed: () => Promise.resolve({ ok: false, message: "HTTP 401 invalid api key", modelFound: null })
+		});
+		ask(harness, "/test");
+		await send(harness);
+		await settle(12);
+		const chip = harness.root.querySelector<HTMLElement>(".askmate-composer-brand");
+		expect(chip?.textContent).toBe("AskMate · Connection failed");
+		expect(chip?.classList.contains("is-not-ready")).toBe(true);
+		expect(chip?.getAttribute("role")).toBe("button");
+	});
+
 	test("/setup and /welcome work in the console, and /welcome on a connected setup shows the starters", async () => {
 		const harness = await start({ layout: "console" });
 		ask(harness, "/welcome");
@@ -2464,8 +2478,22 @@ describe("setting up a local server", () => {
 		});
 	}
 
+	test("QA-09: on a first connection with the model left empty, the server's own model is used instead of an error", async () => {
+		const harness = await startLocal("http://localhost:11434/v1", "llama3.1");
+		harness.settings.firstRunCompletedAt = null;
+		missingModel(harness, "gemma3");
+		ask(harness, "/setup");
+		await send(harness);
+		await pressConnect(harness);
+		await settle(12);
+		expect(harness.settings.providers[LOCAL].model).toBe("gemma3");
+		expect(harness.root.querySelector(".askmate-setup-card")?.classList.contains("is-connected")).toBe(true);
+	});
+
 	test("a model the server does not have is answered with the one it does: one button uses it and checks again", async () => {
 		const harness = await startLocal("http://localhost:11434/v1", "llama3.1");
+		// A returning user saved this model, so AskMate does not swap it without asking.
+		harness.settings.firstRunCompletedAt = "2026-10-01T09:00:00.000Z";
 		missingModel(harness, "gemma3");
 		ask(harness, "/setup");
 		await send(harness);

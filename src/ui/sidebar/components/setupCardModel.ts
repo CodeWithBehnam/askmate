@@ -210,7 +210,9 @@ export function deriveSetupCardModel(input: SetupCardInput): SetupCardModel {
 	const provider = getProviderCatalogEntry(input.selectedProvider);
 	const stage = stageFor(input.stage, input.selectedProvider);
 	const phase = derivePhase(stage, input);
-	const shown: SetupCardPhase = phase ?? HIDDEN_PHASE;
+	// A problem found before anything was sent (a bad address, say) means the person is still connecting: the card must
+	// not say "Connected" beside the error, and it keeps the fields so the problem can be fixed there.
+	const shown: SetupCardPhase = phase === "connected" && input.localError ? "connect" : phase ?? HIDDEN_PHASE;
 	const providers = chipEntries(input.stage, input.selectedProvider).map((entry) => ({ id: entry.id, label: entry.chipLabel, selected: entry.id === input.selectedProvider }));
 	const failure = stage?.kind === "test-failed" ? stage.copy : null;
 	// A provider that needs more than this card can ask for (Azure) is finished on the settings page while something is missing.

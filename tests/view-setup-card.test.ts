@@ -98,6 +98,16 @@ describe("when the card shows", () => {
 		expect(model.providers.find((chip) => chip.selected)?.label).toBe("Anthropic");
 	});
 
+	test("QA-09: a problem found before sending keeps the card on the connect step, with its fields, even after an earlier connection", () => {
+		const stage = stageOf("openai-compatible", {}, { status: "ok", providerId: "openai-compatible", model: DEFAULT_SETTINGS.providers["openai-compatible"].model });
+		const localError = { message: "The address must start with http:// or https://.", detail: null, action: { kind: "check-address", label: "Check the address" } } as const;
+		const model = deriveSetupCardModel(input({ stage, selectedProvider: "openai-compatible", flowOpen: true, localError }));
+		expect(model.phase).toBe("connect");
+		expect(model.title).not.toContain("Connected");
+		expect(model.showAddressField).toBe(true);
+		expect(model.error?.message).toBe(localError.message);
+	});
+
 	test("the local provider asks for an address and needs no key", () => {
 		const stage = stageOf("openai-compatible");
 		const model = deriveSetupCardModel(input({ stage, selectedProvider: "openai-compatible", flowOpen: true }));
