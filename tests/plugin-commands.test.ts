@@ -212,6 +212,26 @@ describe("onload", () => {
 		expect(plugin.settings.composerLayout).toBe("compact");
 	});
 
+	test("QA-08: the setup notice stays until it is used, and goes once the AskMate sidebar is open", async () => {
+		const { fake } = await loadPlugin(null);
+		const notice = Notice.shown.find((candidate) => String(candidate.message).includes("Connect an AI provider"));
+		expect(notice?.duration).toBe(0);
+		expect(notice?.hidden).toBe(false);
+		fake.workspace.leaves.push(leafFor({}, ASKMATE_VIEW_TYPE, null));
+		fake.workspace.trigger("layout-change");
+		expect(notice?.hidden).toBe(true);
+	});
+
+	test("QA-08: no setup notice when the AskMate sidebar is already open, because the Connect card is showing", async () => {
+		const fake = createFakeApp();
+		fake.workspace.leaves.push(leafFor({}, ASKMATE_VIEW_TYPE, null));
+		const plugin = new AskMatePlugin(fake.app as never, { id: "askmate", name: "AskMate", version: "1.12.0", dir: ".obsidian/plugins/askmate" } as never) as TestPlugin;
+		plugin.storedData = null;
+		plugin.obsidianApi = { loadMermaid: () => Promise.resolve(null), parseYaml: (text) => Bun.YAML.parse(text) };
+		await plugin.onload();
+		expect(Notice.messages.join(" ")).not.toContain("Connect an AI provider");
+	});
+
 	test("an existing install gets no setup notice and keeps its layout", async () => {
 		const { plugin } = await loadPlugin({ composerLayout: "console" });
 

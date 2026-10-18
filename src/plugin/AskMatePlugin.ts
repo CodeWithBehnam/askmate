@@ -160,7 +160,6 @@ const MODEL_DERIVED_TEMPLATE_KEYS = ["title", "request", "response", "imagePromp
 const FENCE_CLOSED_TEMPLATE_KEYS = ["request", "response", "selectedText"] as const;
 const KEY_APPROVAL_PREFIX = "askmate-key-approval:";
 const NOTICE_SECONDS = 1000;
-const FIRST_RUN_NOTICE_SECONDS = 15;
 
 const SETTINGS_TAB_ID = "askmate";
 
@@ -1033,9 +1032,23 @@ export class AskMatePlugin extends Plugin {
 		if (!shouldShowFirstRunNotice({ firstRun: this.firstRun, settings: this.settings, stage: this.getSetupState() })) {
 			return;
 		}
-		this.notifyWithAction(FIRST_RUN_NOTICE.message, FIRST_RUN_NOTICE.actionLabel, () => {
+		// An open sidebar already shows the Connect card, and a notice on top of it would cover the card's fields.
+		const sidebarOpen = (): boolean => this.app.workspace.getLeavesOfType(ASKMATE_VIEW_TYPE).length > 0;
+		if (sidebarOpen()) {
+			return;
+		}
+		// It stays until it is used or the sidebar is opened another way: a timed notice was gone before many first-time
+		// users read it, which left them only an unlabelled ribbon icon.
+		const notice = this.notifyWithAction(FIRST_RUN_NOTICE.message, FIRST_RUN_NOTICE.actionLabel, () => {
 			void this.openComposerWithText("");
-		}, FIRST_RUN_NOTICE_SECONDS);
+		}, 0);
+		const ref = this.app.workspace.on("layout-change", () => {
+			if (sidebarOpen()) {
+				notice.hide();
+				this.app.workspace.offref(ref);
+			}
+		});
+		this.registerEvent(ref);
 	}
 
 	/** A notice with one button, for messages that name a next step. */
