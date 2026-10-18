@@ -3011,6 +3011,11 @@ export class AskMatePlugin extends Plugin {
 	 * A provider chosen elsewhere (the sidebar card, the model switcher, a synced data.json) must rebuild them, or the page
 	 * shows and edits the old provider. Not part of refreshOpenAskMateViews, which the tab calls during its own edits.
 	 */
+	/** True when this vault had no AskMate data when the plugin loaded: a genuine first install. */
+	isFreshInstall(): boolean {
+		return this.firstRun;
+	}
+
 	refreshSettingTab(): void {
 		this.settingTab?.update();
 	}

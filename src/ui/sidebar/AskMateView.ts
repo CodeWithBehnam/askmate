@@ -3203,6 +3203,12 @@ export class AskMateView extends ItemView {
 			return;
 		}
 
+		// Until a provider is set up the chip would name a default nobody chose, which reads as if it were connected.
+		if (!isReadyToSend(this.readSetupStage())) {
+			this.modelEl.setText("No provider connected yet");
+			this.modelEl.setAttribute("title", "Connect a provider to choose a model");
+			return;
+		}
 		const ref = this.plugin.getSelectedProviderModelRef();
 		const model = ref.model;
 		const capability = ref.capability;
@@ -4261,6 +4267,7 @@ export class AskMateView extends ItemView {
 		host.empty();
 		this.setupHandle = null;
 		host.hidden = !model.visible;
+		this.updateModelLabel();
 		// While the card is open and not yet connected, the composer gives its room to the card and its Connect button.
 		this.rootEl?.classList.toggle("askmate-setup-open", model.visible && model.phase !== "connected");
 		if (!model.visible) {
@@ -4515,10 +4522,20 @@ export class AskMateView extends ItemView {
 		this.app.saveLocalStorage(SETUP_DRAFT_KEY, { provider, baseUrl: draft.baseUrl, model: draft.model } satisfies StoredSetupDraft);
 	}
 
-	/** A Connect card left half done before a reload opens where it was, while no provider is connected yet. */
+	/**
+	 * A Connect card left half done before a reload opens where it was, while no provider is connected yet. On a genuine first
+	 * install with nothing to restore, the card opens on Local, so nothing goes to a cloud service unless the person picks one.
+	 */
 	private restoreSetupDraft(): void {
+		if (isReadyToSend(this.plugin.getSetupState())) {
+			return;
+		}
 		const stored = readStoredSetupDraft(this.app.loadLocalStorage(SETUP_DRAFT_KEY));
-		if (!stored || isReadyToSend(this.plugin.getSetupState())) {
+		if (!stored) {
+			if (this.plugin.isFreshInstall() && !this.plugin.settings.firstRunCompletedAt) {
+				this.setup.provider = "openai-compatible";
+				this.setup.flowOpen = true;
+			}
 			return;
 		}
 		const provider = stored.provider;

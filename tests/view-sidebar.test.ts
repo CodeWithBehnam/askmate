@@ -192,6 +192,7 @@ async function createHarness(options: { configured?: boolean; layout?: "compact"
 		saveSettings: () => Promise.resolve(),
 		refreshOpenAskMateViews: () => undefined,
 		refreshSettingTab: () => undefined,
+		isFreshInstall: () => false,
 		getSelectedProviderModelRef: () => ({ providerId: "openai", providerName: "OpenAI", model: models.name, capability: "text" }),
 		getChatProviderModelRef: () => ({ providerId: "openai", providerName: "OpenAI", model: models.name, capability: "text" }),
 		getChatProviderId: () => "openai",
@@ -354,6 +355,21 @@ describe("the Connect card", () => {
 		const stored = harness.fake.app.loadLocalStorage("askmate-setup-draft") as Record<string, unknown> | null;
 		expect(stored).toEqual({ provider: "openai-compatible", baseUrl: expect.any(String), model: "qwen2.5:7b" });
 		expect(JSON.stringify(stored)).not.toContain("apiKey");
+	});
+
+	test("D-03: a genuine first install starts the card on Local, and the model chip names no provider yet", async () => {
+		const harness = await start({ configured: false });
+		Object.assign(harness.plugin, { isFreshInstall: () => true });
+		const view = harness.view as unknown as { restoreSetupDraft(): void; refreshSetupCard(): void };
+		view.restoreSetupDraft();
+		view.refreshSetupCard();
+		expect(harness.root.querySelector(".askmate-setup-provider.is-selected")?.textContent).toContain("Local");
+		expect(harness.root.querySelector(".askmate-composer-model")?.textContent).toBe("No provider connected yet");
+	});
+
+	test("D-03: an existing install that is not set up still starts the card on its chat provider", async () => {
+		const harness = await start({ configured: false });
+		expect(harness.root.querySelector(".askmate-setup-provider.is-selected")?.textContent).toContain("OpenAI");
 	});
 
 	test("does not appear for someone who is already set up", async () => {
