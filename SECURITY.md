@@ -58,6 +58,6 @@ These are the protections a report would bypass. They reduce risk; they are not 
 
 ## Response Expectations
 
-The maintainer will triage reports as time permits. Valid reports should receive an initial response as soon as practical, with follow-up questions if more detail is needed.
+The maintainer aims to acknowledge a report within 7 days and, for a confirmed issue, to share a fix or a plan within 30 days, with follow-up questions if more detail is needed.
 
 Please give the maintainer reasonable time to investigate before public disclosure.

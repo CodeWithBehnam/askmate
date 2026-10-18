@@ -16,7 +16,7 @@ Start with `/test` in the sidebar or the `Test provider connection` command. It 
 | My model is not listed | The list is cached from the last refresh. | Press `Refresh models` after adding a key, or type the model ID. |
 | Image generation fails | `gpt-image-2` needs an OpenAI API account with access, and OpenAI may require organisation verification. | Check the OpenAI dashboard and try again. |
 | AskMate asks for an OpenAI key when I press the Image button | Images are always made with OpenAI, so a chat provider such as Anthropic does not cover them. | Open the `Connection` page and pick a key under `OpenAI image API key`, in the `Images` group. |
-| The key is missing on another computer | Keys are stored per device in Obsidian SecretStorage and do not sync. | Paste the key again on that computer. |
+| The key is missing on another computer | Keys are stored per device in Obsidian's secret storage (your system keychain) and do not sync. | Paste the key again on that computer. |
 | A new host needs approval | A stored key is about to go to a Local, Azure OpenAI or Azure AI Foundry address it has not been sent to from this device. It also happens once on the first Azure OpenAI request after upgrading. | Check that the address is yours, then approve it. |
 
 ## Answers and context

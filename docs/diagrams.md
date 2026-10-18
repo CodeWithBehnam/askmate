@@ -13,7 +13,7 @@ Any of these starts the diagram path:
 - Run the `Draw a diagram of the current note` command.
 - Name the built-in skill with `@skill:mermaid-diagrams`.
 
-Wording that asks for a diagram, such as `draw a state machine` or `draw a roadmap`, goes to the diagram path and never to paid image generation. A request for a picture, such as `/image` or `draw me a cat`, still goes to image generation. The setting `Treat "draw me a..." as an image request` on the `Sidebar and output` page turns the picture wording off, and then only `/image` and the Image button make images.
+Wording that asks for a diagram, such as `draw a state machine` or `draw a roadmap`, goes to the diagram path and never to paid image generation. A request for a picture, such as `/image` or `draw me a cat`, goes to image generation with OpenAI's paid image API. Picture wording like `draw me a cat` counts only when `Treat "draw me a..." as an image request` on the `Sidebar and output` page is on; it is off on new installs because each image costs money, and then only `/image` and the Image button make images.
 
 ## What you get
 

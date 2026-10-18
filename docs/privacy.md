@@ -10,7 +10,7 @@ AskMate has no server and no account, and it collects no telemetry. It talks onl
 | Notes it reads | The selection or the current note by default. Other notes only when you mention them or turn on a context source. Skill files in your skills folder (`AskMate/Skills` by default) are read on your device, and a skill's text is sent to the model only when that skill is used. |
 | Notes it writes | Only after you choose Apply, New note, Insert or a result note, through the checks in [apply](apply.md). AskMate never writes MCP tool output to your vault. |
 | Clipboard | Write only. `Copy` puts a reply on the clipboard. AskMate never reads the clipboard. |
-| Secrets | API keys and MCP tokens live in Obsidian SecretStorage. Settings hold the secret's name, not its value. |
+| Secrets | API keys and MCP tokens live in Obsidian's secret storage on this device (your system keychain). Settings hold the secret's name, not its value. |
 | Local data | `data.json` in the plugin folder, described below. |
 | Cost | The provider bills you directly. Image generation needs a paid OpenAI account. AskMate itself is free. AskMate always asks before sending a request estimated at 150,000 input tokens or more. |
 | Child processes | Only if you add a local MCP server, and only on desktop. See below. |

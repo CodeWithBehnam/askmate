@@ -18,7 +18,7 @@ AskMate is an AI sidebar for Obsidian. It answers questions about the note you a
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center">No telemetry · No AskMate server · Keys stay in Obsidian SecretStorage · Nothing in your notes changes until you approve · MIT licence · Desktop, Obsidian 1.13.0 or newer</p>
+<p align="center">No telemetry · No AskMate server · Keys stay in Obsidian's secret storage (your system keychain) · Nothing in your notes changes until you approve · MIT licence · Desktop, Obsidian 1.13.0 or newer</p>
 
 ## What you get
 
@@ -36,7 +36,7 @@ AskMate is an AI sidebar for Obsidian. It answers questions about the note you a
 ## Quick start
 
 1. **Install.** In Obsidian open Settings, Community plugins, Browse, search for AskMate, then Install and Enable. A notice offers a Set up button.
-2. **Connect.** In the AskMate sidebar choose OpenAI, Anthropic, Gemini or Local, paste your API key and press Connect. The key goes into Obsidian SecretStorage, a test runs, and a failure is explained in plain words.
+2. **Connect.** The AskMate sidebar opens on Local. Using a local model such as Ollama? Check the address, leave the model empty to use one your server has, and press Connect; no key is needed. For a cloud provider choose OpenAI, Anthropic or Gemini, paste your API key and press Connect. The key goes into Obsidian's secret storage on this device (your system keychain), a test runs, and a failure is explained in plain words.
 3. **Ask.** Open a note and press a starter chip: Summarise this note, Make a diagram or Find gaps.
 
 AskMate is free. You pay your provider directly under its own pricing, or run a local model at no charge. Image generation needs a paid OpenAI API account. Your provider's billing page is the authority on what you are charged.
@@ -90,7 +90,7 @@ A local server is a child process with your user's permissions, so add only comm
 | Notes it reads | The selection or the open note. Other notes only through `@` mentions or context sources you turn on. `/context` shows what the next request holds. Skill files in your skills folder (`AskMate/Skills` by default) are read on your device, and a skill's text is sent to the model only when that skill is used. |
 | Notes it writes | Only through Apply, New note or Insert, after the checks and the diff. With no selection, Apply appends generated output to the captured note instead of overwriting it. The Apply approval mode is the `Ask before changing my notes` setting: `Every time` (the default), `When replacing a whole note or a section`, or `Yes or no, only when replacing the whole note`. The first always shows a diff, the second shows one for a whole note or a section, and the last asks only yes or no before a whole note is replaced and writes smaller edits without asking. Replacing the whole note always asks. |
 | Clipboard | Write only, when you press Copy. |
-| Secrets | API keys and MCP tokens in Obsidian SecretStorage. Settings keep only names. |
+| Secrets | API keys and MCP tokens in Obsidian's secret storage on this device (SecretStorage, your system keychain). Settings keep only names. |
 | Local data | `data.json` in the plugin folder: settings, approved skill hashes, MCP definitions, saved conversations (up to 50 threads of 200 messages, 2 MiB in all with the oldest first, and a saved reply cut at 50,000 characters; when a load has to cut anything, AskMate shows a notice and keeps a `data.json.before-trim-` copy), note history (12 turns per note, 200 turns across all notes), the review queue and token counts. It syncs if you sync your configuration folder, and then you repeat a deletion on each device. |
 | Cost | Billed by your provider. Usage budgets can warn or block large requests, and AskMate always asks before sending one estimated at 150,000 input tokens or more. |
 | MCP and child processes | Local servers run as a child process on desktop only, after you trust them, with your account's permissions: they can read and write any file you can, including your vault. Remote servers see the arguments of calls you approve. |

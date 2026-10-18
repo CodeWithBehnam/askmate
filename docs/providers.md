@@ -29,7 +29,7 @@ Image generation always goes to the OpenAI Images API with `gpt-image-2`, whiche
 
 ## Connecting
 
-The sidebar Connect card offers OpenAI, Anthropic, Gemini and Local. Choose one, paste the key and press `Connect`. The key is saved with Obsidian SecretStorage, and AskMate runs a connection test straight away. Failures are explained in plain language with one button for the next step, such as `Update key`, `Choose another model` or `Check the address`. Keys are stored per device, so paste the key again on each computer.
+The sidebar Connect card offers OpenAI, Anthropic, Gemini and Local. Choose one, paste the key and press `Connect`. On a first install the card opens on Local, which needs no key. The key is saved in Obsidian's secret storage on this device (your system keychain), and AskMate runs a connection test straight away. Failures are explained in plain language with one button for the next step, such as `Update key`, `Choose another model` or `Check the address`. Keys are stored per device, so paste the key again on each computer.
 
 Other providers (Azure OpenAI, Azure AI Foundry, OpenRouter) are set up on the `Connection` settings page. Its `Status` row lists what is still missing. `Test connection` checks that the provider answers and lists the selected model; for Azure it sends a short request that may use a few tokens. The refresh button beside the model list (`Refresh models`) lists the models your key can use. If your model is not listed, turn on `Show more options` on the `Connection` page and type its ID under `Model ID`.
 
