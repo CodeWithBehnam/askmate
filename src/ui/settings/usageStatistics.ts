@@ -301,7 +301,8 @@ function renderTokenRunChart(parent: HTMLElement, records: TokenUsageRecord[]): 
 function renderRecentUsageTable(parent: HTMLElement, records: TokenUsageRecord[]): void {
 	const card = parent.createDiv({ cls: "askmate-usage-table-card" });
 	new Setting(card).setName("Recent operations").setHeading();
-	const wrapper = card.createDiv({ cls: "askmate-usage-table-wrapper" });
+	// The table scrolls sideways, so its wrapper takes focus and a name: keyboard users can then scroll it (WCAG 2.1.1).
+	const wrapper = card.createDiv({ cls: "askmate-usage-table-wrapper", attr: { role: "region", "aria-label": "Recent operations", tabindex: "0" } });
 	const table = wrapper.createEl("table", { cls: "askmate-usage-table" });
 	const thead = table.createEl("thead");
 	const headerRow = thead.createEl("tr");
