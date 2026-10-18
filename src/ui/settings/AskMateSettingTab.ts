@@ -199,6 +199,9 @@ class AskMateSettingsPage extends SettingPage {
 	}
 }
 
+/** Gives each field message its own id, so the field it belongs to can name it as its description. */
+let feedbackCounter = 0;
+
 export class AskMateSettingTab extends PluginSettingTab implements SettingsPageHost {
 	readonly plugin: AskMatePlugin;
 	// State of the Connection page that must outlive a redraw: the last connection test and whether "More options" is open.
@@ -404,7 +407,13 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			existing.removeClass("is-error", "is-warning", "is-success", "is-info");
 			return existing;
 		}
-		return setting.infoEl.createDiv({ cls: "askmate-settings-feedback", attr: { role: "status" } });
+		feedbackCounter += 1;
+		const feedbackEl = setting.infoEl.createDiv({ cls: "askmate-settings-feedback", attr: { role: "status", id: `askmate-settings-feedback-${feedbackCounter}` } });
+		// The row's fields name the message as their description, so a screen reader reads it with the field, not only once.
+		for (const field of Array.from(setting.controlEl.querySelectorAll<HTMLElement>("input, textarea, select"))) {
+			field.setAttribute("aria-describedby", feedbackEl.id);
+		}
+		return feedbackEl;
 	}
 
 	// One line under the description for errors, results and corrections alike, so the control never shifts.
@@ -415,6 +424,14 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		feedbackEl.toggleClass("is-warning", message !== null && kind === "warning");
 		feedbackEl.toggleClass("is-success", message !== null && kind === "success");
 		feedbackEl.toggleClass("is-info", message !== null && kind === "info");
+		for (const field of Array.from(setting.controlEl.querySelectorAll<HTMLElement>("input, textarea, select"))) {
+			field.setAttribute("aria-describedby", feedbackEl.id);
+			if (message !== null && kind === "error") {
+				field.setAttribute("aria-invalid", "true");
+			} else {
+				field.removeAttribute("aria-invalid");
+			}
+		}
 	}
 
 	private bindIntegerInput(setting: Setting, text: TextComponent, options: IntegerInputOptions): void {

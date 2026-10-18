@@ -1649,6 +1649,11 @@ describe("server page", () => {
 		await tick();
 		const messages = Array.from(container.querySelectorAll(".askmate-settings-feedback")).map((el) => el.textContent ?? "");
 		expect(messages.some((message) => message.includes("letters, digits and hyphens"))).toBe(true);
+		// D-11: the field names its error message and is marked invalid, so a screen reader reads them together.
+		const nameField = field(container, "header name");
+		const describedBy = nameField.getAttribute("aria-describedby") ?? "";
+		expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toContain("letters, digits and hyphens");
+		expect(nameField.getAttribute("aria-invalid")).toBe("true");
 		expect((harness.settings.mcp.servers[0] as Extract<McpServerConfig, { transport: "http" }>).headers).toEqual({});
 	});
 
