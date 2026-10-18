@@ -269,14 +269,21 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 
 	/**
 	 * Obsidian focuses the toggle's container label, not the hidden checkbox inside it, and gives it no role or state,
-	 * so the container carries the name, the switch role and aria-checked. The value is set before the handler is attached
-	 * because ToggleComponent.setValue fires onChange whenever the value changes.
+	 * so the container carries the name, the switch role and aria-checked. The checkbox inside is taken out of rendering:
+	 * a focusable control nested in a switch is announced twice and fails WCAG 4.1.2 (axe nested-interactive), and a
+	 * negative tabindex does not stop assistive technology reaching it. Clicks on the label still reach it. The value is set
+	 * before the handler is attached because ToggleComponent.setValue fires onChange whenever the value changes.
 	 */
 	setupToggle(toggle: ToggleComponent, label: string, value: boolean, onChange: (value: boolean) => void | Promise<void>): void {
 		const switchEl = toggle.toggleEl;
 		switchEl.setAttribute("role", "switch");
 		switchEl.setAttribute("aria-label", label);
-		switchEl.querySelector("input")?.setAttribute("aria-hidden", "true");
+		const input = switchEl.querySelector("input");
+		if (input) {
+			input.setAttribute("aria-hidden", "true");
+			input.tabIndex = -1;
+			input.addClass("askmate-switch-input");
+		}
 		toggle.setValue(value);
 		switchEl.setAttribute("aria-checked", String(value));
 		toggle.onChange(async (next) => {

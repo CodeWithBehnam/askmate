@@ -887,6 +887,8 @@ export class ToggleComponent extends ValueComponent<boolean> {
 	constructor(containerEl: HTMLElement) {
 		super(false);
 		this.toggleEl = containerEl.createDiv({ cls: "checkbox-container" });
+		// Obsidian nests a focusable checkbox in the container.
+		this.toggleEl.createEl("input", { attr: { type: "checkbox", tabindex: "0" } });
 	}
 }
 

@@ -1753,6 +1753,13 @@ describe("server page", () => {
 		const forTool = (title: string): HTMLElement => switches.find((el) => el.getAttribute("aria-label") === `Let the model use ${title}`) as HTMLElement;
 		expect(forTool("Read file").getAttribute("aria-checked")).toBe("true");
 		expect(forTool("delete_file").getAttribute("aria-checked")).toBe("false");
+		// QA-04: the switch is the only tab stop; the checkbox inside it is hidden and out of the tab order.
+		for (const switchEl of switches) {
+			const input = switchEl.querySelector("input");
+			expect(input?.getAttribute("aria-hidden")).toBe("true");
+			expect(input?.tabIndex).toBe(-1);
+			expect(input?.classList.contains("askmate-switch-input")).toBe(true);
+		}
 	});
 
 	test("turning a tool off saves it and asks for its focus back after the list redraws", async () => {

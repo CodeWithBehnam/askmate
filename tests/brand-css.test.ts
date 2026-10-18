@@ -373,6 +373,10 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-composer", "max-height")).toBe("35%");
 	});
 
+	test("QA-04: the checkbox inside a settings switch is not rendered, so it is not a second, nested control", () => {
+		expect(declarationOf(".checkbox-container > input.askmate-switch-input", "display")).toBe("none");
+	});
+
 	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
 		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
 		expect(forced).toHaveLength(1);

@@ -2074,6 +2074,11 @@ body.theme-dark {
 	}
 }
 
+/* The switch role is on the toggle's label; the checkbox it wraps must not be a second, nested control. */
+.checkbox-container > input.askmate-switch-input {
+	display: none;
+}
+
 /* ---------- Console layout: keyboard-first, monospaced, one line per event ---------- */
 .askmate-console-completions,
 .askmate-console-status,
