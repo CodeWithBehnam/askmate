@@ -411,6 +411,7 @@ export class AskMateView extends ItemView {
 		transcriptLabel.id = `${this.consoleIdPrefix}-transcript-label`;
 		this.messagesEl.setAttribute("aria-labelledby", transcriptLabel.id);
 		this.messagesEl.tabIndex = 0;
+		this.registerDomEvent(container, "keydown", (event) => this.announceEscapeToNote(event));
 		this.statusEl = container.createDiv({ cls: "askmate-visually-hidden" });
 		this.statusEl.setAttribute("role", "status");
 		this.statusEl.setAttribute("aria-live", "polite");
@@ -3594,12 +3595,38 @@ export class AskMateView extends ItemView {
 		modeButton?.classList.toggle("is-apply", mode === "apply");
 	}
 
-	/** Returns true when the composer handled the key: a suggestion in any layout, or history and stop in the Console. */
+	/** Returns true when the composer handled the key: a suggestion or stopping a request in any layout, or history in the Console. */
 	private handleComposerKeydown(event: KeyboardEvent): boolean {
 		if (event.isComposing) {
 			return false;
 		}
-		return this.handleCompletionKeydown(event) || (this.isConsoleLayout() && this.handleConsoleKeydown(event));
+		if (this.handleCompletionKeydown(event)) {
+			return true;
+		}
+		// Escape stops a running request in every layout, as the Stop button does, rather than leaving the sidebar.
+		if (event.key === "Escape" && this.activeRun) {
+			event.preventDefault();
+			this.stopActiveRun();
+			return true;
+		}
+		return this.isConsoleLayout() && this.handleConsoleKeydown(event);
+	}
+
+	/**
+	 * Obsidian answers an Escape that nothing in the sidebar used by putting the keyboard in the note. That is easy to miss
+	 * without sight of the screen, and the next keys then edit the note, so the move is announced.
+	 */
+	private announceEscapeToNote(event: KeyboardEvent): void {
+		if (event.key !== "Escape" || event.defaultPrevented || !this.rootEl) {
+			return;
+		}
+		const root = this.rootEl;
+		window.setTimeout(() => {
+			const focused = root.doc.activeElement;
+			if (!this.isClosed && focused && !root.contains(focused) && focused.closest(".cm-editor")) {
+				this.announcer?.say("Left AskMate. Typing now goes into the note.");
+			}
+		}, 0);
 	}
 
 	/** Moves through, accepts or closes the suggestion list. The list is the same in every layout. */

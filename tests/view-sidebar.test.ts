@@ -805,6 +805,23 @@ describe("a question and its answer", () => {
 		expect(stored?.messages[0]?.text).toBe("Save me");
 	});
 
+	test("D-11: Escape in the question box stops a running request in the Compact layout too", async () => {
+		const harness = await start();
+		const signals: AbortSignal[] = [];
+		harness.run.handler = (_request, runOptions) => new Promise((_resolve, reject) => {
+			if (runOptions.abortSignal) {
+				signals.push(runOptions.abortSignal);
+				runOptions.abortSignal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+			}
+		});
+		ask(harness, "Long running");
+		harness.root.querySelector<HTMLButtonElement>(".askmate-send-button")?.click();
+		await settle();
+		fireDomEvent(box(harness), "keydown", { key: "Escape" });
+		await settle();
+		expect(signals[0]?.aborted).toBe(true);
+	});
+
 	test("a question whose answer has not arrived is not saved on its own", async () => {
 		const harness = await start();
 		const pending: { release: (() => void) | null } = { release: null };
