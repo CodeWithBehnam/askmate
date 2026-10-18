@@ -82,7 +82,7 @@ export interface SetupCardModel {
 }
 
 export const SETUP_PRIVACY_LINE =
-	"AskMate sends your question, the note or selection you ask about, and recent turns of this conversation to the provider you choose, plus any extra context or skills you turn on. It sends nothing anywhere else and has no telemetry. A cloud provider charges you for what you send; a local model keeps everything on your computer. Conversations are saved in this vault's plugin data (data.json), and you can delete them in settings.";
+	"AskMate sends your question, the note or selection you ask about, and recent turns of this conversation to the provider you choose, plus any extra context or skills you turn on. Pictures from /image and the Image button go to OpenAI, and tools you allow send their arguments to the servers you trust. AskMate has no telemetry. A cloud provider charges you for what you send. Conversations are saved in this vault's plugin data (data.json), and you can delete them in settings.";
 
 const OTHER_PROVIDER_IDS: readonly TextProviderId[] = ["azure-openai", "azure-ai", "openrouter"];
 const NO_NOTE_STARTERS_HINT = "Open a note, then pick a starter. They work on the note you have open.";

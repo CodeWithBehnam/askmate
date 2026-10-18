@@ -44,20 +44,23 @@ export type FolderPathInputResult =
 /** The zero of each digit set people commonly type: Arabic-Indic, Persian, Devanagari and full-width. */
 const DIGIT_ZEROS = [0x0660, 0x06f0, 0x0966, 0xff10] as const;
 
-/** Writes other digit sets as ASCII digits and drops thousands separators, so "۱٬۲۰۰" and "1,200" both read as 1200. */
+/**
+ * Writes other digit sets as ASCII digits, and drops thousands separators only where they group digits in threes, so
+ * "۱٬۲۰۰" and "1,200" read as 1200 while "1,5" is not mistaken for 15.
+ */
 export function toAsciiDigits(text: string): string {
-	return text
-		.replace(/[\u0660-\u0669\u06f0-\u06f9\u0966-\u096f\uff10-\uff19]/g, (digit) => {
-			const code = digit.charCodeAt(0);
-			const zero = DIGIT_ZEROS.find((start) => code >= start && code <= start + 9) ?? 0x30;
-			return String(code - zero);
-		})
-		.replace(/[,\u066c\u2019' ]/g, "");
+	const ascii = text.replace(/[\u0660-\u0669\u06f0-\u06f9\u0966-\u096f\uff10-\uff19]/g, (digit) => {
+		const code = digit.charCodeAt(0);
+		const zero = DIGIT_ZEROS.find((start) => code >= start && code <= start + 9) ?? 0x30;
+		return String(code - zero);
+	});
+	return /^-?\d{1,3}([,\u066c\u2019' ])\d{3}(?:\1\d{3})*$/.test(ascii) ? ascii.replace(/[,\u066c\u2019' ]/g, "") : ascii;
 }
 
 export function resolveIntegerInput(raw: string, bounds: IntegerBounds): IntegerInputResult {
 	const trimmed = toAsciiDigits(raw.trim());
-	const numeric = trimmed ? Number(trimmed) : NaN;
+	// A plain decimal number only: Number() would also take "0x10" and "1e3".
+	const numeric = /^-?\d+(?:\.\d+)?$/.test(trimmed) ? Number(trimmed) : NaN;
 	if (!Number.isFinite(numeric)) {
 		return { kind: "ignored" };
 	}

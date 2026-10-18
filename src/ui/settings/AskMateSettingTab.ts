@@ -738,7 +738,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 			option.maxCharacters === null ? "Whole note" : `Up to ${option.maxCharacters.toLocaleString("en-GB")} characters`
 		]));
 		return [
-			this.noteDefinition("Your question and the context you choose go to your AI provider and nowhere else. AskMate has no telemetry. A cloud provider charges you for what you send; with Local or self-hosted, nothing leaves your computer or your own server. Saved conversations and note history are stored in this plugin's data file in your vault."),
+			this.noteDefinition("Your question and the context you choose go to your AI provider. Pictures from /image and the Image button go to OpenAI, and tools you allow send their arguments to the MCP servers you trust. AskMate has no telemetry and no server of its own. A cloud provider charges you for what you send; with Local or self-hosted, requests go to your own computer or server. Saved conversations and note history are stored in this plugin's data file in your vault."),
 			{
 				type: "group",
 				heading: "Sent with each question",
@@ -838,6 +838,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		if (!confirmed) {
 			return;
 		}
+		this.plugin.forgetPendingQuestion();
 		// The store reports whether the write reached disk, so the message never claims a deletion that was rolled back.
 		const cleared = await this.plugin.threads.clearAll();
 		if (cleared) {
@@ -859,6 +860,7 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		if (!confirmed) {
 			return;
 		}
+		this.plugin.forgetPendingQuestion();
 		const otherStores = await this.clearHistoryAndReviews();
 		const conversations = await this.plugin.threads.clearAll();
 		const outcome = describeStoredTextDeletion({ conversations, otherStores });

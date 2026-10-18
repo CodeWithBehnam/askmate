@@ -18,6 +18,7 @@ import {
 	type ModelChoice
 } from "./modelSwitch";
 import { ASKMATE_ICON_ID, TEXT_PROVIDER_IDS, TEXT_PROVIDER_LABELS } from "../../settings/constants";
+import { PENDING_QUESTION_KEY, SETUP_DRAFT_KEY } from "../../shared/localStorageKeys";
 import type { TextProviderId } from "../../shared/types";
 import {
 	ASKMATE_VIEW_TYPE,
@@ -218,8 +219,6 @@ const MAX_CACHED_DIAGRAMS = 24;
  * Vault-scoped local storage keys (never synced). A reload or crash ends the page before a run can tidy up, so what the
  * person typed is kept here until it is answered or used: a sent question, and the Connect card's choices without the key.
  */
-const PENDING_QUESTION_KEY = "askmate-pending-question";
-const SETUP_DRAFT_KEY = "askmate-setup-draft";
 /** A question older than this is not brought back: the person has moved on. */
 const PENDING_QUESTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -1836,10 +1835,13 @@ export class AskMateView extends ItemView {
 			}
 
 			this.setRunPhase(run, "generating");
+			// What the person typed, read before onSent empties the box: a reload brings back their words, such as "/image a
+			// fox", not the parsed request. Starters and workflow buttons type nothing, so they are not brought back.
+			const typed = spec.onSent && !spec.reuse ? this.questionEl.value.trim() : "";
 			// The question has been built and accepted: now it leaves the composer, and a note or apply mode is spent.
 			spec.onSent?.();
-			if (isUserPrompt && !spec.reuse) {
-				this.app.saveLocalStorage(PENDING_QUESTION_KEY, { question, at: Date.now() } satisfies PendingQuestion);
+			if (typed && this.plugin.settings.saveConversations) {
+				this.app.saveLocalStorage(PENDING_QUESTION_KEY, { question: typed, at: Date.now() } satisfies PendingQuestion);
 			}
 			// Once a provider works and a question is on its way, the welcome card has done its job.
 			if ((this.setup.flowOpen || this.setup.welcomeOpen) && isReadyToSend(this.readSetupStage())) {
@@ -4289,8 +4291,9 @@ export class AskMateView extends ItemView {
 				this.setup.provider = id;
 				this.setup.flowOpen = true;
 				this.setup.localError = null;
-				this.saveSetupDraft(id, this.setup.draft);
 				this.refreshSetupCard();
+				// After the redraw the draft belongs to the new chip, so the last chip's address is not saved under this one.
+				this.saveSetupDraft(id, this.setup.draft);
 				this.setupHandle?.focusKey();
 			},
 			onConnect: (id, draft) => {
@@ -4373,6 +4376,7 @@ export class AskMateView extends ItemView {
 	}
 
 	private closeSetupFlow(): void {
+		this.app.saveLocalStorage(SETUP_DRAFT_KEY, null);
 		this.setup.provider = null;
 		this.setup.flowOpen = false;
 		this.setup.welcomeOpen = false;
@@ -4537,6 +4541,8 @@ export class AskMateView extends ItemView {
 	 */
 	private restoreSetupDraft(): void {
 		if (isReadyToSend(this.plugin.getSetupState())) {
+			// Set up somewhere else (Settings, another device): the half-done card is no longer news.
+			this.app.saveLocalStorage(SETUP_DRAFT_KEY, null);
 			return;
 		}
 		const stored = readStoredSetupDraft(this.app.loadLocalStorage(SETUP_DRAFT_KEY));
@@ -4558,7 +4564,7 @@ export class AskMateView extends ItemView {
 	private restorePendingQuestion(): void {
 		const question = readPendingQuestion(this.app.loadLocalStorage(PENDING_QUESTION_KEY), Date.now());
 		this.app.saveLocalStorage(PENDING_QUESTION_KEY, null);
-		if (!question || this.questionEl.value.trim() !== "") {
+		if (!question || !this.plugin.settings.saveConversations || this.questionEl.value.trim() !== "") {
 			return;
 		}
 		this.questionEl.value = question;

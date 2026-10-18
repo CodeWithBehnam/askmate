@@ -904,6 +904,27 @@ describe("a question and its answer", () => {
 		expect(next.fake.app.loadLocalStorage("askmate-pending-question")).toBeNull();
 	});
 
+	test("QA-10: nothing is kept while Remember conversations is off", async () => {
+		const harness = await start({ saved: { saveConversations: false } });
+		harness.run.handler = () => new Promise(() => undefined);
+		ask(harness, "Keep this private");
+		await send(harness);
+		expect(harness.fake.app.loadLocalStorage("askmate-pending-question")).toBeNull();
+	});
+
+	test("QA-10: an old question, or one that would replace what is already typed, is not brought back", async () => {
+		const harness = await start();
+		const view = harness.view as unknown as { restorePendingQuestion(): void };
+		harness.fake.app.saveLocalStorage("askmate-pending-question", { question: "From yesterday", at: Date.now() - 25 * 60 * 60 * 1000 });
+		view.restorePendingQuestion();
+		expect(box(harness).value).toBe("");
+		ask(harness, "Already typing");
+		harness.fake.app.saveLocalStorage("askmate-pending-question", { question: "Earlier question", at: Date.now() });
+		view.restorePendingQuestion();
+		expect(box(harness).value).toBe("Already typing");
+		expect(harness.fake.app.loadLocalStorage("askmate-pending-question")).toBeNull();
+	});
+
 	test("QA-10: an answered question is forgotten, so nothing comes back after a normal answer", async () => {
 		const harness = await start();
 		ask(harness, "Answer me");

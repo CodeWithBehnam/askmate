@@ -236,7 +236,7 @@ describe("onload", () => {
 		const boot = async (model: string): Promise<TestPlugin> => {
 			const fake = createFakeApp();
 			fake.app.saveLocalStorage("askmate-failed-setup-test", {
-				test: { status: "failed", providerId: "openai-compatible", model: "junk model", copy: { category: "model-not-found", message: "Not found", detail: null, action: { kind: "choose-model", label: "Choose another model" } } },
+				test: { status: "failed", providerId: "openai-compatible", model: "junk model", copy: { category: "not-found", message: "Not found", detail: null, action: { kind: "choose-model", label: "Choose another model" } } },
 				baseUrl: "http://localhost:11434/v1"
 			});
 			const plugin = new AskMatePlugin(fake.app as never, { id: "askmate", name: "AskMate", version: "1.12.0", dir: ".obsidian/plugins/askmate" } as never) as TestPlugin;
@@ -247,6 +247,20 @@ describe("onload", () => {
 		};
 		expect((await boot("junk model")).getSetupState().kind).toBe("test-failed");
 		expect((await boot("llama3.2:3b")).getSetupState().kind).not.toBe("test-failed");
+	});
+
+	test("D-11: a failure a restart can fix, such as a server that was down, is not remembered", async () => {
+		const fake = createFakeApp();
+		fake.app.saveLocalStorage("askmate-failed-setup-test", {
+			test: { status: "failed", providerId: "openai-compatible", model: "llama3.2:3b", copy: { category: "local-unreachable", message: "Down", detail: "", action: { kind: "start-server", label: "Start the server" } } },
+			baseUrl: "http://localhost:11434/v1"
+		});
+		const plugin = new AskMatePlugin(fake.app as never, { id: "askmate", name: "AskMate", version: "1.12.0", dir: ".obsidian/plugins/askmate" } as never) as TestPlugin;
+		plugin.storedData = { selectedTextProvider: "openai-compatible", providers: { "openai-compatible": { baseUrl: "http://localhost:11434/v1", model: "llama3.2:3b" } } };
+		plugin.obsidianApi = { loadMermaid: () => Promise.resolve(null), parseYaml: (text) => Bun.YAML.parse(text) };
+		await plugin.onload();
+		expect(plugin.getSetupState().kind).not.toBe("test-failed");
+		expect(fake.app.loadLocalStorage("askmate-failed-setup-test")).toBeNull();
 	});
 
 	test("an existing install gets no setup notice and keeps its layout", async () => {

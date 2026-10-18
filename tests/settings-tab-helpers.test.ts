@@ -12,6 +12,10 @@ describe("resolveIntegerInput", () => {
 		expect(resolveIntegerInput("５０", wide)).toEqual({ kind: "accepted", value: 50, clamped: false });
 		expect(resolveIntegerInput("۱٬۲۰۰", wide)).toEqual({ kind: "accepted", value: 1200, clamped: false });
 		expect(resolveIntegerInput("1,200", wide)).toEqual({ kind: "accepted", value: 1200, clamped: false });
+		// Not a thousands grouping, and not a plain decimal number: ignored rather than misread.
+		expect(resolveIntegerInput("1,5", wide)).toEqual({ kind: "ignored" });
+		expect(resolveIntegerInput("0x10", wide)).toEqual({ kind: "ignored" });
+		expect(resolveIntegerInput("1e3", wide)).toEqual({ kind: "ignored" });
 	});
 
 	test("ignores an empty field instead of saving 0 or the minimum", () => {

@@ -328,6 +328,7 @@ function makeHarness(extrasFactory: (settings: AskMateSettings, fake: FakeApp) =
 			syncObjectInPlace(settings, normalizeAskMateSettings(settings, "save"));
 		},
 		refreshOpenAskMateViews: (): void => undefined,
+		forgetPendingQuestion: (): void => undefined,
 		getErrorMessage: (error: unknown): string => (error instanceof Error ? error.message : String(error)),
 		getSelectedTextProviderId: () => settings.providerRoles.chatProviderId,
 		getProviderSettings: (id: keyof AskMateSettings["providers"]) => settings.providers[id],

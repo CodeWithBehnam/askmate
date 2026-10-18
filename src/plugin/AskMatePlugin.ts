@@ -1,3 +1,4 @@
+import { FAILED_SETUP_TEST_KEY, PENDING_QUESTION_KEY } from "../shared/localStorageKeys";
 import { Editor, MarkdownView, Menu, Notice, Platform, Plugin, TAbstractFile, TFile, TFolder, addIcon, getLanguage, requestUrl, type WorkspaceLeaf } from "obsidian";
 import {
 	ApiEndpoint,
@@ -160,8 +161,8 @@ const MODEL_DERIVED_TEMPLATE_KEYS = ["title", "request", "response", "imagePromp
 const FENCE_CLOSED_TEMPLATE_KEYS = ["request", "response", "selectedText"] as const;
 const KEY_APPROVAL_PREFIX = "askmate-key-approval:";
 const NOTICE_SECONDS = 1000;
-/** Vault-scoped local storage (not synced): the last failed connection test, so it survives a restart. */
-const FAILED_SETUP_TEST_KEY = "askmate-failed-setup-test";
+/** Failures caused by a setting, which a restart cannot fix. A server that was down or slow may be up after a restart. */
+const SETTING_FAILURES: ReadonlySet<string> = new Set(["auth", "forbidden", "not-found", "invalid-address"]);
 
 const SETTINGS_TAB_ID = "askmate";
 
@@ -867,20 +868,28 @@ export class AskMatePlugin extends Plugin {
 	}
 
 	/**
-	 * Keeps a failed test in this vault's local storage (never synced), with the address it was run against, so a restart
-	 * does not turn "Connection failed" back into "Ready" while nothing changed. Any other result clears it.
+	 * Keeps a test that failed because of a setting (key, model or address) in this vault's local storage, never synced,
+	 * with the address it ran against, so a restart does not turn "Connection failed" back into "Ready" while nothing
+	 * changed. A network, server or rate-limit failure is not kept, and any other result clears it.
 	 */
 	private recordSetupTest(test: SetupTestState): void {
 		this.lastSetupTest = test;
-		const baseUrl = test.status === "failed" ? this.getProviderSettings(test.providerId).baseUrl : "";
-		this.app.saveLocalStorage(FAILED_SETUP_TEST_KEY, test.status === "failed" ? { test, baseUrl } : null);
+		const keep = test.status === "failed" && SETTING_FAILURES.has(test.copy.category);
+		const baseUrl = keep ? this.getProviderSettings(test.providerId).baseUrl : "";
+		this.app.saveLocalStorage(FAILED_SETUP_TEST_KEY, keep ? { test, baseUrl } : null);
+	}
+
+	/** Forgets a question kept for a reload, with the conversations it would have joined. */
+	forgetPendingQuestion(): void {
+		this.app.saveLocalStorage(PENDING_QUESTION_KEY, null);
 	}
 
 	/** A failed test from before a restart counts again only for the same provider, model and address. */
 	private restoreFailedSetupTest(): void {
 		const stored = this.app.loadLocalStorage(FAILED_SETUP_TEST_KEY) as { test?: SetupTestState; baseUrl?: string } | null;
 		const test = stored?.test;
-		if (!test || test.status !== "failed") {
+		if (!test || test.status !== "failed" || !SETTING_FAILURES.has(test.copy.category)) {
+			this.app.saveLocalStorage(FAILED_SETUP_TEST_KEY, null);
 			return;
 		}
 		const providerId = this.getSelectedTextProviderId();
