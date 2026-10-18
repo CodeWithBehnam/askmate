@@ -214,7 +214,9 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 		focusKey: () => {
 			keyInput?.focus();
 			// The card scrolls inside the transcript: after a provider is picked or a problem is shown, Connect and Open settings
-			// must be in view too, or a short sidebar hides the button the person needs next.
+			// must be in view too, or a short sidebar hides the button the person needs next. The title is brought in first,
+			// so when the card fits, both its title and its buttons show.
+			title.scrollIntoView({ block: "nearest" });
 			actions.scrollIntoView({ block: "nearest" });
 		},
 		focusStart: () => {

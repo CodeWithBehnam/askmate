@@ -41,8 +41,22 @@ export type FolderPathInputResult =
  * Empty or non-numeric input is ignored rather than saved as 0 or the minimum,
  * because 0 disables usage guardrails and a low minimum can shrink limits the user did not mean to change.
  */
+/** The zero of each digit set people commonly type: Arabic-Indic, Persian, Devanagari and full-width. */
+const DIGIT_ZEROS = [0x0660, 0x06f0, 0x0966, 0xff10] as const;
+
+/** Writes other digit sets as ASCII digits and drops thousands separators, so "۱٬۲۰۰" and "1,200" both read as 1200. */
+export function toAsciiDigits(text: string): string {
+	return text
+		.replace(/[\u0660-\u0669\u06f0-\u06f9\u0966-\u096f\uff10-\uff19]/g, (digit) => {
+			const code = digit.charCodeAt(0);
+			const zero = DIGIT_ZEROS.find((start) => code >= start && code <= start + 9) ?? 0x30;
+			return String(code - zero);
+		})
+		.replace(/[,\u066c\u2019' ]/g, "");
+}
+
 export function resolveIntegerInput(raw: string, bounds: IntegerBounds): IntegerInputResult {
-	const trimmed = raw.trim();
+	const trimmed = toAsciiDigits(raw.trim());
 	const numeric = trimmed ? Number(trimmed) : NaN;
 	if (!Number.isFinite(numeric)) {
 		return { kind: "ignored" };

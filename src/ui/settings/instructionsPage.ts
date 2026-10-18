@@ -32,6 +32,7 @@ export function renderInstructionsPage(
 	});
 
 	new Setting(containerEl)
+		.setClass("askmate-settings-stacked")
 		.setName("Instructions for every request")
 		.setDesc("For example: answer in British English, keep a formal tone, write for a first-year student, prefer bullet points.")
 		.addTextArea((text) => {
@@ -87,6 +88,7 @@ export function renderInstructionsPage(
 			});
 		new Setting(containerEl)
 			.setClass("askmate-folder-rule-text")
+			.setClass("askmate-settings-stacked")
 			.addTextArea((text) => {
 				text.inputEl.rows = 3;
 				text.inputEl.addClass("askmate-settings-prompt-input");

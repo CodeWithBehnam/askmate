@@ -1659,6 +1659,8 @@ body.theme-dark {
 	font-size: var(--font-ui-smaller);
 	gap: 5px;
 	line-height: 1.2;
+	/* The label is the click target for its checkbox; 24px meets the WCAG 2.2 minimum target size. */
+	min-height: 24px;
 }
 
 .askmate-request-preview-toggle input {
@@ -1818,6 +1820,16 @@ body.theme-dark {
 .askmate-settings-prompt-input {
 	min-height: 160px;
 	width: 100%;
+}
+
+/* A long instruction field gets the row's full width under its name, instead of a narrow column beside it. */
+.setting-item.askmate-settings-stacked {
+	flex-wrap: wrap;
+}
+
+.setting-item.askmate-settings-stacked .setting-item-control {
+	flex: 1 1 100%;
+	min-width: 0;
 }
 
 .askmate-settings-template-input {

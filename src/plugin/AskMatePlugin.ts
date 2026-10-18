@@ -160,6 +160,8 @@ const MODEL_DERIVED_TEMPLATE_KEYS = ["title", "request", "response", "imagePromp
 const FENCE_CLOSED_TEMPLATE_KEYS = ["request", "response", "selectedText"] as const;
 const KEY_APPROVAL_PREFIX = "askmate-key-approval:";
 const NOTICE_SECONDS = 1000;
+/** Vault-scoped local storage (not synced): the last failed connection test, so it survives a restart. */
+const FAILED_SETUP_TEST_KEY = "askmate-failed-setup-test";
 
 const SETTINGS_TAB_ID = "askmate";
 
@@ -261,6 +263,7 @@ export class AskMatePlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.restoreFailedSetupTest();
 		this.usageService = new UsageService({
 			getSettings: () => this.settings,
 			saveSettings: () => this.saveSettings()
@@ -858,9 +861,37 @@ export class AskMatePlugin extends Plugin {
 		this.app.secretStorage.setSecret(secretId, planned.plan.secret);
 		provider.apiKeySecretName = secretId;
 		this.approveKeyHost(providerId);
-		this.lastSetupTest = IDLE_SETUP_TEST;
+		this.recordSetupTest(IDLE_SETUP_TEST);
 		await this.saveSettings();
 		this.refreshOpenAskMateViews();
+	}
+
+	/**
+	 * Keeps a failed test in this vault's local storage (never synced), with the address it was run against, so a restart
+	 * does not turn "Connection failed" back into "Ready" while nothing changed. Any other result clears it.
+	 */
+	private recordSetupTest(test: SetupTestState): void {
+		this.lastSetupTest = test;
+		const baseUrl = test.status === "failed" ? this.getProviderSettings(test.providerId).baseUrl : "";
+		this.app.saveLocalStorage(FAILED_SETUP_TEST_KEY, test.status === "failed" ? { test, baseUrl } : null);
+	}
+
+	/** A failed test from before a restart counts again only for the same provider, model and address. */
+	private restoreFailedSetupTest(): void {
+		const stored = this.app.loadLocalStorage(FAILED_SETUP_TEST_KEY) as { test?: SetupTestState; baseUrl?: string } | null;
+		const test = stored?.test;
+		if (!test || test.status !== "failed") {
+			return;
+		}
+		const providerId = this.getSelectedTextProviderId();
+		const sameSetup = test.providerId === providerId
+			&& test.model === this.getChatProviderModelRef().model
+			&& stored.baseUrl === this.getProviderSettings(providerId).baseUrl;
+		if (sameSetup) {
+			this.lastSetupTest = test;
+		} else {
+			this.app.saveLocalStorage(FAILED_SETUP_TEST_KEY, null);
+		}
 	}
 
 	/** Tests the selected provider and model, and keeps the result so every surface shows the same stage. */
@@ -876,9 +907,9 @@ export class AskMatePlugin extends Plugin {
 		const stageCopy = result.ok && result.modelFound === false
 			? mapProviderErrorToSetupCopy(new Error(`The model "${ref.model}" was not found.`), context)
 			: copy;
-		this.lastSetupTest = stageCopy
+		this.recordSetupTest(stageCopy
 			? { status: "failed", providerId, model: ref.model, copy: stageCopy }
-			: { status: "ok", providerId, model: ref.model };
+			: { status: "ok", providerId, model: ref.model });
 		this.refreshOpenAskMateViews();
 		return { ...result, copy };
 	}

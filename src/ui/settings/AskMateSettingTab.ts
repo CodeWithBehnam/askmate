@@ -421,10 +421,9 @@ export class AskMateSettingTab extends PluginSettingTab implements SettingsPageH
 		const { bounds, label } = options;
 		const range = formatIntegerRange(bounds);
 		this.prepareFieldFeedback(setting);
-		text.inputEl.type = "number";
-		text.inputEl.min = String(bounds.min);
-		text.inputEl.max = String(bounds.max);
-		text.inputEl.step = "1";
+		// A text field with a numeric keyboard: a number field would drop Persian, Arabic and other digits before AskMate saw them.
+		text.inputEl.type = "text";
+		text.inputEl.inputMode = "numeric";
 		text.inputEl.setAttribute("aria-label", `${label} (${range})`);
 		text.setPlaceholder(range).setValue(String(options.getValue()));
 		this.bindCommitOnBlurOrEnter(text.inputEl, async () => {

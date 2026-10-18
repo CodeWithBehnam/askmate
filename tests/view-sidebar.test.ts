@@ -438,6 +438,16 @@ describe("the Connect card", () => {
 		expect(bubbles(harness, "user").map((bubble) => bubble.textContent ?? "").join(" ")).toContain("Summarise this note");
 	});
 
+	test("D-11: once a provider works and a question is sent, the welcome card goes away", async () => {
+		const harness = await start();
+		ask(harness, "/welcome");
+		await send(harness);
+		expect(harness.root.querySelector(".askmate-setup-card")).not.toBeNull();
+		ask(harness, "What is this note about?");
+		await send(harness);
+		expect(harness.root.querySelector(".askmate-setup-card")).toBeNull();
+	});
+
 	test("D-11: the request context button's name starts with its own label", async () => {
 		const harness = await start();
 		await settle();

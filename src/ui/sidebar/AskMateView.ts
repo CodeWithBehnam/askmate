@@ -1841,6 +1841,13 @@ export class AskMateView extends ItemView {
 			if (isUserPrompt && !spec.reuse) {
 				this.app.saveLocalStorage(PENDING_QUESTION_KEY, { question, at: Date.now() } satisfies PendingQuestion);
 			}
+			// Once a provider works and a question is on its way, the welcome card has done its job.
+			if ((this.setup.flowOpen || this.setup.welcomeOpen) && isReadyToSend(this.readSetupStage())) {
+				this.setup.flowOpen = false;
+				this.setup.welcomeOpen = false;
+				this.setup.provider = null;
+				this.refreshSetupCard();
+			}
 			// A mode typed in the command (/note followed by a question) is for that question alone and leaves the setting as it is.
 			if ((options.outputMode ?? this.plugin.settings.outputMode) === this.plugin.settings.outputMode) {
 				void this.spendOutputMode(request.metadata.outputMode).catch((error: unknown) => this.notify(this.plugin.getErrorMessage(error)));

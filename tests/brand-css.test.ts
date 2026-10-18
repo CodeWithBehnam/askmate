@@ -402,6 +402,12 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		}
 	});
 
+	test("D-11: the preview's checkbox labels meet the 24px target size, and long instruction fields take the full row", () => {
+		expect(declarationOf(".askmate-request-preview-toggle", "min-height")).toBe("24px");
+		expect(declarationOf(".setting-item.askmate-settings-stacked", "flex-wrap")).toBe("wrap");
+		expect(declarationOf(".setting-item.askmate-settings-stacked .setting-item-control", "flex")).toBe("1 1 100%");
+	});
+
 	test("QA-03: in forced colours the sidebar's checkboxes use the native box, so a ticked box does not look empty", () => {
 		const forced = rules.filter((rule) => rule.at.includes("forced-colors") && selectors(rule).includes('.askmate-sidebar input[type="checkbox"]'));
 		expect(forced).toHaveLength(1);

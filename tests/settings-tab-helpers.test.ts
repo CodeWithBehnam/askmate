@@ -5,6 +5,15 @@ import { formatIntegerRange, readSettingControl, resolveBaseUrlInput, resolveFol
 const bounds = { min: 1, max: 200 };
 
 describe("resolveIntegerInput", () => {
+	test("D-11: digits in other scripts and thousands separators are read, not dropped", () => {
+		const wide = { min: 1, max: 100000 };
+		expect(resolveIntegerInput("۳۰", wide)).toEqual({ kind: "accepted", value: 30, clamped: false });
+		expect(resolveIntegerInput("٤٥", wide)).toEqual({ kind: "accepted", value: 45, clamped: false });
+		expect(resolveIntegerInput("５０", wide)).toEqual({ kind: "accepted", value: 50, clamped: false });
+		expect(resolveIntegerInput("۱٬۲۰۰", wide)).toEqual({ kind: "accepted", value: 1200, clamped: false });
+		expect(resolveIntegerInput("1,200", wide)).toEqual({ kind: "accepted", value: 1200, clamped: false });
+	});
+
 	test("ignores an empty field instead of saving 0 or the minimum", () => {
 		expect(resolveIntegerInput("", bounds)).toEqual({ kind: "ignored" });
 		expect(resolveIntegerInput("   ", bounds)).toEqual({ kind: "ignored" });

@@ -8,9 +8,57 @@ import { Notice } from "obsidian";
 export interface DialogParts {
 	modalEl: HTMLElement;
 	titleEl: HTMLElement;
+	/** The modal's own close hook; when present, closing gives the keyboard back to the control that opened the dialog. */
+	onClose?: () => void;
 }
 
 let dialogCounter = 0;
+const keyboardHandled = new WeakSet<HTMLElement>();
+const closeHandled = new WeakSet<DialogParts>();
+const FOCUSABLE = "button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])";
+
+/** Tab and Shift+Tab go round the dialog's own controls instead of leaving for the page behind it. */
+function keepTabInside(modalEl: HTMLElement): void {
+	if (keyboardHandled.has(modalEl)) {
+		return;
+	}
+	keyboardHandled.add(modalEl);
+	modalEl.addEventListener("keydown", (event) => {
+		if (event.key !== "Tab") {
+			return;
+		}
+		const controls = Array.from(modalEl.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.hasAttribute("disabled") && !el.hidden);
+		const first = controls[0];
+		const last = controls[controls.length - 1];
+		if (!first || !last) {
+			return;
+		}
+		const active = modalEl.ownerDocument.activeElement;
+		if (event.shiftKey && (active === first || !modalEl.contains(active))) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && (active === last || !modalEl.contains(active))) {
+			event.preventDefault();
+			first.focus();
+		}
+	});
+}
+
+/** Closing the dialog gives the keyboard back to the control that opened it, so a keyboard user keeps their place. */
+function returnFocusOnClose(parts: DialogParts): void {
+	const close = parts.onClose;
+	if (!close || closeHandled.has(parts)) {
+		return;
+	}
+	closeHandled.add(parts);
+	const opener = parts.modalEl.ownerDocument.activeElement;
+	parts.onClose = () => {
+		close.call(parts);
+		if (opener instanceof HTMLElement && opener.isConnected && !parts.modalEl.contains(opener)) {
+			opener.focus();
+		}
+	};
+}
 
 /**
  * Marks the modal as a dialog named by its title. `describedBy` is the element that states what the dialog asks, so a screen
@@ -31,6 +79,8 @@ export function applyDialogSemantics(parts: DialogParts, describedBy: HTMLElemen
 	} else {
 		parts.modalEl.removeAttribute("aria-describedby");
 	}
+	keepTabInside(parts.modalEl);
+	returnFocusOnClose(parts);
 }
 
 /** Obsidian's own button container gives the row its layout and spacing; the AskMate classes keep the old selectors working. */

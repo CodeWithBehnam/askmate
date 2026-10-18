@@ -232,6 +232,23 @@ describe("onload", () => {
 		expect(Notice.messages.join(" ")).not.toContain("Connect an AI provider");
 	});
 
+	test("D-11: a failed connection test from before a restart still counts, until the model or address changes", async () => {
+		const boot = async (model: string): Promise<TestPlugin> => {
+			const fake = createFakeApp();
+			fake.app.saveLocalStorage("askmate-failed-setup-test", {
+				test: { status: "failed", providerId: "openai-compatible", model: "junk model", copy: { category: "model-not-found", message: "Not found", detail: null, action: { kind: "choose-model", label: "Choose another model" } } },
+				baseUrl: "http://localhost:11434/v1"
+			});
+			const plugin = new AskMatePlugin(fake.app as never, { id: "askmate", name: "AskMate", version: "1.12.0", dir: ".obsidian/plugins/askmate" } as never) as TestPlugin;
+			plugin.storedData = { selectedTextProvider: "openai-compatible", providers: { "openai-compatible": { baseUrl: "http://localhost:11434/v1", model } } };
+			plugin.obsidianApi = { loadMermaid: () => Promise.resolve(null), parseYaml: (text) => Bun.YAML.parse(text) };
+			await plugin.onload();
+			return plugin;
+		};
+		expect((await boot("junk model")).getSetupState().kind).toBe("test-failed");
+		expect((await boot("llama3.2:3b")).getSetupState().kind).not.toBe("test-failed");
+	});
+
 	test("an existing install gets no setup notice and keeps its layout", async () => {
 		const { plugin } = await loadPlugin({ composerLayout: "console" });
 
