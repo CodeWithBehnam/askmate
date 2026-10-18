@@ -38,6 +38,7 @@ export function renderInstructionsPage(
 			text.inputEl.rows = 5;
 			text.inputEl.addClass("askmate-settings-prompt-input");
 			text.inputEl.setAttribute("aria-label", "Instructions for every request");
+			text.inputEl.dir = "auto";
 			text.inputEl.maxLength = MAX_GLOBAL_INSTRUCTIONS_LENGTH;
 			text.setValue(settings.globalInstructions).onChange((value) => {
 				settings.globalInstructions = normalizeGlobalInstructions(value);
@@ -90,6 +91,7 @@ export function renderInstructionsPage(
 				text.inputEl.rows = 3;
 				text.inputEl.addClass("askmate-settings-prompt-input");
 				text.inputEl.setAttribute("aria-label", `${label}: instructions`);
+				text.inputEl.dir = "auto";
 				text.inputEl.maxLength = MAX_FOLDER_INSTRUCTION_LENGTH;
 				text.setPlaceholder("Instructions for notes in this folder").setValue(rule.instructions).onChange((value) => {
 					rule.instructions = value;

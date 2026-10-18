@@ -764,6 +764,16 @@ describe("a question and its answer", () => {
 		expect(bubbles(harness, "assistant")[0]?.textContent).toContain("An answer.");
 	});
 
+	test("QA-14: the question box and every message follow the direction of their text", async () => {
+		const harness = await start();
+		ask(harness, "جلسه بعدی کی است؟");
+		await send(harness);
+		expect(box(harness).getAttribute("dir")).toBe("auto");
+		for (const body of Array.from(harness.root.querySelectorAll(".askmate-message-body"))) {
+			expect(body.getAttribute("dir")).toBe("auto");
+		}
+	});
+
 	test("QA-05: avatars are decorative, so they carry no aria-label on a plain div", async () => {
 		const harness = await start();
 		ask(harness, "What is this?");

@@ -787,7 +787,9 @@ export class AskMateView extends ItemView {
 			attr: {
 				placeholder: this.getComposerPlaceholder(),
 				rows: "4",
-				"aria-label": `Ask AskMate. ${this.getSendShortcutLabel()} sends.`
+				"aria-label": `Ask AskMate. ${this.getSendShortcutLabel()} sends.`,
+				// Follows what is typed, so a right-to-left question is laid out right to left.
+				dir: "auto"
 			}
 		});
 		this.questionEl.addEventListener("keydown", (event) => {
@@ -2269,10 +2271,12 @@ export class AskMateView extends ItemView {
 		});
 
 		const actions = wrapper.createDiv({ cls: "askmate-message-actions" });
+		// dir="auto": a question or answer in Persian, Arabic or Hebrew reads right to left, whatever the interface language.
 		const body = wrapper.createDiv({
 			cls: renderMarkdown
 				? "askmate-message-body askmate-message-body-markdown"
-				: "askmate-message-body"
+				: "askmate-message-body",
+			attr: { dir: "auto" }
 		});
 		const evidence = wrapper.createDiv({ cls: "askmate-message-evidence" });
 
