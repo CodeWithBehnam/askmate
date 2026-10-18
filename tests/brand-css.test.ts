@@ -365,6 +365,15 @@ describe("defects found in the 1.11.1 audit", () => {
 	});
 });
 
+describe("defects found in the launch QA of 18/10/2026", () => {
+	test("QA-01: the composer scrolls instead of crushing the question box, and leaves the sidebar's other half to the chat", () => {
+		expect(declarationOf(".askmate-composer > *", "flex-shrink")).toBe("0");
+		expect(declarationOf(".askmate-composer", "max-height")).toBe("50%");
+		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-request-preview", "display")).toBe("none");
+		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-composer", "max-height")).toBe("35%");
+	});
+});
+
 describe("what follows a reply in the message grid", () => {
 	test("tool cards, the diagram card and the drawing note span every column, so none lands in the avatar column", () => {
 		for (const selector of [".askmate-message > .askmate-tool-cards", ".askmate-message > .askmate-diagram-card", ".askmate-message > .askmate-diagram-placeholder"]) {

@@ -323,6 +323,22 @@ describe("the Connect card", () => {
 		});
 	}
 
+	const sidebarOf = (harness: Harness): HTMLElement | null =>
+		harness.root.classList.contains("askmate-sidebar") ? harness.root : harness.root.querySelector<HTMLElement>(".askmate-sidebar");
+
+	test("QA-01: while the card is unfinished the request preview makes way, and it sits below Send, Stop and the output mode", async () => {
+		const harness = await start({ configured: false, saved: { showRequestPreview: true } });
+		expect(sidebarOf(harness)?.classList.contains("askmate-setup-open")).toBe(true);
+		const preview = harness.root.querySelector(".askmate-request-preview");
+		expect(preview?.previousElementSibling?.classList.contains("askmate-composer-footer")).toBe(true);
+	});
+
+	test("QA-01: once a provider is set up the request preview is shown again, still below the footer", async () => {
+		const harness = await start({ saved: { showRequestPreview: true } });
+		expect(sidebarOf(harness)?.classList.contains("askmate-setup-open")).toBe(false);
+		expect(harness.root.querySelector(".askmate-request-preview")?.previousElementSibling?.classList.contains("askmate-composer-footer")).toBe(true);
+	});
+
 	test("does not appear for someone who is already set up", async () => {
 		const harness = await start();
 		expect(harness.root.querySelector(".askmate-setup-card")).toBeNull();

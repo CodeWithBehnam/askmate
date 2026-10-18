@@ -819,8 +819,6 @@ export class AskMateView extends ItemView {
 			this.runUiTask(this.submitQuestion());
 		});
 
-		this.renderRequestPreview(composer);
-
 		const footer = composer.createDiv({ cls: "askmate-composer-footer" });
 		const actions = footer.createDiv({ cls: "askmate-actions" });
 		const imageButton = this.createActionButton(actions, "image-plus", "Generate image", "askmate-image-button");
@@ -847,6 +845,7 @@ export class AskMateView extends ItemView {
 		});
 
 		this.renderOutputToggle(footer);
+		this.renderRequestPreview(composer);
 		this.renderConsoleStatusBar(composer);
 	}
 
@@ -855,11 +854,9 @@ export class AskMateView extends ItemView {
 			return;
 		}
 
+		// Below the footer: the question box, Send, Stop and the output mode stay in view when the composer has to scroll.
 		const preview = parent.createDiv({ cls: "askmate-request-preview" });
-		const footer = parent.querySelector(":scope > .askmate-composer-footer");
-		if (footer) {
-			parent.insertBefore(preview, footer);
-		}
+		parent.querySelector(":scope > .askmate-composer-footer")?.after(preview);
 		this.requestPreviewEl = preview;
 		this.lastRequestPreviewKey = null;
 		preview.createDiv({ cls: "askmate-request-preview-summary", text: "Request preview loading..." });
@@ -4181,6 +4178,8 @@ export class AskMateView extends ItemView {
 		host.empty();
 		this.setupHandle = null;
 		host.hidden = !model.visible;
+		// Until a provider is connected nothing can be sent, so the composer gives its room to the card and its Connect button.
+		this.rootEl?.classList.toggle("askmate-setup-open", model.visible && model.phase !== "connected");
 		if (!model.visible) {
 			// With the card gone, the tips can take its place.
 			this.renderOnboardingTips();
