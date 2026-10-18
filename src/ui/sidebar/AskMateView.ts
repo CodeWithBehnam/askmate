@@ -1,6 +1,7 @@
 import { Component, ItemView, Keymap, MarkdownRenderer, MarkdownView, Menu, Notice, TFolder, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AskMatePlugin } from "../../plugin/AskMatePlugin";
 import { getStatusBarOverlap } from "./statusBarOverlap";
+import { formatAttachmentSummary } from "../../requests/attachmentSummary";
 import { describeIncompleteReason, lastAnswerFromMessages, SAVED_INCOMPLETE_REASON } from "./answerActions";
 import type { InsertableReply } from "./components/insertPlan";
 import { copyAnswerText, insertAnswerAtRememberedCursor } from "./answerShell";
@@ -1107,9 +1108,7 @@ export class AskMateView extends ItemView {
 
 			const request = inspection.request;
 			const source = request.context.file?.path ?? "unsaved note";
-			const attachmentLabel = request.metadata.contextAttachmentCount > 0
-				? `${request.metadata.contextAttachmentCount} attachment${request.metadata.contextAttachmentCount === 1 ? "" : "s"}`
-				: "no attachments";
+			const attachmentLabel = formatAttachmentSummary(request.context.attachments ?? []);
 			const contextLabel = request.metadata.privacy.includeNoteContext
 				? request.metadata.contextTruncated
 					? `${request.metadata.promptContextCharacters.toLocaleString()} of ${request.metadata.contextCharacters.toLocaleString()} context chars`

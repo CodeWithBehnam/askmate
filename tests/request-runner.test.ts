@@ -527,6 +527,21 @@ describe("buildRequest", () => {
 		expect(request.metadata.promptContextCharacters).toBe(promptContext.finalCharacters + evidence.length);
 	});
 
+	test("the reported context size counts the open note once, not once as note_context and again as evidence", async () => {
+		const note = Array.from({ length: 12 }, (_, index) => `Section ${index + 1} covers ${"the billing cutover plan, its owners and its open risks, ".repeat(4).trim()}.`).join("\n\n");
+		const { runner } = makeHarness([], { getNoteContext: async () => noteContext(note) });
+		const request = await runner.buildRequest("What are the risks?", "T", { outputMode: "chat" });
+		const promptContext = buildPromptContextContent(request.context, request.metadata.privacy, request.metadata.contextBudgetMode);
+		const fullExcerptCharacters = request.evidenceSources.reduce((total, source) => total + source.excerpt.length, 0);
+
+		expect(request.metadata.promptContextCharacters).toBe(promptContext.finalCharacters + formatEvidenceSources(request, promptContext).length);
+		expect(request.metadata.promptContextCharacters).toBeLessThan(note.length * 1.5);
+		expect(request.metadata.promptContextCharacters).toBeLessThan(note.length + fullExcerptCharacters);
+		expect(request.evidenceSources).toHaveLength(12);
+		expect(request.evidenceSources[0]?.excerpt.length).toBeGreaterThan(100);
+		expect(buildPrompt(request).split("Section 1 covers the billing cutover plan").length - 1).toBe(1);
+	});
+
 	describe("folder instructions and note context privacy", () => {
 		const settings: AskMateSettings = {
 			...DEFAULT_SETTINGS,

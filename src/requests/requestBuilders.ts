@@ -524,10 +524,47 @@ function isCodeOrDiagramRequest(request: AskRequest): boolean {
 	});
 }
 
+const EVIDENCE_REFERENCE_NOTICE = "Entries marked \"starts\" are already in the note context above and are not repeated. Find them by path and starting words. Cite by ID.";
+
+function collapseWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ");
+}
+
+/**
+ * The fewest leading words of `excerpt` that occur exactly once in `text`, or null when even the whole excerpt does not.
+ * Longer prefixes can only occur less often, so a binary search over the word count finds the shortest one.
+ */
+function shortestUniqueAnchor(text: string, excerpt: string): string | null {
+	const words = excerpt.split(" ");
+	const occursOnce = (phrase: string): boolean => {
+		const first = text.indexOf(phrase);
+		return first !== -1 && text.indexOf(phrase, first + 1) === -1;
+	};
+	if (!occursOnce(excerpt)) {
+		return null;
+	}
+	let low = 1;
+	let high = words.length;
+	while (low < high) {
+		const middle = Math.floor((low + high) / 2);
+		if (occursOnce(words.slice(0, middle).join(" "))) {
+			high = middle;
+		} else {
+			low = middle + 1;
+		}
+	}
+	return words.slice(0, low).join(" ");
+}
+
 /**
  * Evidence lines actually sent to the model. Evidence shares the context budget with note_context, never repeats text
  * the budget omitted, honours image privacy, and is skipped when the output is written into a note or is a diagram or
  * code block, where a citation marker would sit inside the syntax.
+ *
+ * The note is not sent twice. note_context carries no line numbers, so when a source's text is already there and the
+ * context was not truncated, its line holds only the ID, the location and the shortest starting phrase that is unique
+ * in the context. A source whose text is absent from note_context, or one whose phrase would not be shorter than its
+ * excerpt, keeps the excerpt. A truncated context is already capped by the budget, so it keeps full excerpts.
  */
 export function formatEvidenceSources(request: AskRequest, promptContext?: PromptContextResult): string {
 	const { privacy } = request.metadata;
@@ -535,27 +572,36 @@ export function formatEvidenceSources(request: AskRequest, promptContext?: Promp
 		return "";
 	}
 	const context = promptContext ?? buildPromptContextContent(request.context, privacy, request.metadata.contextBudgetMode);
-	const includedText = context.truncated ? context.text.replace(/\s+/g, " ") : "";
+	const includedText = collapseWhitespace(context.text);
 	const wrapperLength = `\n${EVIDENCE_OPEN_TAG}\n\n${EVIDENCE_CLOSE_TAG}`.length;
 	let remaining = context.limitCharacters === null ? Number.POSITIVE_INFINITY : context.limitCharacters - context.finalCharacters - wrapperLength;
 	const lines: string[] = [];
+	let hasReferenceNotice = false;
 	for (const source of request.evidenceSources) {
 		const visibleExcerpt = privacy.includeImageReferences
 			? source.excerpt
 			: stripImageReferences(source.excerpt.replace(/!?\[\[[^\]]*$|!?\[[^\]]*\]\([^)]*$/, ""), { bareLines: source.kind === "excalidraw_summary" });
-		const excerpt = escapePromptDelimiters(visibleExcerpt).replace(/\s+/g, " ").trim();
-		if (!excerpt || (context.truncated && !includedText.includes(excerpt))) {
+		const excerpt = collapseWhitespace(escapePromptDelimiters(visibleExcerpt)).trim();
+		const inContext = excerpt !== "" && includedText.includes(excerpt);
+		if (!excerpt || (context.truncated && !inContext)) {
 			continue;
 		}
-		const line = `[${source.id}] ${escapePromptDelimiters(source.sourcePath)}#L${source.lineStart}-L${source.lineEnd}: ${excerpt}`;
-		const cost = line.length + (lines.length > 0 ? 1 : 0);
+		const location = `[${source.id}] ${escapePromptDelimiters(source.sourcePath)}#L${source.lineStart}-L${source.lineEnd}`;
+		const fullLine = `${location}: ${excerpt}`;
+		const anchor = inContext && !context.truncated ? shortestUniqueAnchor(includedText, excerpt) : null;
+		const referenceLine = anchor === null ? null : `${location} (starts "${anchor}")`;
+		const useReference = referenceLine !== null && referenceLine.length < fullLine.length;
+		const line = useReference ? referenceLine : fullLine;
+		const needsNotice: boolean = useReference && !hasReferenceNotice;
+		const cost = line.length + (lines.length > 0 ? 1 : 0) + (needsNotice ? EVIDENCE_REFERENCE_NOTICE.length + 1 : 0);
 		if (cost > remaining) {
 			break;
 		}
+		hasReferenceNotice = hasReferenceNotice || needsNotice;
 		lines.push(line);
 		remaining -= cost;
 	}
-	return lines.join("\n");
+	return (hasReferenceNotice ? [EVIDENCE_REFERENCE_NOTICE, ...lines] : lines).join("\n");
 }
 
 export function buildEvidenceSourcesFromMarkdown(

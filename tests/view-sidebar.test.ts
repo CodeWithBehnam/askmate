@@ -1752,6 +1752,33 @@ describe("skills in the sidebar", () => {
 		expect(inspected.at(-1)?.skillSelection).toEqual({ explicitIds: ["built-in:mermaid-diagrams"], stickyIds: [], autoEnabled: true });
 	});
 
+	test("the request preview calls the previous conversation earlier turns, not an attachment", async () => {
+		const harness = await start({ layout: "console", saved: { showRequestPreview: true } });
+		const attachment = (kind: string, content: string): unknown => ({ kind, title: kind, sourcePath: `${kind}.md`, content, originalCharacters: content.length, finalCharacters: content.length, truncated: false });
+		Object.assign(harness.plugin, {
+			inspectFinalPrompt: () => Promise.resolve({
+				request: {
+					context: {
+						source: "Current note",
+						file: { path: "Plan.md" },
+						attachments: [attachment("thread_history", "Chat history.\n\nUser: First\nAskMate: One\nUser: Second\nAskMate: Two"), attachment("vault_note", "Other note")]
+					},
+					metadata: { privacy: { includeNoteContext: true }, outputMode: "chat", contextTruncated: false, promptContextCharacters: 120, contextCharacters: 120 }
+				},
+				blockers: [],
+				warnings: [],
+				providerName: "OpenAI",
+				model: "gpt-5.5",
+				estimatedInputTokens: 30
+			})
+		});
+		ask(harness, "What is this note?");
+		await wait(300);
+		const summary = harness.root.querySelector(".askmate-request-preview-summary")?.textContent ?? "";
+		expect(summary).toContain("1 attachment, 2 earlier turns");
+		expect(summary).not.toContain("2 attachments");
+	});
+
 	test("a skill that needs review is refused with a sentence that says what to do, and nothing is sent", async () => {
 		const harness = await start({ layout: "console", skills: "builtin-auto", skillFiles: { "meeting-notes.md": MEETING_SKILL } });
 		ask(harness, "@skill:meeting-notes Summarise");

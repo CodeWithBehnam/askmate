@@ -16,6 +16,7 @@ import {
 	buildToolsSection,
 	extractPlannedImagePrompt,
 	formatEvidenceSources,
+	getPromptContextContent,
 	wantsCodeOrDiagramOutput,
 	type ResolvedSkillBlock,
 	type ToolPromptInfo
@@ -297,7 +298,8 @@ describe("evidence sources", () => {
 			expect(promptContext.finalCharacters + evidence.length).toBeLessThanOrEqual(8000);
 			if (count === 40) {
 				expect(evidence).toContain("[S1]");
-				expect(evidence.split("\n").length).toBeLessThan(evidenceSources.length);
+				expect(evidence).toContain("[S40]");
+				expect(evidence).not.toContain("lorem ipsum");
 			} else {
 				expect(buildPrompt(request)).not.toContain("Paragraph 50:");
 			}
@@ -319,6 +321,86 @@ describe("evidence sources", () => {
 		});
 		expect(evidence).toContain("Paragraph 49:");
 		expect(evidence).not.toContain("Paragraph 50:");
+	});
+
+	describe("a note that is already in note_context", () => {
+		const note = [
+			"# Project Atlas",
+			"Atlas moves the billing service to the new cluster.",
+			"",
+			"## Risks",
+			"The cutover needs a freeze window on Friday evening.",
+			"",
+			"## Risks",
+			"The cutover needs a rollback plan agreed with finance."
+		].join("\n");
+		const context = noteContext(note);
+		const evidenceSources = buildEvidenceSources(settings, context);
+
+		test("sends the note once and lists each source by id, location and starting words", () => {
+			const prompt = buildPrompt(makeRequest({ context, evidenceSources }));
+			const evidence = prompt.slice(prompt.indexOf("<evidence_sources>"), prompt.indexOf("</evidence_sources>"));
+
+			expect(countOf(prompt, "The cutover needs a freeze window on Friday evening.")).toBe(1);
+			expect(countOf(prompt, "Atlas moves the billing service to the new cluster.")).toBe(1);
+			expect(evidence).toContain("already in the note context above");
+			expect(evidence).toContain("[S1] Clients/Acme health plan.md#L1-L2 (starts \"# Project\")");
+			expect(evidence).not.toContain("billing service");
+		});
+
+		test("keeps the full excerpts on the request for the citation chips", () => {
+			buildPrompt(makeRequest({ context, evidenceSources }));
+
+			expect(evidenceSources.map((source) => source.excerpt)).toEqual([
+				"# Project Atlas Atlas moves the billing service to the new cluster.",
+				"## Risks The cutover needs a freeze window on Friday evening.",
+				"## Risks The cutover needs a rollback plan agreed with finance."
+			]);
+		});
+
+		test("extends the starting words until they are unique in the note", () => {
+			const lines = formatEvidenceSources(makeRequest({ context, evidenceSources })).split("\n");
+
+			expect(lines[2]).toBe("[S2] Clients/Acme health plan.md#L4-L5 (starts \"## Risks The cutover needs a freeze\")");
+			expect(lines[3]).toBe("[S3] Clients/Acme health plan.md#L7-L8 (starts \"## Risks The cutover needs a rollback\")");
+		});
+
+		test("every starting phrase occurs exactly once in the prompt's note_context", () => {
+			const request = makeRequest({ context, evidenceSources });
+			const flatContext = getPromptContextContent(request).replace(/\s+/g, " ");
+			const phrases = [...formatEvidenceSources(request).matchAll(/\(starts "([^"]+)"\)/g)].map((match) => match[1] ?? "");
+
+			expect(phrases).toHaveLength(3);
+			for (const phrase of phrases) {
+				expect(countOf(flatContext, phrase)).toBe(1);
+			}
+		});
+
+		test("keeps the excerpt when a phrase would not be shorter", () => {
+			const tiny = noteContext("Paragraph one.\n\nParagraph two.");
+			const evidence = formatEvidenceSources(makeRequest({ context: tiny, evidenceSources: buildEvidenceSources(settings, tiny) }));
+
+			expect(evidence).toBe("[S1] Clients/Acme health plan.md#L1-L1: Paragraph one.\n[S2] Clients/Acme health plan.md#L3-L3: Paragraph two.");
+		});
+
+		test("keeps the excerpt of a source whose text is not in note_context", () => {
+			const stray: EvidenceSource = { id: "S4", kind: "vault_note", sourcePath: "Other.md", title: "Other", lineStart: 1, lineEnd: 1, excerpt: "Text that the note context does not hold, written long enough to beat any phrase." };
+			const evidence = formatEvidenceSources(makeRequest({ context, evidenceSources: [...evidenceSources, stray] }));
+
+			expect(evidence).toContain("[S4] Other.md#L1-L1: Text that the note context does not hold");
+			expect(evidence).toContain("(starts \"# Project\")");
+		});
+
+		test("shrinks the evidence block for a long note to a fraction of the note", () => {
+			const long = noteContext(Array.from({ length: 30 }, (_, index) => `Section ${index + 1} covers ${"the billing cutover plan, its owners and its open risks, ".repeat(5).trim()}`).join("\n\n"));
+			const longSources = buildEvidenceSources(settings, long);
+			const request = makeRequest({ context: long, evidenceSources: longSources });
+			const before = longSources.reduce((total, source) => total + `[${source.id}] ${long.file?.path}#L${source.lineStart}-L${source.lineEnd}: ${source.excerpt}`.length + 1, 0);
+			const after = formatEvidenceSources(request).length;
+
+			expect(after).toBeLessThan(before / 3);
+			expect(after).toBeLessThan(long.content.length / 3);
+		});
 	});
 
 	test("applies image privacy to evidence excerpts", () => {
