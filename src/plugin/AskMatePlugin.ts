@@ -1042,6 +1042,8 @@ export class AskMatePlugin extends Plugin {
 		const notice = this.notifyWithAction(FIRST_RUN_NOTICE.message, FIRST_RUN_NOTICE.actionLabel, () => {
 			void this.openComposerWithText("");
 		}, 0);
+		// A notice that stays must not outlive the plugin: its button would call into an unloaded plugin.
+		this.register(() => notice.hide());
 		const ref = this.app.workspace.on("layout-change", () => {
 			if (sidebarOpen()) {
 				notice.hide();
