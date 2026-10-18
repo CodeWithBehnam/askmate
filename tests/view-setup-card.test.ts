@@ -305,6 +305,21 @@ describe("the card DOM", () => {
 		expect(parent.querySelector(".askmate-setup-privacy")?.textContent).toBe(SETUP_PRIVACY_LINE);
 	});
 
+	test("QA-01: focusing the first field also brings Connect into view, so a short sidebar does not hide it", () => {
+		const parent = createFakeEl();
+		const { handlers } = callbacks();
+		const handle = renderSetupCard(parent, deriveSetupCardModel(input({ stage: stageOf("openai-compatible"), selectedProvider: "openai-compatible", flowOpen: true })), handlers, emptyDraft);
+		const actions = parent.querySelector<HTMLElement>(".askmate-setup-actions");
+		const scrolled: unknown[] = [];
+		if (actions) {
+			actions.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
+				scrolled.push(options);
+			};
+		}
+		handle.focusKey();
+		expect(scrolled).toEqual([{ block: "nearest" }]);
+	});
+
 	test("QA-18: the card is named by its own title, not an aria-label that Obsidian would leave on screen as a tooltip", () => {
 		const parent = createFakeEl();
 		const { handlers } = callbacks();

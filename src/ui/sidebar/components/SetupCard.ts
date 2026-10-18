@@ -211,7 +211,12 @@ export function renderSetupCard(parent: HTMLElement, model: SetupCardModel, call
 
 	return {
 		el: card,
-		focusKey: () => keyInput?.focus(),
+		focusKey: () => {
+			keyInput?.focus();
+			// The card scrolls inside the transcript: after a provider is picked or a problem is shown, Connect and Open settings
+			// must be in view too, or a short sidebar hides the button the person needs next.
+			actions.scrollIntoView({ block: "nearest" });
+		},
 		focusStart: () => {
 			const first = Array.from(card.querySelectorAll<HTMLButtonElement>(".askmate-starter-chip")).find((button) => !button.disabled);
 			(first ?? title).focus();
