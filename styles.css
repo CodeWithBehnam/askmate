@@ -2065,8 +2065,9 @@ body.theme-dark {
 		overflow-y: auto;
 	}
 
+	/* In a short or zoomed sidebar the answer needs the room more than the composer, whose question box stays at its top. */
 	.askmate-composer {
-		max-height: 50%;
+		max-height: 40%;
 		overflow-y: auto;
 	}
 

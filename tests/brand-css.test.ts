@@ -369,6 +369,8 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 	test("QA-01: the composer scrolls instead of crushing the question box, and leaves the sidebar's other half to the chat", () => {
 		expect(declarationOf(".askmate-composer > *", "flex-shrink")).toBe("0");
 		expect(declarationOf(".askmate-composer", "max-height")).toBe("50%");
+		// A short or zoomed sidebar gives the answer more room than the composer.
+		expect(declarationOf(".askmate-composer", "max-height", "@media (max-height: 560px)")).toBe("40%");
 		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-request-preview", "display")).toBe("none");
 		expect(declarationOf(".askmate-sidebar.askmate-setup-open .askmate-composer", "max-height")).toBe("35%");
 	});
