@@ -2590,6 +2590,12 @@ button.askmate-danger:hover:not(:disabled) {
 	color: var(--askmate-on-danger);
 }
 
+/* Hover is shown by a ring, not a colour change, so the text keeps its tested contrast in both themes. */
+.askmate-modal-buttons button.mod-warning:hover:not(:disabled),
+button.askmate-danger:hover:not(:disabled) {
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--askmate-danger) 45%, transparent);
+}
+
 /* ---------- Setup card ---------- */
 .askmate-setup-card {
 	background: linear-gradient(160deg, color-mix(in srgb, var(--askmate-brand) var(--askmate-tint-2), var(--askmate-surface)), var(--askmate-surface) 70%);

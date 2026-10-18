@@ -394,10 +394,11 @@ describe("defects found in the launch QA of 18/10/2026", () => {
 		expect(declaration(forced[0] as Rule, "forced-color-adjust")).toBe("none");
 	});
 
-	test("QA-07: destructive buttons in AskMate's dialogs and settings use the tested danger pair", () => {
+	test("QA-22: destructive buttons in AskMate's dialogs and settings use the tested danger pair, with a visible hover", () => {
 		for (const selector of [".askmate-modal-buttons button.mod-warning", "button.askmate-danger"]) {
 			expect(declarationOf(selector, "background")).toBe("var(--askmate-danger)");
 			expect(declarationOf(selector, "color")).toBe("var(--askmate-on-danger)");
+			expect(declarationOf(`${selector}:hover:not(:disabled)`, "box-shadow")).toContain("--askmate-danger");
 		}
 	});
 
