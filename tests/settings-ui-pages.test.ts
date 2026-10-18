@@ -235,7 +235,7 @@ describe("key entry", () => {
 	});
 
 	test("says where the key lives in plain words", () => {
-		expect(describeKeyField("openai", false)).toBe("Paste your key once. Saved in your system keychain, never in your vault.");
+		expect(describeKeyField("openai", false)).toBe("Paste your key once. Saved in Obsidian's secret storage on this device (your system keychain), never in your vault.");
 		expect(describeKeyField("openai", true)).toContain("Paste a new one to replace it.");
 		expect(describeKeyField("openai-compatible", false)).toStartWith("Optional for a local server.");
 	});

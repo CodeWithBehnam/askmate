@@ -143,7 +143,7 @@ export function keyLinkFor(providerId: TextProviderId): LinkPart | null {
 
 export function describeKeyField(providerId: TextProviderId, hasStoredKey: boolean): string {
 	const entry = getProviderCatalogEntry(providerId);
-	const where = "Saved in your system keychain, never in your vault.";
+	const where = "Saved in Obsidian's secret storage on this device (your system keychain), never in your vault.";
 	if (!entry.needsKey) {
 		return `Optional for a local server. ${where}`;
 	}

@@ -469,7 +469,7 @@ describe("import dialog", () => {
 		const text = dialog.contentEl.textContent ?? "";
 		expect(text).toContain("files · Local program");
 		expect(text).toContain("npx -y files-server");
-		expect(text).toContain("1 secret will be saved in your system keychain");
+		expect(text).toContain("1 secret will be saved in Obsidian's secret storage on this device (your system keychain)");
 		expect(button(dialog, "Import 1 server").disabled).toBe(false);
 	});
 

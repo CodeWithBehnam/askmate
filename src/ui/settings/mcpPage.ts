@@ -805,9 +805,9 @@ function renderServerEditor(host: SettingsPageHost, containerEl: HTMLElement, se
 			const existing = first.bearerSecretId;
 			setting.setName("Bearer token").setDesc(existing
 				? (existing.startsWith(`${MCP_SECRET_PREFIX}${serverId}-`)
-					? "A token is stored in your system keychain. Paste a new one to replace it."
+					? "A token is stored in Obsidian's secret storage on this device (your system keychain). Paste a new one to replace it."
 					: `This server uses the stored secret "${existing}", which AskMate did not create for it. The trust dialog warns about this.`)
-				: "Optional. Saved in your system keychain, never in your vault.");
+				: "Optional. Saved in Obsidian's secret storage on this device (your system keychain), never in your vault.");
 			let input: HTMLInputElement | null = null;
 			setting.addText((text) => {
 				input = text.inputEl;

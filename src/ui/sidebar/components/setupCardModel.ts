@@ -168,7 +168,7 @@ function detailFor(phase: SetupCardPhase, provider: ProviderCatalogEntry, hasSto
 			}
 			return hasStoredKey
 				? "A key is already stored on this device. Test the connection, or paste a new key to replace it."
-				: "Paste your key once. AskMate keeps it in Obsidian's secret storage on this device, not in your notes.";
+				: "Paste your key once. AskMate keeps it in Obsidian's secret storage on this device (your system keychain), never in your notes.";
 		case "testing":
 			return "This takes a few seconds.";
 		case "failed":

@@ -189,7 +189,7 @@ export interface SetupStageCopy {
 export function describeSetupStage(stage: SetupStage): SetupStageCopy {
 	switch (stage.kind) {
 		case "needs-key":
-			return { tone: "warning", headline: `Add an API key for ${stage.label}`, detail: "Paste it once; AskMate stores it in Obsidian's secret storage.", action: SETUP_ACTIONS["update-key"], statusText: "Setup needed" };
+			return { tone: "warning", headline: `Add an API key for ${stage.label}`, detail: "Paste it once; AskMate keeps it in Obsidian's secret storage on this device (your system keychain).", action: SETUP_ACTIONS["update-key"], statusText: "Setup needed" };
 		case "key-missing":
 			return { tone: "warning", headline: `${stage.label} has no key on this device`, detail: "Keys are stored per device, so paste it again here.", action: SETUP_ACTIONS["update-key"], statusText: "Key missing" };
 		case "needs-endpoint":

@@ -103,7 +103,7 @@ export class McpImportModal extends Modal {
 			block.createEl("p", { cls: "askmate-modal-message", text: `${server.label} · ${server.kind}` });
 			block.createEl("pre", { cls: "askmate-tool-args" }).createEl("code", { text: server.target });
 			if (server.secretCount > 0) {
-				block.createEl("p", { cls: "askmate-settings-note", text: `${server.secretCount.toLocaleString("en-GB")} ${server.secretCount === 1 ? "secret" : "secrets"} will be saved in your system keychain, not in your vault.` });
+				block.createEl("p", { cls: "askmate-settings-note", text: `${server.secretCount.toLocaleString("en-GB")} ${server.secretCount === 1 ? "secret" : "secrets"} will be saved in Obsidian's secret storage on this device (your system keychain), not in your vault.` });
 			}
 			for (const warning of server.warnings) {
 				block.createDiv({ cls: "askmate-settings-callout is-warning", text: warning });
